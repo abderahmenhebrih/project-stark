@@ -12,13 +12,13 @@ function makeTempDir(): string {
 }
 
 describe('StarkDatabase lifecycle', () => {
-  it('initializes in-memory with schema version 3', () => {
+  it('initializes in-memory with schema version 5', () => {
     const database = new StarkDatabase()
     try {
       database.initialize(':memory:')
       assert.equal(database.isOpen(), true)
-      assert.equal(database.getSchemaVersion(), 3)
-      assert.equal(database.readStoredSchemaVersion(), 3)
+      assert.equal(database.getSchemaVersion(), 5)
+      assert.equal(database.readStoredSchemaVersion(), 5)
     } finally {
       database.close()
     }
@@ -30,6 +30,20 @@ describe('StarkDatabase lifecycle', () => {
       database.initialize(':memory:')
       database.getKeyValue().set('hello', { world: true })
       assert.deepEqual(database.getKeyValue().get('hello'), { world: true })
+    } finally {
+      database.close()
+    }
+  })
+
+  it('exposes a working coding-session repository', () => {
+    const database = new StarkDatabase()
+    try {
+      database.initialize(':memory:')
+      const workspaces = database.getWorkspaces()
+      const created = workspaces.create({ rootPath: 'w', displayName: 'w', now: 1 })
+      const sessions = database.getCodingSessions()
+      const id = sessions.createSession({ workspaceId: created.id, title: 'New session', now: 2 })
+      assert.notEqual(sessions.findSessionById(id), undefined)
     } finally {
       database.close()
     }
@@ -83,14 +97,14 @@ describe('StarkDatabase lifecycle', () => {
       try {
         first.initialize(file)
         first.getKeyValue().set('survive', [1, 2, 3])
-        assert.equal(first.getSchemaVersion(), 3)
+        assert.equal(first.getSchemaVersion(), 5)
       } finally {
         first.close()
       }
       const second = new StarkDatabase()
       try {
         second.initialize(file)
-        assert.equal(second.getSchemaVersion(), 3)
+        assert.equal(second.getSchemaVersion(), 5)
         assert.deepEqual(second.getKeyValue().get('survive'), [1, 2, 3])
       } finally {
         second.close()

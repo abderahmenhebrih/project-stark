@@ -3,7 +3,10 @@ import { createServices } from './application/create-services'
 import { StarkDatabase } from './database/database'
 import { resolveDatabaseFile } from './database/paths'
 import { registerIpcHandlers } from './ipc'
+import { createTerminalEventSink } from './ipc/terminal'
 import { applyContentSecurityPolicy } from './security/session'
+import { createNodePtyFactory } from './terminal/node-pty-adapter'
+import { TerminalManager } from './terminal/terminal-manager'
 import { createAppWindow } from './windows/app-window'
 
 let mainWindow: BrowserWindow | null = null
@@ -14,6 +17,24 @@ let mainWindow: BrowserWindow | null = null
  */
 const starkDatabase = new StarkDatabase()
 
+/**
+ * The single terminal owner for the STARK process (Stage 11, human
+ * only). Created once the app is ready alongside services; destroyed
+ * renderers and app quit terminate sessions with bounded cleanup so no
+ * orphan shells remain. No agent authority flows through this manager.
+ */
+let terminalManager: TerminalManager | null = null
+
+function shutdownTerminals(): void {
+  try {
+    terminalManager?.shutdownAll()
+  } catch {
+    // Best effort during quit; shutdown must stay bounded.
+  } finally {
+    terminalManager = null
+  }
+}
+
 function createMainWindow(): void {
   if (mainWindow !== null && !mainWindow.isDestroyed()) {
     mainWindow.focus()
@@ -21,6 +42,14 @@ function createMainWindow(): void {
   }
 
   mainWindow = createAppWindow()
+  const ownerId = mainWindow.webContents.id
+  mainWindow.webContents.on('destroyed', () => {
+    try {
+      terminalManager?.handleWebContentsDestroyed(ownerId)
+    } catch {
+      // Best effort during teardown.
+    }
+  })
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -59,8 +88,11 @@ void app.whenReady().then(() => {
   const services = createServices({
     keyValue: starkDatabase.getKeyValue(),
     workspaces: starkDatabase.getWorkspaces(),
-    changeTransactions: starkDatabase.getChangeTransactions()
+    changeTransactions: starkDatabase.getChangeTransactions(),
+    codingSessions: starkDatabase.getCodingSessions(),
+    aiProviders: starkDatabase.getAiProviders()
   })
+  terminalManager = new TerminalManager(createNodePtyFactory(), createTerminalEventSink())
   registerIpcHandlers({
     settingsService: services.settingsService,
     profileService: services.profileService,
@@ -68,7 +100,13 @@ void app.whenReady().then(() => {
     workspaceFilesService: services.workspaceFilesService,
     workspaceFileWriteService: services.workspaceFileWriteService,
     workspaceSearchService: services.workspaceSearchService,
-    changeTransactionService: services.changeTransactionService
+    changeTransactionService: services.changeTransactionService,
+    terminalService: services.terminalService,
+    terminalManager,
+    gitService: services.gitService,
+    codingSessionService: services.codingSessionService,
+    aiProviderService: services.aiProviderService,
+    aiCompletionService: services.aiCompletionService
   })
   createMainWindow()
 
@@ -88,6 +126,9 @@ app.on('window-all-closed', () => {
 })
 
 // Close the SQLite connection cleanly during shutdown. Idempotent.
+// Terminals are terminated first with bounded cleanup so quit never
+// waits indefinitely on a shell process.
 app.on('before-quit', () => {
+  shutdownTerminals()
   starkDatabase.close()
 })

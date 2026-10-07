@@ -19,6 +19,37 @@ import type {
   WorkspaceSearchRequest,
   WorkspaceSearchResult
 } from '../shared/workspace-search/types'
+import type {
+  CreateTerminalRequest,
+  TerminalApi,
+  TerminalDataEvent,
+  TerminalDataListener,
+  TerminalExitEvent,
+  TerminalExitListener,
+  TerminalKillRequest,
+  TerminalResizeRequest,
+  TerminalSession,
+  TerminalWriteRequest
+} from '../shared/terminal/types'
+import type { GitApi, GitDiffRequest, GitDiffResult, GitWorkspaceState } from '../shared/git/types'
+import type {
+  CodingMessagePage,
+  CodingSession,
+  ListSessionMessagesRequest,
+  SendUserMessageRequest,
+  SendUserMessageResult,
+  SessionsApi
+} from '../shared/sessions/types'
+import type {
+  AiProviderState,
+  ProviderConnectionResult,
+  ProviderId,
+  ProviderModel,
+  ProvidersApi,
+  SaveProviderCredentialRequest,
+  SetProviderModelRequest
+} from '../shared/providers/types'
+import type { AiApi, AiGenerateRequest, AiGenerateResult } from '../shared/ai/types'
 import type { AppInfo, StarkApi } from '../shared/types'
 
 /**
@@ -29,6 +60,110 @@ import type { AppInfo, StarkApi } from '../shared/types'
  * object of fixed per-domain functions — no `ipcRenderer`, no channel
  * choice, no `process`, no Node.js.
  */
+
+function isTerminalDataEvent(value: unknown): value is TerminalDataEvent {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+  const record = value as Record<string, unknown>
+  return typeof record['sessionId'] === 'string' && typeof record['data'] === 'string'
+}
+
+function isTerminalExitEvent(value: unknown): value is TerminalExitEvent {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+  const record = value as Record<string, unknown>
+  const exitCode = record['exitCode']
+  const signal = record['signal']
+  return (
+    typeof record['sessionId'] === 'string' &&
+    (exitCode === null || typeof exitCode === 'number') &&
+    (signal === null || typeof signal === 'number')
+  )
+}
+
+function createTerminalApi(): TerminalApi {
+  return {
+    create: (request: CreateTerminalRequest): Promise<TerminalSession> =>
+      ipcRenderer.invoke(IPC_CHANNELS.terminalCreate, request) as Promise<TerminalSession>,
+    write: (request: TerminalWriteRequest): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.terminalWrite, request) as Promise<void>,
+    resize: (request: TerminalResizeRequest): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.terminalResize, request) as Promise<void>,
+    kill: (request: TerminalKillRequest): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.terminalKill, request) as Promise<void>,
+    onData: (listener: TerminalDataListener): (() => void) => {
+      const handler = (_event: unknown, payload: unknown): void => {
+        if (isTerminalDataEvent(payload)) {
+          listener({ sessionId: payload.sessionId, data: payload.data })
+        }
+      }
+      ipcRenderer.on(IPC_CHANNELS.terminalData, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.terminalData, handler)
+      }
+    },
+    onExit: (listener: TerminalExitListener): (() => void) => {
+      const handler = (_event: unknown, payload: unknown): void => {
+        if (isTerminalExitEvent(payload)) {
+          listener({ sessionId: payload.sessionId, exitCode: payload.exitCode, signal: payload.signal })
+        }
+      }
+      ipcRenderer.on(IPC_CHANNELS.terminalExit, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.terminalExit, handler)
+      }
+    }
+  }
+}
+
+function createGitApi(): GitApi {
+  return {
+    getStatus: (workspaceId: number): Promise<GitWorkspaceState> =>
+      ipcRenderer.invoke(IPC_CHANNELS.gitGetStatus, { workspaceId }) as Promise<GitWorkspaceState>,
+    getDiff: (request: GitDiffRequest): Promise<GitDiffResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.gitGetDiff, request) as Promise<GitDiffResult>
+  }
+}
+
+function createSessionsApi(): SessionsApi {
+  return {
+    create: (workspaceId: number): Promise<CodingSession> =>
+      ipcRenderer.invoke(IPC_CHANNELS.sessionsCreate, { workspaceId }) as Promise<CodingSession>,
+    list: (workspaceId: number): Promise<readonly CodingSession[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.sessionsList, { workspaceId }) as Promise<readonly CodingSession[]>,
+    listMessages: (request: ListSessionMessagesRequest): Promise<CodingMessagePage> =>
+      ipcRenderer.invoke(IPC_CHANNELS.sessionsListMessages, request) as Promise<CodingMessagePage>,
+    sendUserMessage: (request: SendUserMessageRequest): Promise<SendUserMessageResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.sessionsSendUserMessage, request) as Promise<SendUserMessageResult>
+  }
+}
+
+function createProvidersApi(): ProvidersApi {
+  return {
+    getState: (providerId: ProviderId): Promise<AiProviderState> =>
+      ipcRenderer.invoke(IPC_CHANNELS.providersGetState, { providerId }) as Promise<AiProviderState>,
+    saveCredential: (request: SaveProviderCredentialRequest): Promise<AiProviderState> =>
+      ipcRenderer.invoke(IPC_CHANNELS.providersSaveCredential, request) as Promise<AiProviderState>,
+    clearCredential: (providerId: ProviderId): Promise<AiProviderState> =>
+      ipcRenderer.invoke(IPC_CHANNELS.providersClearCredential, { providerId }) as Promise<AiProviderState>,
+    testConnection: (providerId: ProviderId): Promise<ProviderConnectionResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.providersTestConnection, { providerId }) as Promise<ProviderConnectionResult>,
+    listModels: (providerId: ProviderId): Promise<readonly ProviderModel[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.providersListModels, { providerId }) as Promise<readonly ProviderModel[]>,
+    setModel: (request: SetProviderModelRequest): Promise<AiProviderState> =>
+      ipcRenderer.invoke(IPC_CHANNELS.providersSetModel, request) as Promise<AiProviderState>
+  }
+}
+
+function createAiApi(): AiApi {
+  return {
+    generateResponse: (request: AiGenerateRequest): Promise<AiGenerateResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.aiGenerateResponse, request) as Promise<AiGenerateResult>
+  }
+}
+
 const starkApi: StarkApi = {
   getAppInfo: (): Promise<AppInfo> =>
     ipcRenderer.invoke(IPC_CHANNELS.getAppInfo) as Promise<AppInfo>,
@@ -85,7 +220,12 @@ const starkApi: StarkApi = {
       rollback: (request: ChangeTransactionRequest): Promise<ChangeTransaction> =>
         ipcRenderer.invoke(IPC_CHANNELS.changesRollback, request) as Promise<ChangeTransaction>
     }
-  }
+  },
+  terminal: createTerminalApi(),
+  git: createGitApi(),
+  sessions: createSessionsApi(),
+  providers: createProvidersApi(),
+  ai: createAiApi()
 }
 
 contextBridge.exposeInMainWorld('stark', starkApi)

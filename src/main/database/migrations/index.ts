@@ -4,6 +4,8 @@ import type { Migration } from '../types'
 import { migration001Initial } from './001-initial'
 import { migration002Workspaces } from './002-workspaces'
 import { migration003ChangeTransactions } from './003-change-transactions'
+import { migration004CodingSessions } from './004-coding-sessions'
+import { migration005AiProviders } from './005-ai-providers'
 
 /**
  * Ordered migration registry. Append-only: add new migrations to the end
@@ -12,7 +14,9 @@ import { migration003ChangeTransactions } from './003-change-transactions'
 export const migrations: readonly Migration[] = [
   migration001Initial,
   migration002Workspaces,
-  migration003ChangeTransactions
+  migration003ChangeTransactions,
+  migration004CodingSessions,
+  migration005AiProviders
 ]
 
 /**

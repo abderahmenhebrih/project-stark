@@ -1,0 +1,114 @@
+.terminal {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  border-top: 1px solid var(--stark-border);
+  background: var(--stark-surface);
+}
+
+.terminal__bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--stark-space-sm);
+  min-height: 36px;
+  padding: var(--stark-space-xs) var(--stark-space-md);
+}
+
+.terminal__identity {
+  display: flex;
+  align-items: baseline;
+  gap: var(--stark-space-sm);
+  min-width: 0;
+  flex: 1;
+}
+
+.terminal__title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--stark-text-dim);
+}
+
+.terminal__shell {
+  font-family: var(--stark-font-mono);
+  font-size: 11px;
+  color: var(--stark-accent);
+  white-space: nowrap;
+}
+
+.terminal__status {
+  font-family: var(--stark-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--stark-text-dim);
+  white-space: nowrap;
+}
+
+.terminal__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--stark-space-xs);
+  flex-shrink: 0;
+}
+
+.terminal__primary {
+  padding: var(--stark-space-xs) var(--stark-space-sm);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--stark-accent-text);
+  background: var(--stark-accent);
+  border: 1px solid transparent;
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.terminal__secondary {
+  padding: var(--stark-space-xs) var(--stark-space-sm);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--stark-text);
+  background: transparent;
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.terminal__error {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 var(--stark-space-md) var(--stark-space-xs);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--stark-danger);
+}
+
+.terminal__viewport {
+  flex: 0 0 auto;
+  height: 220px;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 var(--stark-space-md) var(--stark-space-md);
+}
+
+.terminal__xterm {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: #0a0c0a;
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+}
+
+.terminal__xterm .xterm {
+  height: 100%;
+  padding: 4px 8px;
+}

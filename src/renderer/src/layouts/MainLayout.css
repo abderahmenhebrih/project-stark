@@ -1,15 +1,20 @@
 .shell {
-  min-height: 100%;
+  height: 100vh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background: var(--stark-bg);
 }
 
 .shell__header {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--stark-space-md) var(--stark-space-lg);
+  gap: var(--stark-space-sm);
+  min-height: 40px;
+  padding: var(--stark-space-sm) var(--stark-space-md);
   border-bottom: 1px solid var(--stark-border);
   background: var(--stark-surface);
 }
@@ -17,7 +22,7 @@
 .shell__brand {
   font-family: var(--stark-font-mono);
   font-weight: 700;
-  font-size: 14px;
+  font-size: 13px;
   letter-spacing: 0.35em;
   color: var(--stark-text);
 }
@@ -30,20 +35,27 @@
   color: var(--stark-text-dim);
   border: 1px solid var(--stark-border);
   border-radius: var(--stark-radius-pill);
-  padding: var(--stark-space-xs) var(--stark-space-md);
+  padding: 2px var(--stark-space-sm);
   background: var(--stark-elevated);
+  white-space: nowrap;
 }
 
 .shell__main {
   flex: 1;
+  min-height: 0;
+  min-width: 0;
   display: flex;
-  padding: var(--stark-space-xl) var(--stark-space-lg);
+  overflow: hidden;
+  padding: 0;
 }
 
 .shell__footer {
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
-  padding: var(--stark-space-sm) var(--stark-space-lg);
+  align-items: center;
+  min-height: 28px;
+  padding: 2px var(--stark-space-md);
   border-top: 1px solid var(--stark-border);
   background: var(--stark-surface);
 }

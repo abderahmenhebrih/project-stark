@@ -1,3 +1,14 @@
+.welcome {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  padding: var(--stark-space-lg);
+}
+
 .home {
   margin: auto;
   max-width: 640px;
@@ -26,4 +37,81 @@
   font-size: 15px;
   line-height: 1.6;
   color: var(--stark-text-dim);
+}
+
+/* Active workspace: bounded desktop workbench, no page scroll. */
+.workbench-root {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--stark-bg);
+}
+
+.workbench-top {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--stark-surface);
+  border-bottom: 1px solid var(--stark-border);
+}
+
+.workbench-greeting {
+  margin: 0;
+  padding: var(--stark-space-xs) var(--stark-space-md);
+  font-family: var(--stark-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--stark-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workbench-workspace {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.workbench-workspace .workspace {
+  border-bottom: none;
+}
+
+.workbench-main {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.workbench-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--stark-space-sm);
+  min-height: 28px;
+  padding: 2px var(--stark-space-md);
+  border-top: 1px solid var(--stark-border);
+  background: var(--stark-surface);
+  overflow: hidden;
+}
+
+.workbench-status .system-status {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--stark-space-sm);
+  margin-top: 0;
+}
+
+.workbench-status .system-status__meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

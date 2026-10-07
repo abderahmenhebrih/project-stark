@@ -49,9 +49,9 @@ describe('migrations', () => {
   it('running migrations again is idempotent', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 3)
-      assert.equal(runMigrations(db, migrations), 3)
-      assert.equal(getUserVersion(db), 3)
+      assert.equal(runMigrations(db, migrations), 5)
+      assert.equal(runMigrations(db, migrations), 5)
+      assert.equal(getUserVersion(db), 5)
     } finally {
       db.close()
     }
@@ -131,11 +131,11 @@ describe('migration 2 (workspaces)', () => {
     return row !== undefined
   }
 
-  it('fresh database migrates to schema version 3', () => {
+  it('fresh database migrates to schema version 5', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 3)
-      assert.equal(getUserVersion(db), 3)
+      assert.equal(runMigrations(db, migrations), 5)
+      assert.equal(getUserVersion(db), 5)
       assert.ok(tableExists(db, 'key_value'))
       assert.ok(tableExists(db, 'workspaces'))
     } finally {
@@ -163,7 +163,7 @@ describe('migration 2 (workspaces)', () => {
           "('stark.settings', '{\"appearance\":\"dark\"}', 1), " +
           "('stark.profile', '{\"displayName\":\"Abdou\"}', 2)"
       )
-      assert.equal(runMigrations(db, migrations), 3)
+      assert.equal(runMigrations(db, migrations), 5)
       const settings: unknown = db
         .prepare("SELECT value FROM key_value WHERE key = 'stark.settings'")
         .get()
@@ -186,7 +186,7 @@ describe('migration 2 (workspaces)', () => {
         "INSERT INTO workspaces (root_path, display_name, created_at, last_opened_at) " +
           "VALUES ('C:\\proj\\a', 'a', 10, 20)"
       )
-      assert.equal(runMigrations(db, migrations), 3)
+      assert.equal(runMigrations(db, migrations), 5)
       const count: unknown = db.prepare('SELECT COUNT(*) AS n FROM workspaces').get()
       assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }))
     } finally {
@@ -194,10 +194,10 @@ describe('migration 2 (workspaces)', () => {
     }
   })
 
-  it('migration 3 is registered after migration 2', () => {
+  it('migrations are registered in ascending version order', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3]
+      [1, 2, 3, 4, 5]
     )
   })
 
@@ -263,7 +263,7 @@ describe('migration 3 (change transactions)', () => {
         "INSERT INTO workspaces (root_path, display_name, created_at, last_opened_at) " +
           "VALUES ('C:\\proj\\a', 'a', 10, 20)"
       )
-      assert.equal(runMigrations(db, migrations), 3)
+      assert.equal(runMigrations(db, migrations), 5)
       const settings: unknown = db.prepare("SELECT value FROM key_value WHERE key = 'stark.settings'").get()
       const profile: unknown = db.prepare("SELECT value FROM key_value WHERE key = 'stark.profile'").get()
       const workspace: unknown = db
@@ -277,7 +277,7 @@ describe('migration 3 (change transactions)', () => {
     }
   })
 
-  it('rerunning v3 is idempotent and keeps existing transaction rows', () => {
+  it('rerunning migrations is idempotent and keeps existing transaction rows', () => {
     const db = openFresh()
     try {
       runMigrations(db, migrations)
@@ -286,7 +286,7 @@ describe('migration 3 (change transactions)', () => {
         "INSERT INTO change_transactions (workspace_id, status, created_at, updated_at) " +
           "VALUES (1, 'pending', 1, 1)"
       )
-      assert.equal(runMigrations(db, migrations), 3)
+      assert.equal(runMigrations(db, migrations), 5)
       const count: unknown = db.prepare('SELECT COUNT(*) AS n FROM change_transactions').get()
       assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }))
     } finally {

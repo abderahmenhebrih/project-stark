@@ -39,7 +39,26 @@ export const IPC_CHANNELS = {
   changesListRecent: 'stark:changes:list-recent',
   changesAccept: 'stark:changes:accept',
   changesReject: 'stark:changes:reject',
-  changesRollback: 'stark:changes:rollback'
+  changesRollback: 'stark:changes:rollback',
+  terminalCreate: 'stark:terminal:create',
+  terminalWrite: 'stark:terminal:write',
+  terminalResize: 'stark:terminal:resize',
+  terminalKill: 'stark:terminal:kill',
+  terminalData: 'stark:terminal:data',
+  terminalExit: 'stark:terminal:exit',
+  gitGetStatus: 'stark:git:get-status',
+  gitGetDiff: 'stark:git:get-diff',
+  sessionsCreate: 'stark:sessions:create',
+  sessionsList: 'stark:sessions:list',
+  sessionsListMessages: 'stark:sessions:list-messages',
+  sessionsSendUserMessage: 'stark:sessions:send-user-message',
+  providersGetState: 'stark:providers:get-state',
+  providersSaveCredential: 'stark:providers:save-credential',
+  providersClearCredential: 'stark:providers:clear-credential',
+  providersTestConnection: 'stark:providers:test-connection',
+  providersListModels: 'stark:providers:list-models',
+  providersSetModel: 'stark:providers:set-model',
+  aiGenerateResponse: 'stark:ai:generate-response'
 } as const
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS]

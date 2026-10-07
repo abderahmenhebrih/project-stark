@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactElement } from 'react'
 import type { WorkspaceEntry } from '../../../../shared/workspace-files/types'
 import {
   acceptChangeTransaction,
@@ -9,16 +9,22 @@ import {
   rollbackChangeTransaction
 } from '../../lib/changes-api'
 import { normalizeChangeTransactionError } from '../../lib/change-transaction-error'
+import { getGitDiff } from '../../lib/git-api'
 import { getWorkspaceFilesApi } from '../../lib/stark-api'
 import { ChangesPanel } from '../changes/ChangesPanel'
 import { TransactionReview } from '../changes/TransactionReview'
 import { changesReducer, initialChangesState } from '../changes/changes-state'
 import { CodeEditor } from '../editor/CodeEditor'
+import { EditorToolbar } from '../editor/EditorToolbar'
 import { buildDocumentUri } from '../editor/editor-document'
 import { classifyEol, isEditableEol, MIXED_EOL_MESSAGE } from '../editor/editor-eol'
 import { toEditorFocus, type EditorFocus } from '../editor/editor-focus'
 import { detectEditorLanguage } from '../editor/editor-language'
+import { GitDiffViewer } from '../git/GitDiffViewer'
+import { GitPanel } from '../git/GitPanel'
+import { gitDiffReducer, initialGitDiffState } from '../git/git-state'
 import { SearchPanel } from '../search/SearchPanel'
+import { TerminalPanel } from '../terminal/TerminalPanel'
 import { confirmDiscardUnsavedDraft, setUnsavedDraft } from './editor-guard'
 import {
   applyDraftChange,
@@ -129,17 +135,21 @@ function toReadError(error: unknown): string {
  * writes. Reviewing a draft persists a pending change transaction
  * (disk untouched); only Accept flows through the Stage 8 writer, and
  * only Rollback restores the checkpoint. Uniform LF/CRLF endings are
- * preserved; mixed-ending files open read-only. All filesystem access
+ * preserved; mixed-ending files open read-only. The Git tab is
+ * read-only awareness (branch/status/diff, explicit Refresh only, no
+ * polling); selecting a staged/working row opens its patch in the
+ * main pane via a read-only Monaco viewer, and Open file reuses the
+ * existing file read path. All filesystem access
  * goes through workspace bridges; stale responses from a previous
  * workspace are ignored, and switching workspaces resets tree,
- * preview, search, editor, and change review.
+ * preview, search, editor, change review, and Git diff.
  */
 export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
   const [state, dispatch] = useReducer(explorerReducer, workspaceId, (id) => ({
     ...initialExplorerState(),
     workspaceId: id
   }))
-  const [tab, setTab] = useState<'explorer' | 'search' | 'changes'>('explorer')
+  const [tab, setTab] = useState<'explorer' | 'search' | 'changes' | 'git'>('explorer')
   const [previewLine, setPreviewLine] = useState<number | null>(null)
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [focusRequest, setFocusRequest] = useState<EditorFocus | null>(null)
@@ -147,6 +157,11 @@ export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
     ...initialChangesState(),
     workspaceId: id
   }))
+  const [gitDiff, gitDiffDispatch] = useReducer(gitDiffReducer, workspaceId, (id) => ({
+    ...initialGitDiffState(),
+    workspaceId: id
+  }))
+  const gitDiffRequestRef = useRef(0)
 
   // Publish the derived dirty flag so file selection, search-result
   // selection, and workspace switching share one discard guard.
@@ -205,6 +220,11 @@ export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
     void refreshHistory()
   }, [workspaceId, refreshHistory])
 
+  useEffect(() => {
+    gitDiffDispatch({ type: 'workspace-changed', workspaceId })
+    gitDiffRequestRef.current = 0
+  }, [workspaceId])
+
   function handleToggle(path: string): void {
     const expanding = !state.expanded.includes(path)
     dispatch({ type: 'toggle', path })
@@ -218,6 +238,7 @@ export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
     setEditor(null)
     setFocusRequest(null)
     changesDispatch({ type: 'review-closed' })
+    gitDiffDispatch({ type: 'diff-closed' })
     const api = getWorkspaceFilesApi()
     if (api === undefined) {
       dispatch({ type: 'file-failed', path, message: 'We couldn’t read this file.' })
@@ -247,6 +268,48 @@ export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
     }
     setPreviewLine(null)
     loadPreviewFile(path)
+  }
+
+  function handleSelectGitDiff(relativePath: string, target: 'staged' | 'unstaged'): void {
+    if (!confirmDiscardUnsavedDraft()) {
+      return
+    }
+    changesDispatch({ type: 'review-closed' })
+    const requestId = gitDiffRequestRef.current + 1
+    gitDiffRequestRef.current = requestId
+    gitDiffDispatch({ type: 'diff-loading', workspaceId, relativePath, target, requestId })
+    getGitDiff({ workspaceId, relativePath, target }).then(
+      (result) => {
+        if (gitDiffRequestRef.current !== requestId) {
+          return
+        }
+        gitDiffDispatch({ type: 'diff-succeeded', workspaceId: result.workspaceId, requestId, result })
+      },
+      (error: unknown) => {
+        if (gitDiffRequestRef.current !== requestId) {
+          return
+        }
+        gitDiffDispatch({
+          type: 'diff-failed',
+          workspaceId,
+          requestId,
+          message: error instanceof Error && error.message !== '' ? error.message : 'We couldn’t read this Git diff.'
+        })
+      }
+    )
+  }
+
+  function handleCloseGitDiff(): void {
+    gitDiffDispatch({ type: 'diff-closed' })
+  }
+
+  function handleOpenGitFile(relativePath: string): void {
+    if (!confirmDiscardUnsavedDraft()) {
+      return
+    }
+    setPreviewLine(null)
+    setTab('explorer')
+    loadPreviewFile(relativePath)
   }
 
   function handleSelectSearchResult(path: string, line: number, column: number): void {
@@ -420,7 +483,6 @@ export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
     }
   }
 
-  const previewName = state.preview?.path.split('/').pop() ?? state.preview?.path ?? ''
   const dirty = editor !== null && isEditorDirty(editor)
   const previewContent = state.preview?.content ?? null
   const previewEol = useMemo(
@@ -428,11 +490,13 @@ export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
     [previewContent]
   )
   const previewEditable = previewEol !== null && isEditableEol(previewEol)
+  const previewPathLabel = state.preview === null ? '' : state.preview.path === '' ? '/' : state.preview.path
+  const readOnlyStatus = !previewEditable ? 'Mixed line endings — read-only' : previewLine !== null ? `Line ${previewLine} · Read-only` : 'Read-only'
 
   return (
-    <section className="explorer" aria-label="Explorer">
-      <div className="explorer__tree">
-        <div className="explorer__tabs" role="tablist" aria-label="Explorer views">
+    <section className="workbench" aria-label="Explorer">
+      <aside className="workbench__sidebar" aria-label="Sidebar">
+        <div className="workbench__tabs" role="tablist" aria-label="Explorer views">
           <button
             className={tab === 'explorer' ? 'explorer__tab explorer__tab--active' : 'explorer__tab'}
             type="button"
@@ -460,23 +524,83 @@ export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
           >
             Changes
           </button>
+          <button
+            className={tab === 'git' ? 'explorer__tab explorer__tab--active' : 'explorer__tab'}
+            type="button"
+            role="tab"
+            aria-selected={tab === 'git'}
+            onClick={() => setTab('git')}
+          >
+            Git
+          </button>
         </div>
-        {tab === 'explorer' ? (
-          <TreeNode path="" state={state} onToggle={handleToggle} onSelectFile={handleSelectFile} />
-        ) : tab === 'search' ? (
-          <SearchPanel key={workspaceId} workspaceId={workspaceId} onSelectResult={handleSelectSearchResult} />
-        ) : (
-          <ChangesPanel
-            history={changes.history}
-            loading={changes.historyLoading}
-            error={changes.historyError}
-            selectedId={changes.selectedId}
-            onSelect={handleSelectTransaction}
-          />
-        )}
-      </div>
-      <div className="explorer__preview">
-        {changes.detail !== null ? (
+        <div className="workbench__sidebar-body">
+          {tab === 'explorer' ? (
+            <TreeNode path="" state={state} onToggle={handleToggle} onSelectFile={handleSelectFile} />
+          ) : tab === 'search' ? (
+            <SearchPanel key={workspaceId} workspaceId={workspaceId} onSelectResult={handleSelectSearchResult} />
+          ) : tab === 'git' ? (
+            <GitPanel
+              key={workspaceId}
+              workspaceId={workspaceId}
+              onSelectDiff={handleSelectGitDiff}
+              onOpenFile={handleOpenGitFile}
+            />
+          ) : (
+            <ChangesPanel
+              history={changes.history}
+              loading={changes.historyLoading}
+              error={changes.historyError}
+              selectedId={changes.selectedId}
+              onSelect={handleSelectTransaction}
+            />
+          )}
+        </div>
+      </aside>
+      <section className="workbench__editor" aria-label="Editor">
+        <div className="workbench__editor-main">
+        {gitDiff.relativePath !== null ? (
+          <div className="workbench__editor-body">
+            <EditorToolbar
+              path={`Git diff · ${gitDiff.relativePath} · ${gitDiff.target === 'staged' ? 'Staged' : 'Working tree'}`}
+              status="Read-only"
+              actions={
+                <>
+                  <button className="explorer__secondary" type="button" onClick={() => handleOpenGitFile(gitDiff.relativePath as string)}>
+                    Open file
+                  </button>
+                  <button className="explorer__secondary" type="button" onClick={handleCloseGitDiff}>
+                    Close
+                  </button>
+                </>
+              }
+            />
+            {gitDiff.phase === 'loading' ? (
+              <p className="explorer__status explorer__status--centered" role="status">
+                Loading Git diff…
+              </p>
+            ) : gitDiff.phase === 'error' ? (
+              <p className="explorer__error explorer__status--centered" role="alert">
+                {gitDiff.error ?? 'We couldn’t read this Git diff.'}
+              </p>
+            ) : gitDiff.result !== null ? (
+              gitDiff.result.patch === '' ? (
+                <p className="explorer__status explorer__status--centered">No patch content.</p>
+              ) : (
+                <div className="editor-canvas">
+                  <GitDiffViewer
+                    key={`gitdiff:${workspaceId}:${gitDiff.result.relativePath}:${gitDiff.result.target}`}
+                    relativePath={gitDiff.result.relativePath}
+                    target={gitDiff.result.target}
+                    patch={gitDiff.result.patch}
+                  />
+                </div>
+              )
+            ) : (
+              <p className="explorer__status explorer__status--centered">Loading Git diff…</p>
+            )}
+          </div>
+        ) : changes.detail !== null ? (
           <TransactionReview
             transaction={changes.detail}
             busy={changes.busy}
@@ -488,90 +612,100 @@ export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
             onClose={handleCloseReview}
           />
         ) : changes.detailLoading ? (
-          <p className="explorer__status" role="status">
+          <p className="explorer__status explorer__status--centered" role="status">
             Loading change…
           </p>
         ) : changes.detailError !== null ? (
-          <p className="explorer__error" role="alert">
+          <p className="explorer__error explorer__status--centered" role="alert">
             {changes.detailError}
           </p>
         ) : state.preview === null ? (
-          <p className="explorer__status">Select a file to preview</p>
+          <p className="explorer__status explorer__status--centered">Select a file to open</p>
         ) : state.preview.loading ? (
-          <p className="explorer__status" role="status">
+          <p className="explorer__status explorer__status--centered" role="status">
             Loading…
           </p>
         ) : state.preview.error !== null ? (
-          <p className="explorer__error" role="alert">
+          <p className="explorer__error explorer__status--centered" role="alert">
             {state.preview.error}
           </p>
         ) : editor !== null && state.preview.content !== null && state.preview.revision !== null ? (
-          <div className="explorer__editor">
-            <p className="explorer__preview-title">{previewName}</p>
-            <p className="explorer__preview-path">{state.preview.path === '' ? '/' : state.preview.path}</p>
-            <p className="explorer__status" role="status">
-              {dirty ? 'Unsaved changes' : 'No unsaved changes'}
-            </p>
+          <div className="workbench__editor-body">
+            <EditorToolbar
+              path={previewPathLabel}
+              status={dirty ? 'Unsaved changes' : 'No unsaved changes'}
+              actions={
+                <>
+                  <button
+                    className="explorer__primary"
+                    type="button"
+                    disabled={!dirty || editor.saving}
+                    onClick={() => void handleReviewChange()}
+                  >
+                    {editor.saving ? 'Reviewing…' : 'Review change'}
+                  </button>
+                  <button className="explorer__secondary" type="button" onClick={handleCancel}>
+                    Cancel
+                  </button>
+                </>
+              }
+            />
             {editor.saveError !== null && (
-              <p className="explorer__error" role="alert">
+              <p className="explorer__error explorer__inline-alert" role="alert">
                 {editor.saveError}
               </p>
             )}
-            <CodeEditor
-              key={`edit:${workspaceId}:${state.preview.path}:${state.preview.revision}`}
-              documentUri={buildDocumentUri(workspaceId, state.preview.path)}
-              language={detectEditorLanguage(state.preview.path)}
-              initialValue={editor.draftContent}
-              eol={previewEol === 'crlf' ? 'CRLF' : 'LF'}
-              readOnly={false}
-              focusRequest={null}
-              onContentChange={handleMonacoChange}
-              ariaLabel="File editor"
-            />
-            <div className="explorer__editor-bar">
-              <button
-                className="explorer__primary"
-                type="button"
-                disabled={!dirty || editor.saving}
-                onClick={() => void handleReviewChange()}
-              >
-                {editor.saving ? 'Reviewing…' : 'Review change'}
-              </button>
-              <button className="explorer__secondary" type="button" onClick={handleCancel}>
-                Cancel
-              </button>
+            <div className="editor-canvas">
+              <CodeEditor
+                key={`edit:${workspaceId}:${state.preview.path}:${state.preview.revision}`}
+                documentUri={buildDocumentUri(workspaceId, state.preview.path)}
+                language={detectEditorLanguage(state.preview.path)}
+                initialValue={editor.draftContent}
+                eol={previewEol === 'crlf' ? 'CRLF' : 'LF'}
+                readOnly={false}
+                focusRequest={null}
+                onContentChange={handleMonacoChange}
+                ariaLabel="File editor"
+              />
             </div>
           </div>
         ) : (
-          <>
-            <p className="explorer__preview-title">{previewName}</p>
-            <p className="explorer__preview-path">{state.preview.path === '' ? '/' : state.preview.path}</p>
-            {previewLine !== null && <p className="explorer__preview-line">Line {previewLine}</p>}
+          <div className="workbench__editor-body">
+            <EditorToolbar
+              path={previewPathLabel}
+              status={readOnlyStatus}
+              actions={
+                state.preview.revision !== null && previewEditable && editor === null ? (
+                  <button className="explorer__primary" type="button" onClick={handleEdit}>
+                    Edit
+                  </button>
+                ) : null
+              }
+            />
             {previewEol !== null && !previewEditable && (
-              <p className="explorer__error" role="alert">
+              <p className="explorer__error explorer__inline-alert" role="alert">
                 {MIXED_EOL_MESSAGE}
               </p>
             )}
             {state.preview.content !== null && state.preview.revision !== null && (
-              <CodeEditor
-                key={`view:${workspaceId}:${state.preview.path}:${state.preview.revision}`}
-                documentUri={buildDocumentUri(workspaceId, state.preview.path)}
-                language={detectEditorLanguage(state.preview.path)}
-                initialValue={state.preview.content}
-                eol={previewEol === 'crlf' ? 'CRLF' : 'LF'}
-                readOnly
-                focusRequest={focusRequest}
-                ariaLabel="File preview"
-              />
+              <div className="editor-canvas">
+                <CodeEditor
+                  key={`view:${workspaceId}:${state.preview.path}:${state.preview.revision}`}
+                  documentUri={buildDocumentUri(workspaceId, state.preview.path)}
+                  language={detectEditorLanguage(state.preview.path)}
+                  initialValue={state.preview.content}
+                  eol={previewEol === 'crlf' ? 'CRLF' : 'LF'}
+                  readOnly
+                  focusRequest={focusRequest}
+                  ariaLabel="File preview"
+                />
+              </div>
             )}
-            {state.preview.revision !== null && previewEditable && editor === null && (
-              <button className="explorer__secondary" type="button" onClick={handleEdit}>
-                Edit
-              </button>
-            )}
-          </>
+          </div>
         )}
-      </div>
+        </div>
+        <TerminalPanel key={`terminal:${workspaceId}`} workspaceId={workspaceId} />
+      </section>
     </section>
   )
 }

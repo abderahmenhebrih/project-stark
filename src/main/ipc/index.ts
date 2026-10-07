@@ -2,17 +2,28 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { APP_NAME, IPC_CHANNELS, type IpcChannel } from '../../shared/constants'
 import { RENDERER_DEV_URL, RENDERER_ENTRY } from '../security/app-urls'
 import type { ChangeTransactionService } from '../change-transactions/change-transaction-service'
+import type { AiCompletionService } from '../ai/ai-completion-service'
+import type { AiProviderService } from '../ai/ai-provider-service'
+import type { GitService } from '../git/git-service'
+import type { CodingSessionService } from '../sessions/coding-session-service'
 import type { SettingsService } from '../settings/settings-service'
 import type { ProfileService } from '../profile/profile-service'
+import type { TerminalManager } from '../terminal/terminal-manager'
+import type { TerminalService } from '../terminal/terminal-service'
 import type { WorkspaceService } from '../workspace/workspace-service'
 import type { WorkspaceFileWriteService } from '../workspace-files/workspace-file-write-service'
 import type { WorkspaceFilesService } from '../workspace-files/workspace-files-service'
 import type { WorkspaceSearchService } from '../workspace-search/workspace-search-service'
 import { getAppInfo } from '../services/app-info'
 import type { IpcBinding } from './binding'
+import { createAiBindings } from './ai'
 import { createChangeTransactionBindings } from './change-transactions'
+import { createGitBindings } from './git'
 import { createProfileBindings } from './profile'
+import { createProviderBindings } from './providers'
+import { createSessionBindings } from './sessions'
 import { createSettingsBindings } from './settings'
+import { createTerminalBindings } from './terminal'
 import { isTrustedIpcSender } from './trust'
 import { createWorkspaceBindings, electronDirectoryPicker } from './workspace'
 import { createWorkspaceFilesBindings } from './workspace-files'
@@ -53,6 +64,12 @@ export interface IpcDependencies {
   readonly workspaceFileWriteService: WorkspaceFileWriteService
   readonly workspaceSearchService: WorkspaceSearchService
   readonly changeTransactionService: ChangeTransactionService
+  readonly terminalService: TerminalService
+  readonly terminalManager: TerminalManager
+  readonly gitService: GitService
+  readonly codingSessionService: CodingSessionService
+  readonly aiProviderService: AiProviderService
+  readonly aiCompletionService: AiCompletionService
 }
 
 /**
@@ -67,7 +84,12 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
     ...createWorkspaceBindings(deps.workspaceService, electronDirectoryPicker),
     ...createWorkspaceFilesBindings(deps.workspaceFilesService, deps.workspaceFileWriteService),
     ...createWorkspaceSearchBindings(deps.workspaceSearchService),
-    ...createChangeTransactionBindings(deps.changeTransactionService)
+    ...createChangeTransactionBindings(deps.changeTransactionService),
+    ...createTerminalBindings(deps.terminalService, deps.terminalManager),
+    ...createGitBindings(deps.gitService),
+    ...createSessionBindings(deps.codingSessionService),
+    ...createProviderBindings(deps.aiProviderService),
+    ...createAiBindings(deps.aiCompletionService)
   ]
 }
 

@@ -4,6 +4,8 @@ import { describe, it } from 'node:test'
 import { ChangeTransactionService } from '../change-transactions/change-transaction-service'
 import { runMigrations, migrations } from '../database/migrations/index'
 import { ChangeTransactionRepository } from '../database/repositories/change-transaction-repository'
+import { AiProviderRepository } from '../database/repositories/ai-provider-repository'
+import { CodingSessionRepository } from '../database/repositories/coding-session-repository'
 import { KeyValueRepository } from '../database/repositories/key-value-repository'
 import { WorkspaceRepository } from '../database/repositories/workspace-repository'
 import { ProfileService } from '../profile/profile-service'
@@ -12,6 +14,16 @@ import { WorkspaceFileWriteService } from '../workspace-files/workspace-file-wri
 import { WorkspaceFilesService } from '../workspace-files/workspace-files-service'
 import { WorkspaceSearchService } from '../workspace-search/workspace-search-service'
 import { WorkspaceService } from '../workspace/workspace-service'
+import { GitProcessRunner } from '../git/git-process-runner'
+import { GitService } from '../git/git-service'
+import { AiCompletionService } from '../ai/ai-completion-service'
+import { AiProviderService } from '../ai/ai-provider-service'
+import type { CredentialProtector } from '../ai/credential-protector'
+import { OpenAiProviderAdapter } from '../ai/openai-adapter'
+import { ProviderRegistry } from '../ai/provider-adapter'
+import { CodingSessionService } from '../sessions/coding-session-service'
+import { TerminalManager } from '../terminal/terminal-manager'
+import { TerminalService } from '../terminal/terminal-service'
 import { createIpcBindings } from './index'
 import { createSettingsBindings } from './settings'
 
@@ -24,13 +36,29 @@ function openService(): {
   fileWrites: WorkspaceFileWriteService
   search: WorkspaceSearchService
   changes: ChangeTransactionService
+  terminal: TerminalService
+  git: GitService
+  sessions: CodingSessionService
+  aiProviders: AiProviderService
+  aiCompletion: AiCompletionService
 } {
   const db = new DatabaseSync(':memory:')
   runMigrations(db, migrations)
   const repository = new KeyValueRepository(db)
   const workspaces = new WorkspaceRepository(db)
   const changeTransactions = new ChangeTransactionRepository(db)
+  const codingSessions = new CodingSessionRepository(db)
+  const aiProviderRows = new AiProviderRepository(db)
   const fileWrites = new WorkspaceFileWriteService(workspaces)
+  // Surface-only construction: the registry factory throws if any test
+  // ever touches the network, and the protector is never invoked here.
+  const registry = new ProviderRegistry()
+  registry.register(
+    new OpenAiProviderAdapter(() => {
+      throw new Error('network must not run in surface tests')
+    })
+  )
+  const aiProviders = new AiProviderService(aiProviderRows, new FakeSurfaceProtector(), registry)
   return {
     db,
     service: new SettingsService(repository),
@@ -39,24 +67,59 @@ function openService(): {
     files: new WorkspaceFilesService(workspaces),
     fileWrites,
     search: new WorkspaceSearchService(workspaces),
-    changes: new ChangeTransactionService(workspaces, changeTransactions, fileWrites)
+    changes: new ChangeTransactionService(workspaces, changeTransactions, fileWrites),
+    terminal: new TerminalService(workspaces),
+    git: new GitService(workspaces, new GitProcessRunner()),
+    sessions: new CodingSessionService(workspaces, codingSessions),
+    aiProviders,
+    aiCompletion: new AiCompletionService(workspaces, codingSessions, aiProviderRows, aiProviders, registry)
+  }
+}
+
+/** Never-used protector for surface tests: availability checks stay local. */
+class FakeSurfaceProtector implements CredentialProtector {
+  async isAvailable(): Promise<boolean> {
+    return true
+  }
+  async encrypt(secret: string): Promise<Buffer> {
+    return Buffer.from(`enc:${secret}`, 'utf8')
+  }
+  async decrypt(ciphertext: Buffer): Promise<{ secret: string; shouldReEncrypt: boolean }> {
+    return { secret: ciphertext.toString('utf8').replace(/^enc:/, ''), shouldReEncrypt: false }
   }
 }
 
 const EXPECTED_CHANNELS = ['stark:settings:get', 'stark:settings:reset', 'stark:settings:update']
 
 const EXPECTED_ALL_CHANNELS = [
+  'stark:ai:generate-response',
   'stark:changes:accept',
   'stark:changes:create',
   'stark:changes:get',
   'stark:changes:list-recent',
   'stark:changes:reject',
   'stark:changes:rollback',
+  'stark:git:get-diff',
+  'stark:git:get-status',
   'stark:profile:get',
   'stark:profile:set-display-name',
+  'stark:providers:clear-credential',
+  'stark:providers:get-state',
+  'stark:providers:list-models',
+  'stark:providers:save-credential',
+  'stark:providers:set-model',
+  'stark:providers:test-connection',
+  'stark:sessions:create',
+  'stark:sessions:list',
+  'stark:sessions:list-messages',
+  'stark:sessions:send-user-message',
   'stark:settings:get',
   'stark:settings:reset',
   'stark:settings:update',
+  'stark:terminal:create',
+  'stark:terminal:kill',
+  'stark:terminal:resize',
+  'stark:terminal:write',
   'stark:workspace-files:list-directory',
   'stark:workspace-files:read-text-file',
   'stark:workspace-files:write-text-file',
@@ -85,8 +148,16 @@ describe('settings IPC bindings', () => {
   })
 
   it('the full IPC surface contains no arbitrary channels', () => {
-    const { db, service, profile, workspace, files, fileWrites, search, changes } = openService()
+    const { db, service, profile, workspace, files, fileWrites, search, changes, terminal, git, sessions, aiProviders, aiCompletion } = openService()
     try {
+      const terminalManager = new TerminalManager(
+        {
+          spawn: () => {
+            throw new Error('pty spawn must not run in surface tests')
+          }
+        },
+        { sendData: () => {}, sendExit: () => {} }
+      )
       const channels = createIpcBindings({
         settingsService: service,
         profileService: profile,
@@ -94,7 +165,13 @@ describe('settings IPC bindings', () => {
         workspaceFilesService: files,
         workspaceFileWriteService: fileWrites,
         workspaceSearchService: search,
-        changeTransactionService: changes
+        changeTransactionService: changes,
+        terminalService: terminal,
+        terminalManager,
+        gitService: git,
+        codingSessionService: sessions,
+        aiProviderService: aiProviders,
+        aiCompletionService: aiCompletion
       }).map((binding) => binding.channel)
       assert.deepEqual([...channels].sort(), EXPECTED_ALL_CHANNELS)
     } finally {

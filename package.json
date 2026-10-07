@@ -18,7 +18,11 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "monaco-editor": "^0.57.0",
+    "node-pty": "^1.1.0",
+    "openai": "^7.30.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
@@ -45,9 +49,15 @@
     "directories": {
       "output": "dist"
     },
+    "npmRebuild": false,
     "files": [
       "out/**/*",
-      "package.json"
+      "package.json",
+      "node_modules/node-pty/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/prebuilds/**/*",
+      "**/*.node"
     ],
     "win": {
       "target": [

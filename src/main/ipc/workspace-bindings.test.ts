@@ -7,9 +7,12 @@ import { describe, it } from 'node:test'
 import { createServices, type ApplicationServices } from '../application/create-services'
 import { runMigrations, migrations } from '../database/migrations/index'
 import { ChangeTransactionRepository } from '../database/repositories/change-transaction-repository'
+import { CodingSessionRepository } from '../database/repositories/coding-session-repository'
+import { AiProviderRepository } from '../database/repositories/ai-provider-repository'
 import { KeyValueRepository } from '../database/repositories/key-value-repository'
 import { WorkspaceRepository } from '../database/repositories/workspace-repository'
 import { WorkspaceService } from '../workspace/workspace-service'
+import { TerminalManager } from '../terminal/terminal-manager'
 import { createIpcBindings } from './index'
 import { buildOpenDialogOptions, createWorkspaceBindings, type WorkspacePicker } from './workspace'
 import type { IpcChannel } from '../../shared/constants'
@@ -23,7 +26,9 @@ function openServices(): { db: DatabaseSync; services: ApplicationServices } {
     services: createServices({
       keyValue,
       workspaces: new WorkspaceRepository(db),
-      changeTransactions: new ChangeTransactionRepository(db)
+      changeTransactions: new ChangeTransactionRepository(db),
+      codingSessions: new CodingSessionRepository(db),
+      aiProviders: new AiProviderRepository(db),
     })
   }
 }
@@ -78,6 +83,14 @@ describe('workspace IPC bindings', () => {
   it('the full IPC surface contains the workspace channels', () => {
     const { db, services } = openServices()
     try {
+      const terminalManager = new TerminalManager(
+        {
+          spawn: () => {
+            throw new Error('pty spawn must not run in surface tests')
+          }
+        },
+        { sendData: () => {}, sendExit: () => {} }
+      )
       const channels = createIpcBindings({
         settingsService: services.settingsService,
         profileService: services.profileService,
@@ -85,7 +98,13 @@ describe('workspace IPC bindings', () => {
         workspaceFilesService: services.workspaceFilesService,
         workspaceFileWriteService: services.workspaceFileWriteService,
         workspaceSearchService: services.workspaceSearchService,
-        changeTransactionService: services.changeTransactionService
+        changeTransactionService: services.changeTransactionService,
+        terminalService: services.terminalService,
+        terminalManager,
+        gitService: services.gitService,
+        codingSessionService: services.codingSessionService,
+        aiProviderService: services.aiProviderService,
+        aiCompletionService: services.aiCompletionService
       }).map((binding) => binding.channel)
       for (const expected of EXPECTED_CHANNELS) {
         assert.ok(channels.includes(expected), `missing ${expected}`)

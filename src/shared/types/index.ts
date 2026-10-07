@@ -17,7 +17,12 @@ export interface AppInfo {
 }
 
 import type { ProfileApi } from '../profile/types'
+import type { SessionsApi } from '../sessions/types'
+import type { ProvidersApi } from '../providers/types'
+import type { AiApi } from '../ai/types'
 import type { SettingsApi } from '../settings/types'
+import type { TerminalApi } from '../terminal/types'
+import type { GitApi } from '../git/types'
 import type { WorkspaceApi } from '../workspace/types'
 
 /**
@@ -34,6 +39,11 @@ export interface StarkApi {
   settings: SettingsApi
   profile: ProfileApi
   workspace: WorkspaceApi
+  terminal: TerminalApi
+  git: GitApi
+  sessions: SessionsApi
+  providers: ProvidersApi
+  ai: AiApi
 }
 
 /** Lifecycle status shown by the development shell. */
