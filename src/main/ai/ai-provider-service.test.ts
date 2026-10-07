@@ -9,11 +9,13 @@ import { ProviderCredentialMissingError, SecureStorageUnavailableError } from '.
 import type { AiProviderAdapter, ProviderGenerateRequest, ProviderGenerateResult } from './provider-adapter'
 import { ProviderRegistry } from './provider-adapter'
 import { ProviderInvalidCredentialError, ProviderRateLimitedError, ProviderTimeoutError, ProviderNetworkError } from './errors'
+import { ProviderForbiddenError } from './errors'
 import type { ProviderModel } from '../../shared/providers/types'
 
 class FakeProtector implements CredentialProtector {
   available = true
   reEncrypt = false
+  corruptNext = false
   decryptCalls = 0
   encryptCalls = 0
 
@@ -33,6 +35,10 @@ class FakeProtector implements CredentialProtector {
     this.decryptCalls += 1
     if (!this.available) {
       throw new SecureStorageUnavailableError()
+    }
+    if (this.corruptNext) {
+      this.corruptNext = false
+      return { secret: 'different-secret', shouldReEncrypt: false }
     }
     return { secret: ciphertext.toString('utf8').replace(/^fake:/, ''), shouldReEncrypt: this.reEncrypt }
   }
@@ -268,6 +274,50 @@ describe('AI provider service', () => {
       } finally {
         db.close()
       }
+    }
+  })
+
+  it('throws (never misreports) on permission-denied connection tests', async () => {
+    const { db, service, adapter } = openService()
+    try {
+      await service.saveCredential({ providerId: 'openai', apiKey: 'sk-x' })
+      adapter.listError = new ProviderForbiddenError()
+      await assert.rejects(service.testConnection({ providerId: 'openai' }), (error: unknown) => {
+        assert.ok(error instanceof ProviderForbiddenError)
+        assert.ok(!error.message.includes('rejected'))
+        assert.equal(error.message, 'The API key does not have permission for this request. Check the key’s project permissions and try again.')
+        return true
+      })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('verifies the stored key round-trips on save', async () => {
+    const { db, service, protector } = openService()
+    try {
+      const state = await service.saveCredential({ providerId: 'openai', apiKey: 'sk-roundtrip' })
+      assert.equal(state.configured, true)
+      assert.ok(protector.decryptCalls >= 1, 'save must read back and decrypt what it stored')
+    } finally {
+      db.close()
+    }
+  })
+
+  it('fails a save whose stored bytes do not decrypt to the key', async () => {
+    const { db, service, protector } = openService()
+    try {
+      protector.corruptNext = true
+      await assert.rejects(service.saveCredential({ providerId: 'openai', apiKey: 'sk-x' }), (error: unknown) => {
+        assert.ok(error instanceof Error)
+        assert.equal(error.message, 'We couldn’t store this API key securely.')
+        assert.ok(!error.message.includes('sk-x'))
+        return true
+      })
+      // The unverifiable row is removed so a later save starts clean.
+      assert.equal((await service.getState({ providerId: 'openai' })).configured, false)
+    } finally {
+      db.close()
     }
   })
 

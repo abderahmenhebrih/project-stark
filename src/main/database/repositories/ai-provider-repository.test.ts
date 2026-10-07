@@ -80,6 +80,24 @@ describe('AI provider repository', () => {
     }
   })
 
+  it('preserves exact bytes from offset Uint8Array views', () => {
+    const { db, providers } = openRepository()
+    try {
+      // node:sqlite hands BLOBs back as Uint8Array views that may share
+      // a larger ArrayBuffer; the conversion must respect view bounds.
+      const backing = new Uint8Array([9, 9, 1, 2, 3, 250, 9, 9])
+      const view = backing.subarray(2, 6)
+      assert.equal(view.byteOffset, 2)
+      providers.setEncryptedCredential('openai', Buffer.from(view), 1000)
+      const stored = providers.findEncryptedCredential('openai')
+      assert.deepEqual(stored, Buffer.from([1, 2, 3, 250]))
+      // And a raw offset view converts byte-exactly through Buffer.from.
+      assert.deepEqual(Buffer.from(view), Buffer.from([1, 2, 3, 250]))
+    } finally {
+      db.close()
+    }
+  })
+
   it('never persists plaintext alongside ciphertext', () => {
     const { db, providers } = openRepository()
     try {

@@ -47,12 +47,35 @@ export class ProviderCredentialMissingError extends AiProviderError {
   }
 }
 
+/** A stored key failed its write-read-decrypt verification round trip. */
+export class ProviderStorageVerificationError extends AiProviderError {
+  override readonly name = 'ProviderStorageVerificationError'
+
+  constructor(options?: { cause?: unknown }) {
+    super('We couldn’t store this API key securely.', options)
+  }
+}
+
 /** The stored credential was rejected by the provider. */
 export class ProviderInvalidCredentialError extends AiProviderError {
   override readonly name = 'ProviderInvalidCredentialError'
 
   constructor(options?: { cause?: unknown }) {
     super('The saved API key was rejected. Check the key and try again.', options)
+  }
+}
+
+/**
+ * Authenticated but forbidden (normally HTTP 403): the key lacks
+ * permission for the request, e.g. wrong project scope. Deliberately
+ * distinct from invalid-credential so a valid key is never reported
+ * as rejected.
+ */
+export class ProviderForbiddenError extends AiProviderError {
+  override readonly name = 'ProviderForbiddenError'
+
+  constructor(options?: { cause?: unknown }) {
+    super('The API key does not have permission for this request. Check the key’s project permissions and try again.', options)
   }
 }
 
@@ -171,7 +194,9 @@ export function toPublicProviderError(operation: ProviderOperation, error: unkno
   if (
     error instanceof SecureStorageUnavailableError ||
     error instanceof ProviderCredentialMissingError ||
+    error instanceof ProviderStorageVerificationError ||
     error instanceof ProviderInvalidCredentialError ||
+    error instanceof ProviderForbiddenError ||
     error instanceof ProviderRateLimitedError ||
     error instanceof ProviderTimeoutError ||
     error instanceof ProviderNetworkError ||

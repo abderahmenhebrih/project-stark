@@ -11,8 +11,10 @@
 
 export type ProviderErrorKind =
   | 'storage-unavailable'
+  | 'storage-verification'
   | 'credential-missing'
   | 'invalid-credential'
+  | 'forbidden'
   | 'rate-limited'
   | 'timeout'
   | 'network'
@@ -29,8 +31,10 @@ export interface NormalizedProviderError {
 
 /** Stable main-process public messages for provider operations. */
 const MAIN_STORAGE_UNAVAILABLE = 'Secure credential storage is not available on this system.'
+const MAIN_STORAGE_VERIFICATION = 'We couldn’t store this API key securely.'
 const MAIN_CREDENTIAL_MISSING = 'No API key is saved for this provider yet.'
 const MAIN_INVALID_CREDENTIAL = 'The saved API key was rejected. Check the key and try again.'
+const MAIN_FORBIDDEN = 'The API key does not have permission for this request. Check the key’s project permissions and try again.'
 const MAIN_RATE_LIMITED = 'The AI provider is rate-limiting requests. Try again shortly.'
 const MAIN_TIMEOUT = 'The AI provider request timed out. Try again.'
 const MAIN_NETWORK = 'The AI provider could not be reached. Check your connection.'
@@ -41,8 +45,10 @@ const MAIN_NOTHING_TO_ANSWER = 'There is no new message for STARK to answer.'
 const MAIN_GENERIC = 'We couldn’t get a response from the AI provider.'
 
 export const PROVIDER_STORAGE_UNAVAILABLE_MESSAGE = MAIN_STORAGE_UNAVAILABLE
+export const PROVIDER_STORAGE_VERIFICATION_MESSAGE = MAIN_STORAGE_VERIFICATION
 export const PROVIDER_CREDENTIAL_MISSING_MESSAGE = MAIN_CREDENTIAL_MISSING
 export const PROVIDER_INVALID_CREDENTIAL_MESSAGE = MAIN_INVALID_CREDENTIAL
+export const PROVIDER_FORBIDDEN_MESSAGE = MAIN_FORBIDDEN
 export const PROVIDER_RATE_LIMITED_MESSAGE = MAIN_RATE_LIMITED
 export const PROVIDER_TIMEOUT_MESSAGE = MAIN_TIMEOUT
 export const PROVIDER_NETWORK_MESSAGE = MAIN_NETWORK
@@ -54,8 +60,10 @@ export const PROVIDER_GENERIC_MESSAGE = MAIN_GENERIC
 
 const KNOWN_OUTCOMES: readonly { readonly kind: ProviderErrorKind; readonly mainMessage: string }[] = [
   { kind: 'storage-unavailable', mainMessage: MAIN_STORAGE_UNAVAILABLE },
+  { kind: 'storage-verification', mainMessage: MAIN_STORAGE_VERIFICATION },
   { kind: 'credential-missing', mainMessage: MAIN_CREDENTIAL_MISSING },
   { kind: 'invalid-credential', mainMessage: MAIN_INVALID_CREDENTIAL },
+  { kind: 'forbidden', mainMessage: MAIN_FORBIDDEN },
   { kind: 'rate-limited', mainMessage: MAIN_RATE_LIMITED },
   { kind: 'timeout', mainMessage: MAIN_TIMEOUT },
   { kind: 'network', mainMessage: MAIN_NETWORK },

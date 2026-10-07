@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { ElectronSafeStorageCredentialProtector, zeroBuffer, type CredentialProtector } from './credential-protector'
 import { SecureStorageUnavailableError } from './errors'
@@ -106,5 +108,18 @@ describe('credential protector', () => {
       }
     )
     await assert.rejects(protector.decrypt(Buffer.from([0, 1])), SecureStorageUnavailableError)
+  })
+
+  it('production decrypt reads the documented async result field', () => {
+    // A FakeCredentialProtector cannot catch a wrong safeStorage field
+    // mapping, so this pins the REAL implementation to Electron's
+    // documented DecryptStringAsyncReturnValue shape ({ result,
+    // shouldReEncrypt }) statically.
+    const source = readFileSync(join(process.cwd(), 'src', 'main', 'ai', 'credential-protector.ts'), 'utf8')
+    assert.ok(source.includes('outcome.result'), 'decrypt must read the documented result field')
+    assert.ok(source.includes('outcome.shouldReEncrypt'), 'decrypt must forward the rotation flag')
+    for (const wrong of ['outcome.secret', 'outcome.plaintext', 'outcome.decryptedString']) {
+      assert.ok(!source.includes(wrong), `decrypt must not read ${wrong}`)
+    }
   })
 })

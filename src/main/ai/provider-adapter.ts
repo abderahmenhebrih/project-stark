@@ -1,5 +1,6 @@
 import type { ProviderId, ProviderModel } from '../../shared/providers/types'
 import {
+  ProviderForbiddenError,
   ProviderGenericError,
   ProviderInvalidCredentialError,
   ProviderModelUnavailableError,
@@ -69,12 +70,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
+/** SDK error class name without importing the SDK (keeps this unit-testable). */
+function sdkErrorName(error: unknown): string {
+  if (typeof error !== 'object' || error === null) {
+    return ''
+  }
+  const name = (error as { constructor?: { name?: unknown } }).constructor?.name
+  return typeof name === 'string' ? name : ''
+}
+
 /**
  * Classifies an unknown SDK/transport failure into a safe provider
- * error. Inspects status codes and timeout markers only — raw bodies,
- * headers, and key material are never propagated.
+ * error. Inspects the SDK error class, HTTP status, error code, and
+ * message markers — raw bodies, headers, and key material are never
+ * propagated.
+ *
+ * Authentication failure (normally HTTP 401 / AuthenticationError) is
+ * the ONLY path to invalid-credential. In particular 403
+ * (PermissionDeniedError) is a permission error, 404 (NotFoundError)
+ * is model/endpoint unavailability, and network/DNS/timeout failures
+ * are never reported as rejected keys.
  */
 export function classifyProviderError(error: unknown): AiProviderError {
+  const name = sdkErrorName(error)
   const status =
     typeof error === 'object' && error !== null && 'status' in error
       ? (error as { status?: unknown }).status
@@ -86,6 +104,7 @@ export function classifyProviderError(error: unknown): AiProviderError {
   const message = error instanceof Error ? error.message : String(error)
   const lowered = message.toLowerCase()
   if (
+    name === 'AuthenticationError' ||
     status === 401 ||
     (typeof code === 'string' && code === 'invalid_api_key') ||
     lowered.includes('incorrect api key') ||
@@ -93,13 +112,17 @@ export function classifyProviderError(error: unknown): AiProviderError {
   ) {
     return new ProviderInvalidCredentialError({ cause: error })
   }
-  if (status === 429) {
+  if (name === 'PermissionDeniedError' || status === 403) {
+    return new ProviderForbiddenError({ cause: error })
+  }
+  if (status === 429 || name === 'RateLimitError') {
     return new ProviderRateLimitedError({ cause: error })
   }
-  if (status === 404 || (typeof code === 'string' && code === 'model_not_found')) {
+  if (name === 'NotFoundError' || status === 404 || (typeof code === 'string' && code === 'model_not_found')) {
     return new ProviderModelUnavailableError({ cause: error })
   }
   if (
+    name === 'APIConnectionTimeoutError' ||
     (typeof code === 'string' && (code === 'ETIMEDOUT' || code === 'ECONNABORTED')) ||
     lowered.includes('timed out') ||
     lowered.includes('timeout')
@@ -108,6 +131,7 @@ export function classifyProviderError(error: unknown): AiProviderError {
   }
   const networkCodes: readonly string[] = ['ENOTFOUND', 'ECONNREFUSED', 'ECONNRESET', 'ENETUNREACH', 'EAI_AGAIN']
   if (
+    name === 'APIConnectionError' ||
     (typeof code === 'string' && networkCodes.includes(code)) ||
     error instanceof TypeError ||
     lowered.includes('fetch failed') ||

@@ -22,6 +22,25 @@ describe('provider error boundary', () => {
     }
   })
 
+  it('maps storage-verification and permission failures distinctly', () => {
+    assert.equal(
+      normalizeProviderError(new Error('We couldn’t store this API key securely.')).message,
+      'We couldn’t store this API key securely.'
+    )
+    assert.equal(
+      normalizeProviderError(
+        new Error('The API key does not have permission for this request. Check the key’s project permissions and try again.')
+      ).message,
+      'The API key does not have permission for this request. Check the key’s project permissions and try again.'
+    )
+    // Permission failures never read as rejected keys.
+    assert.ok(
+      !normalizeProviderError(
+        new Error('The API key does not have permission for this request. Check the key’s project permissions and try again.')
+      ).message.includes('rejected')
+    )
+  })
+
   it('collapses unknown failures to the caller fallback', () => {
     assert.equal(normalizeProviderError(new Error('boom')).message, 'We couldn’t get a response from the AI provider.')
     assert.equal(

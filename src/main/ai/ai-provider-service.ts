@@ -1,11 +1,14 @@
 import { TextEncoder } from 'node:util'
+import { timingSafeEqual } from 'node:crypto'
 import type { AiProviderState, ProviderId, ProviderModel } from '../../shared/providers/types'
 import type { AiProviderRepository } from '../database/repositories/ai-provider-repository'
 import {
   InvalidProviderRequestError,
   ProviderCredentialMissingError,
+  ProviderForbiddenError,
   ProviderInvalidCredentialError,
   ProviderRateLimitedError,
+  ProviderStorageVerificationError,
   ProviderTimeoutError,
   SecureStorageUnavailableError,
   UnknownProviderError
@@ -63,6 +66,16 @@ function validateModelId(model: unknown): string {
     throw new InvalidProviderRequestError('model reference is invalid')
   }
   return model
+}
+
+/** Constant-time secret comparison over UTF-8 bytes (lengths pre-checked). */
+function keysEqual(first: string, second: string): boolean {
+  const a = encoder.encode(first)
+  const b = encoder.encode(second)
+  if (a.byteLength !== b.byteLength) {
+    return false
+  }
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b))
 }
 
 export interface AiProviderServiceOptions {
@@ -146,7 +159,36 @@ export class AiProviderService {
     } finally {
       zeroBuffer(ciphertext)
     }
+    // Write-read-decrypt verification: prove the exact bytes survive
+    // the SQLite BLOB round trip before reporting Configured. A single
+    // extra decrypt on this rare user-initiated path is the narrowly
+    // scoped cost of catching storage corruption at save time.
+    await this.verifyStoredCredential(providerId, apiKey)
     return this.getState({ providerId })
+  }
+
+  private async verifyStoredCredential(providerId: ProviderId, expected: string): Promise<void> {
+    const stored = this.providers.findEncryptedCredential(providerId)
+    if (stored === undefined) {
+      throw new ProviderStorageVerificationError()
+    }
+    try {
+      const { secret } = await this.protector.decrypt(stored)
+      try {
+        if (!keysEqual(secret, expected)) {
+          try {
+            this.providers.clearEncryptedCredential(providerId)
+          } catch {
+              // Best effort: the verification failure below is what matters.
+          }
+          throw new ProviderStorageVerificationError()
+        }
+      } finally {
+        void secret
+      }
+    } finally {
+      zeroBuffer(stored)
+    }
   }
 
   async clearCredential(payload: unknown): Promise<AiProviderState> {
@@ -227,6 +269,11 @@ export class AiProviderService {
       }
       if (error instanceof ProviderTimeoutError) {
         return { status: 'timeout', models: [] }
+      }
+      if (error instanceof ProviderForbiddenError) {
+        // Permission failures are not connectivity states and must
+        // never read as a rejected key: surface the mapped copy.
+        throw error
       }
       return { status: 'network-error', models: [] }
     } finally {

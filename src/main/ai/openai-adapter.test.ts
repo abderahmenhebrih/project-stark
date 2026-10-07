@@ -3,11 +3,13 @@ import { describe, it } from 'node:test'
 import { AI_GENERATE_TIMEOUT_MS, PROVIDER_REQUEST_TIMEOUT_MS } from './limits'
 import {
   OpenAiProviderAdapter,
+  createOpenAiClient,
   type OpenAiClientFactory,
   type OpenAiClientLike
 } from './openai-adapter'
 import {
   ProviderEmptyResponseError,
+  ProviderForbiddenError,
   ProviderGenericError,
   ProviderInvalidCredentialError,
   ProviderModelUnavailableError,
@@ -59,6 +61,51 @@ function sdkError(status: number, extra?: Record<string, unknown>): Error {
   }
   return error
 }
+
+/** Simulates a real SDK error class by constructor name (no SDK import). */
+function namedSdkError(constructorName: string, status: number): Error {
+  const error = new Error(`${constructorName}: request failed`) as Error & Record<string, unknown>
+  Object.defineProperty(error, 'constructor', { value: { name: constructorName } })
+  error['status'] = status
+  return error
+}
+
+describe('OpenAI client environment isolation', () => {
+  it('ignores poisoned OPENAI_* environment variables', () => {
+    const saved = {
+      OPENAI_BASE_URL: process.env['OPENAI_BASE_URL'],
+      OPENAI_ORG_ID: process.env['OPENAI_ORG_ID'],
+      OPENAI_PROJECT_ID: process.env['OPENAI_PROJECT_ID'],
+      OPENAI_API_KEY: process.env['OPENAI_API_KEY']
+    } as const
+    process.env['OPENAI_BASE_URL'] = 'https://example.invalid/v1'
+    process.env['OPENAI_ORG_ID'] = 'org_wrong'
+    process.env['OPENAI_PROJECT_ID'] = 'proj_wrong'
+    process.env['OPENAI_API_KEY'] = 'wrong-environment-key'
+    try {
+      const client = createOpenAiClient('explicit-api-key') as unknown as Record<string, unknown>
+      assert.equal(client['apiKey'], 'explicit-api-key')
+      assert.equal(client['baseURL'], 'https://api.openai.com/v1')
+      assert.equal(client['organization'], null)
+      assert.equal(client['project'], null)
+      assert.equal(client['maxRetries'], 0)
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) {
+          delete process.env[key]
+        } else {
+          process.env[key] = value
+        }
+      }
+    }
+  })
+
+  it('does not mutate process.env during construction', () => {
+    const before = { ...process.env }
+    createOpenAiClient('explicit-api-key')
+    assert.deepEqual({ ...process.env }, before)
+  })
+})
 
 describe('OpenAI provider adapter', () => {
   it('uses zero retries and a bounded timeout on every call', async () => {
@@ -222,5 +269,64 @@ describe('OpenAI provider adapter', () => {
       maxOutputTokens: 1
     })
     assert.ok(!JSON.stringify(result).includes('sk-super-secret'))
+  })
+
+  it('classifies the full error matrix without raw bodies', async () => {
+    const cases: [unknown, new (...args: never[]) => Error][] = [
+      [sdkError(401), ProviderInvalidCredentialError],
+      [namedSdkError('AuthenticationError', 401), ProviderInvalidCredentialError],
+      [sdkError(403), ProviderForbiddenError],
+      [namedSdkError('PermissionDeniedError', 403), ProviderForbiddenError],
+      [sdkError(404), ProviderModelUnavailableError],
+      [namedSdkError('NotFoundError', 404), ProviderModelUnavailableError],
+      [sdkError(429), ProviderRateLimitedError],
+      [namedSdkError('RateLimitError', 429), ProviderRateLimitedError],
+      [namedSdkError('APIConnectionTimeoutError', 0), ProviderTimeoutError],
+      [namedSdkError('APIConnectionError', 0), ProviderNetworkError],
+      [Object.assign(new Error('request failed'), { code: 'EAI_AGAIN' }), ProviderNetworkError],
+      [new Error('mystery failure'), ProviderGenericError]
+    ]
+    for (const [failure, expected] of cases) {
+      const adapter = new OpenAiProviderAdapter(
+        mockFactory({
+          response: () => {
+            throw failure
+          }
+        })
+      )
+      await assert.rejects(
+        adapter.generateText({ apiKey: 'k', model: 'm', instructions: 'i', messages: [], maxOutputTokens: 1 }),
+        (error: unknown) => {
+          assert.ok(error instanceof expected, `expected ${expected.name}`)
+          assert.ok(!String((error as Error).message).includes('sk-'))
+          return true
+        }
+      )
+    }
+  })
+
+  it('never reports network, DNS, or endpoint failures as rejected keys', async () => {
+    const failures: unknown[] = [
+      sdkError(403),
+      sdkError(404),
+      Object.assign(new Error('fetch failed'), { code: 'ENOTFOUND' }),
+      namedSdkError('APIConnectionTimeoutError', 0)
+    ]
+    for (const failure of failures) {
+      const adapter = new OpenAiProviderAdapter(
+        mockFactory({
+          response: () => {
+            throw failure
+          }
+        })
+      )
+      await assert.rejects(
+        adapter.generateText({ apiKey: 'k', model: 'm', instructions: 'i', messages: [], maxOutputTokens: 1 }),
+        (error: unknown) => {
+          assert.ok(!(error instanceof ProviderInvalidCredentialError), 'must not claim the key was rejected')
+          return true
+        }
+      )
+    }
   })
 })

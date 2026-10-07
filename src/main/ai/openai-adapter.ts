@@ -37,9 +37,26 @@ export interface OpenAiClientLike {
 
 export type OpenAiClientFactory = (apiKey: string) => OpenAiClientLike
 
-/** Production factory: official endpoint, no retries, bounded timeout. */
+/**
+ * Production factory: fixed official endpoint, no inherited
+ * organization/project, no retries, bounded timeout.
+ *
+ * Every client option is explicit because the official SDK inherits
+ * OPENAI_BASE_URL / OPENAI_ORG_ID / OPENAI_PROJECT_ID /
+ * OPENAI_API_KEY from the environment when omitted — a stale shell
+ * export (proxy URL, wrong org/project scope) would otherwise
+ * silently redirect or de-authorize the stored key. process.env is
+ * never mutated; unrelated variables are untouched.
+ */
 export function createOpenAiClient(apiKey: string): OpenAiClientLike {
-  return new OpenAI({ apiKey, maxRetries: 0, timeout: PROVIDER_REQUEST_TIMEOUT_MS }) as unknown as OpenAiClientLike
+  return new OpenAI({
+    apiKey,
+    baseURL: 'https://api.openai.com/v1',
+    organization: null,
+    project: null,
+    maxRetries: 0,
+    timeout: PROVIDER_REQUEST_TIMEOUT_MS
+  }) as unknown as OpenAiClientLike
 }
 
 function extractOutputText(response: { output_text?: string; output?: readonly unknown[] }): string | null {
