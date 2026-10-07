@@ -30,6 +30,27 @@ export interface ProviderGenerateResult {
 }
 
 /**
+ * Safe, secret-free outcome of one diagnostic transport path.
+ * Statuses and booleans only — never bodies, headers, or keys.
+ * TEMPORARY Stage 14C diagnostic shape; remove after root cause is found.
+ */
+export interface SafePathDiagnosis {
+  readonly succeeded: boolean
+  readonly status: number | null
+  readonly category: string
+  readonly origin: string
+  readonly requestIdPresent: boolean
+  readonly contentTypeJson: boolean
+}
+
+export interface ConnectionDiagnosis {
+  readonly sdk: SafePathDiagnosis
+  readonly native: SafePathDiagnosis
+  readonly sameCredentialForBothPaths: true
+  readonly outcome: { models: readonly ProviderModel[] } | { error: unknown }
+}
+
+/**
  * Internal provider adapter contract (Stage 14). Adapters live in the
  * main process only and are never exposed to the renderer. API keys
  * stay main-only: adapters receive the decrypted key per call and must
@@ -40,6 +61,12 @@ export interface AiProviderAdapter {
   readonly displayName: string
   listModels(apiKey: string): Promise<readonly ProviderModel[]>
   generateText(request: ProviderGenerateRequest & { readonly apiKey: string }): Promise<ProviderGenerateResult>
+  /**
+   * TEMPORARY Stage 14C diagnostic hook (dev-only, caller-gated).
+   * Adapters without it fall back to the normal single-path flow.
+   * Remove after root cause is identified.
+   */
+  diagnoseConnection?(apiKey: string): Promise<ConnectionDiagnosis>
 }
 
 /**

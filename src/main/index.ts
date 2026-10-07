@@ -1,4 +1,6 @@
 import { app, BrowserWindow } from 'electron'
+import { setStarkAiDiagEnabled } from './ai/ai-provider-service'
+import { createOpenAiClient } from './ai/openai-adapter'
 import { createServices } from './application/create-services'
 import { StarkDatabase } from './database/database'
 import { resolveDatabaseFile } from './database/paths'
@@ -76,6 +78,39 @@ function initializePersistence(): boolean {
   }
 }
 
+/**
+ * TEMPORARY Stage 14C diagnostic — remove after root cause is
+ * identified. Dev-only: proves the RUNNING main bundle (not just
+ * source) constructs the OpenAI client with the 14B explicit
+ * endpoint/org/project/retry configuration, using a dummy key that
+ * never touches the network. Secret-free output only; failures are
+ * swallowed so startup can never break on diagnostics.
+ */
+function printTemporaryAiBuildDiag(): void {
+  if (app.isPackaged) {
+    return
+  }
+  try {
+    setStarkAiDiagEnabled(true)
+    const client = createOpenAiClient('diag-unused-dummy-key') as unknown as Record<string, unknown>
+    let origin = 'unknown'
+    try {
+      origin = new URL(String(client['baseURL'])).origin
+    } catch {
+      // Keep 'unknown' — that itself is diagnostic signal.
+    }
+    console.log(
+      '[STARK AI DIAG] ' +
+        `adapterConfigVersion=14B baseUrlOrigin=${origin === 'https://api.openai.com' ? 'api.openai.com' : 'unexpected'} ` +
+        `organizationConfigured=${String(client['organization'] !== null && client['organization'] !== undefined)} ` +
+        `projectConfigured=${String(client['project'] !== null && client['project'] !== undefined)} ` +
+        `maxRetries=${String(client['maxRetries'])}`
+    )
+  } catch {
+    // Diagnostics must never break startup.
+  }
+}
+
 void app.whenReady().then(() => {
   applyContentSecurityPolicy()
   if (!initializePersistence()) {
@@ -93,8 +128,7 @@ void app.whenReady().then(() => {
     aiProviders: starkDatabase.getAiProviders()
   })
   terminalManager = new TerminalManager(createNodePtyFactory(), createTerminalEventSink())
-  registerIpcHandlers({
-    settingsService: services.settingsService,
+  registerIpcHandlers({    settingsService: services.settingsService,
     profileService: services.profileService,
     workspaceService: services.workspaceService,
     workspaceFilesService: services.workspaceFilesService,
@@ -108,6 +142,7 @@ void app.whenReady().then(() => {
     aiProviderService: services.aiProviderService,
     aiCompletionService: services.aiCompletionService
   })
+  printTemporaryAiBuildDiag()
   createMainWindow()
 
   // Standard macOS behavior: re-create the window when the dock icon is

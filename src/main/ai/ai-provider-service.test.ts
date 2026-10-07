@@ -329,4 +329,76 @@ describe('AI provider service', () => {
       db.close()
     }
   })
+
+  it('leaves the diagnostic gate off unless explicitly enabled', async () => {
+    const { isStarkAiDiagEnabled, setStarkAiDiagEnabled } = await import('./ai-provider-service')
+    assert.equal(isStarkAiDiagEnabled(), false)
+    setStarkAiDiagEnabled(true)
+    try {
+      assert.equal(isStarkAiDiagEnabled(), true)
+    } finally {
+      setStarkAiDiagEnabled(false)
+    }
+    assert.equal(isStarkAiDiagEnabled(), false)
+  })
+
+  it('falls back to the normal path when the adapter has no diagnostic hook', async () => {
+    const { db, service, adapter } = openService()
+    const { setStarkAiDiagEnabled } = await import('./ai-provider-service')
+    setStarkAiDiagEnabled(true)
+    try {
+      await service.saveCredential({ providerId: 'openai', apiKey: 'sk-x' })
+      const result = await service.testConnection({ providerId: 'openai' })
+      assert.equal(result.status, 'connected')
+      assert.equal(adapter.listCalls, 1)
+    } finally {
+      setStarkAiDiagEnabled(false)
+      db.close()
+    }
+  })
+
+  it('reuses the diagnostic Path A outcome with no extra call', async () => {
+    const { db, protector } = openService()
+    const { setStarkAiDiagEnabled } = await import('./ai-provider-service')
+    let diagCalls = 0
+    const diagAdapter = {
+      id: 'openai',
+      displayName: 'OpenAI',
+      listModels: async (): Promise<readonly ProviderModel[]> => {
+        throw new Error('must not run when the diagnostic path is active')
+      },
+      generateText: async (): Promise<{ text: string }> => ({ text: 'unused' }),
+      diagnoseConnection: async (): Promise<{
+        sdk: { succeeded: boolean; status: number | null; category: string; origin: string; requestIdPresent: boolean; contentTypeJson: boolean }
+        native: { succeeded: boolean; status: number | null; category: string; origin: string; requestIdPresent: boolean; contentTypeJson: boolean }
+        sameCredentialForBothPaths: true
+        outcome: { models: readonly ProviderModel[] } | { error: unknown }
+      }> => {
+        diagCalls += 1
+        return {
+          sdk: { succeeded: true, status: 200, category: 'ok', origin: 'https://api.openai.com', requestIdPresent: false, contentTypeJson: false },
+          native: { succeeded: true, status: 200, category: 'ok', origin: 'https://api.openai.com', requestIdPresent: true, contentTypeJson: true },
+          sameCredentialForBothPaths: true as const,
+          outcome: { models: [{ id: 'diag-model' }] }
+        }
+      }
+    } as const
+    const { AiProviderService: Service } = await import('./ai-provider-service')
+    const { ProviderRegistry: Registry } = await import('./provider-adapter')
+    const { AiProviderRepository: Rows } = await import('../database/repositories/ai-provider-repository')
+    const registry = new Registry()
+    registry.register(diagAdapter)
+    const diagService = new Service(new Rows(db), protector, registry)
+    setStarkAiDiagEnabled(true)
+    try {
+      await diagService.saveCredential({ providerId: 'openai', apiKey: 'sk-x' })
+      const result = await diagService.testConnection({ providerId: 'openai' })
+      assert.equal(result.status, 'connected')
+      assert.deepEqual(result.models, [{ id: 'diag-model' }])
+      assert.equal(diagCalls, 1)
+    } finally {
+      setStarkAiDiagEnabled(false)
+      db.close()
+    }
+  })
 })

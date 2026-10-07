@@ -3,10 +3,20 @@ import { AI_GENERATE_TIMEOUT_MS, MAX_PROVIDER_MODELS, PROVIDER_REQUEST_TIMEOUT_M
 import {
   classifyProviderError,
   type AiProviderAdapter,
-  type ProviderGenerateRequest
+  type ConnectionDiagnosis,
+  type ProviderGenerateRequest,
+  type SafePathDiagnosis
 } from './provider-adapter'
 import type { ProviderModel } from '../../shared/providers/types'
-import { ProviderEmptyResponseError } from './errors'
+import {
+  ProviderEmptyResponseError,
+  ProviderForbiddenError,
+  ProviderInvalidCredentialError,
+  ProviderModelUnavailableError,
+  ProviderNetworkError,
+  ProviderRateLimitedError,
+  ProviderTimeoutError
+} from './errors'
 
 /**
  * Minimal structural surface of the official OpenAI SDK used by the
@@ -36,6 +46,14 @@ export interface OpenAiClientLike {
 }
 
 export type OpenAiClientFactory = (apiKey: string) => OpenAiClientLike
+
+/**
+ * Safe, secret-free outcome of one diagnostic transport path.
+ * Statuses and booleans only — never bodies, headers, or keys.
+ * (Canonical shape lives in provider-adapter.ts; re-exported here
+ * for the diagnostic call sites.)
+ */
+export type { SafePathDiagnosis, ConnectionDiagnosis } from './provider-adapter'
 
 /**
  * Production factory: fixed official endpoint, no inherited
@@ -139,6 +157,141 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
         throw error
       }
       throw classifyProviderError(error)
+    }
+  }
+
+  /**
+   * TEMPORARY Stage 14C diagnostic — dev-only, caller-gated, remove
+   * after root cause is identified. Runs the SAME decrypted in-memory
+   * credential through two transports sequentially (SDK models.list
+   * once, then native fetch to the fixed endpoint once), one attempt
+   * each, no retries, and logs ONLY secret-free booleans/statuses.
+   * Returns the Path A outcome so the caller reuses it instead of a
+   * further call.
+   */
+  async diagnoseConnection(apiKey: string): Promise<ConnectionDiagnosis> {
+    const client = this.clients(apiKey)
+    const origin = readOrigin((client as { baseURL?: unknown }).baseURL)
+    let sdk: SafePathDiagnosis
+    let outcome: { models: readonly ProviderModel[] } | { error: unknown }
+    try {
+      const page = await client.models.list({ timeout: PROVIDER_REQUEST_TIMEOUT_MS, maxRetries: 0 })
+      const items = Symbol.asyncIterator in Object(page) ? await collectAsync(page as AsyncIterable<{ id: string }>) : [...(page as { data: readonly { id: string }[] }).data]
+      const models = items
+        .map((entry) => entry.id)
+        .filter((id): id is string => typeof id === 'string' && id !== '')
+        .sort()
+        .slice(0, MAX_PROVIDER_MODELS)
+        .map((id) => ({ id }))
+      sdk = { succeeded: true, status: 200, category: 'ok', origin, requestIdPresent: false, contentTypeJson: false }
+      outcome = { models }
+    } catch (error) {
+      const classified = classifyProviderError(error)
+      const failure = readSdkFailure(error)
+      sdk = {
+        succeeded: false,
+        status: failure.status,
+        category: categoryOf(classified),
+        origin,
+        requestIdPresent: failure.requestIdPresent,
+        contentTypeJson: false
+      }
+      outcome = { error: classified }
+    }
+    const native = await diagnoseNativeFetchPath(apiKey)
+    console.log(
+      '[STARK AI DIAGNOSTIC] ' +
+        `sdkSucceeded=${String(sdk.succeeded)} sdkStatus=${sdk.status === null ? 'none' : String(sdk.status)} ` +
+        `sdkCategory=${sdk.category} sdkOrigin=${sdk.origin} sdkRequestIdPresent=${String(sdk.requestIdPresent)} ` +
+        `nativeSucceeded=${String(native.succeeded)} nativeStatus=${native.status === null ? 'none' : String(native.status)} ` +
+        `nativeOrigin=${native.origin} nativeContentTypeJson=${String(native.contentTypeJson)} ` +
+        `nativeRequestIdPresent=${String(native.requestIdPresent)} sameCredentialForBothPaths=true`
+    )
+    return { sdk, native, sameCredentialForBothPaths: true as const, outcome }
+  }
+}
+
+function readOrigin(value: unknown): string {
+  if (typeof value !== 'string') {
+    return 'unknown'
+  }
+  try {
+    return new URL(value).origin
+  } catch {
+    return 'unknown'
+  }
+}
+
+function categoryOf(error: unknown): string {
+  if (error instanceof ProviderInvalidCredentialError) {
+    return 'invalid-credential'
+  }
+  if (error instanceof ProviderForbiddenError) {
+    return 'forbidden'
+  }
+  if (error instanceof ProviderRateLimitedError) {
+    return 'rate-limited'
+  }
+  if (error instanceof ProviderTimeoutError) {
+    return 'timeout'
+  }
+  if (error instanceof ProviderNetworkError) {
+    return 'network-error'
+  }
+  if (error instanceof ProviderModelUnavailableError) {
+    return 'model-unavailable'
+  }
+  return 'generic'
+}
+
+/** Reads SDK error metadata without touching bodies or headers beyond presence. */
+function readSdkFailure(error: unknown): { status: number | null; requestIdPresent: boolean } {
+  if (typeof error !== 'object' || error === null) {
+    return { status: null, requestIdPresent: false }
+  }
+  const record = error as { status?: unknown; requestID?: unknown; headers?: { get?: unknown } }
+  const status = typeof record.status === 'number' ? record.status : null
+  const requestIdPresent =
+    record.requestID !== undefined ||
+    (typeof record.headers?.get === 'function' &&
+      (() => {
+        try {
+          return (record.headers as { get: (name: string) => string | null }).get('x-request-id') !== null
+        } catch {
+          return false
+        }
+      })())
+  return { status, requestIdPresent }
+}
+
+async function diagnoseNativeFetchPath(apiKey: string): Promise<SafePathDiagnosis> {
+  const url = 'https://api.openai.com/v1/models'
+  const origin = readOrigin(url)
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS)
+    })
+    const contentType = response.headers.get('content-type') ?? ''
+    const diagnosis: SafePathDiagnosis = {
+      succeeded: response.ok,
+      status: response.status,
+      category: response.ok ? 'ok' : categoryOf(classifyProviderError({ status: response.status })),
+      origin: readOrigin(response.url),
+      requestIdPresent: response.headers.get('x-request-id') !== null,
+      contentTypeJson: contentType.toLowerCase().startsWith('application/json')
+    }
+    return diagnosis
+  } catch (error) {
+    const classified = classifyProviderError(error)
+    return {
+      succeeded: false,
+      status: null,
+      category: categoryOf(classified),
+      origin,
+      requestIdPresent: false,
+      contentTypeJson: false
     }
   }
 }

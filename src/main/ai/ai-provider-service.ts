@@ -84,6 +84,21 @@ export interface AiProviderServiceOptions {
 }
 
 /**
+ * TEMPORARY Stage 14C diagnostic gate. Enabled only by an explicit
+ * dev-only call from the app entrypoint; default off everywhere
+ * (production, unit tests). Remove after root cause is identified.
+ */
+let starkAiDiagEnabled = false
+
+export function setStarkAiDiagEnabled(enabled: boolean): void {
+  starkAiDiagEnabled = enabled
+}
+
+export function isStarkAiDiagEnabled(): boolean {
+  return starkAiDiagEnabled
+}
+
+/**
  * AI provider domain service (Stage 14). Owns known-provider
  * validation, storage capability checks, credential save/clear,
  * configured status, model persistence, model listing, connection
@@ -258,6 +273,16 @@ export class AiProviderService {
     }
     const apiKey = await this.decryptCredentialForUse(providerId)
     try {
+      if (starkAiDiagEnabled && typeof adapter.diagnoseConnection === 'function') {
+        // TEMPORARY Stage 14C: run the two-path diagnostic with the
+        // SAME in-memory credential and reuse its Path A outcome —
+        // no third request. Remove after root cause is identified.
+        const diagnosis = await adapter.diagnoseConnection(apiKey)
+        if ('models' in diagnosis.outcome) {
+          return { status: 'connected', models: diagnosis.outcome.models }
+        }
+        throw diagnosis.outcome.error
+      }
       const models = await adapter.listModels(apiKey)
       return { status: 'connected', models }
     } catch (error) {
