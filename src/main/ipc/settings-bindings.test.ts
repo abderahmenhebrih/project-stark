@@ -1,0 +1,172 @@
+import assert from 'node:assert/strict'
+import { DatabaseSync } from 'node:sqlite'
+import { describe, it } from 'node:test'
+import { ChangeTransactionService } from '../change-transactions/change-transaction-service'
+import { runMigrations, migrations } from '../database/migrations/index'
+import { ChangeTransactionRepository } from '../database/repositories/change-transaction-repository'
+import { KeyValueRepository } from '../database/repositories/key-value-repository'
+import { WorkspaceRepository } from '../database/repositories/workspace-repository'
+import { ProfileService } from '../profile/profile-service'
+import { SettingsService } from '../settings/settings-service'
+import { WorkspaceFileWriteService } from '../workspace-files/workspace-file-write-service'
+import { WorkspaceFilesService } from '../workspace-files/workspace-files-service'
+import { WorkspaceSearchService } from '../workspace-search/workspace-search-service'
+import { WorkspaceService } from '../workspace/workspace-service'
+import { createIpcBindings } from './index'
+import { createSettingsBindings } from './settings'
+
+function openService(): {
+  db: DatabaseSync
+  service: SettingsService
+  profile: ProfileService
+  workspace: WorkspaceService
+  files: WorkspaceFilesService
+  fileWrites: WorkspaceFileWriteService
+  search: WorkspaceSearchService
+  changes: ChangeTransactionService
+} {
+  const db = new DatabaseSync(':memory:')
+  runMigrations(db, migrations)
+  const repository = new KeyValueRepository(db)
+  const workspaces = new WorkspaceRepository(db)
+  const changeTransactions = new ChangeTransactionRepository(db)
+  const fileWrites = new WorkspaceFileWriteService(workspaces)
+  return {
+    db,
+    service: new SettingsService(repository),
+    profile: new ProfileService(repository),
+    workspace: new WorkspaceService(workspaces),
+    files: new WorkspaceFilesService(workspaces),
+    fileWrites,
+    search: new WorkspaceSearchService(workspaces),
+    changes: new ChangeTransactionService(workspaces, changeTransactions, fileWrites)
+  }
+}
+
+const EXPECTED_CHANNELS = ['stark:settings:get', 'stark:settings:reset', 'stark:settings:update']
+
+const EXPECTED_ALL_CHANNELS = [
+  'stark:changes:accept',
+  'stark:changes:create',
+  'stark:changes:get',
+  'stark:changes:list-recent',
+  'stark:changes:reject',
+  'stark:changes:rollback',
+  'stark:profile:get',
+  'stark:profile:set-display-name',
+  'stark:settings:get',
+  'stark:settings:reset',
+  'stark:settings:update',
+  'stark:workspace-files:list-directory',
+  'stark:workspace-files:read-text-file',
+  'stark:workspace-files:write-text-file',
+  'stark:workspace-search:search',
+  'stark:workspace:choose-directory',
+  'stark:workspace:get-current',
+  'stark:workspace:list-recent',
+  'stark:workspace:open'
+]
+
+describe('settings IPC bindings', () => {
+  it('exposes exactly the settings channels and nothing else', () => {
+    const { db, service } = openService()
+    try {
+      const channels = createSettingsBindings(service).map((binding) => binding.channel)
+      assert.deepEqual([...channels].sort(), EXPECTED_CHANNELS)
+      for (const channel of channels) {
+        assert.ok(channel.startsWith('stark:'))
+        assert.ok(!channel.includes('db:'))
+        assert.ok(!channel.includes('sql:'))
+        assert.ok(!channel.includes('key'))
+      }
+    } finally {
+      db.close()
+    }
+  })
+
+  it('the full IPC surface contains no arbitrary channels', () => {
+    const { db, service, profile, workspace, files, fileWrites, search, changes } = openService()
+    try {
+      const channels = createIpcBindings({
+        settingsService: service,
+        profileService: profile,
+        workspaceService: workspace,
+        workspaceFilesService: files,
+        workspaceFileWriteService: fileWrites,
+        workspaceSearchService: search,
+        changeTransactionService: changes
+      }).map((binding) => binding.channel)
+      assert.deepEqual([...channels].sort(), EXPECTED_ALL_CHANNELS)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('get delegates to the settings service', async () => {
+    const { db, service } = openService()
+    try {
+      await service.updateSettings({ reduceMotion: true })
+      const bindings = createSettingsBindings(service)
+      const get = bindings.find((binding) => binding.channel === 'stark:settings:get')
+      assert.ok(get !== undefined)
+      assert.deepEqual(await get.invoke(), {
+        appearance: 'dark',
+        reduceMotion: true,
+        confirmBeforeDestructiveActions: true
+      })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('update validates payload before persistence', async () => {
+    const { db, service } = openService()
+    try {
+      await service.updateSettings({ appearance: 'system' })
+      const bindings = createSettingsBindings(service)
+      const update = bindings.find((binding) => binding.channel === 'stark:settings:update')
+      assert.ok(update !== undefined)
+      await assert.rejects(update.invoke({ appearance: 'blue' }), /stark settings update failed/)
+      await assert.rejects(update.invoke({ unknownSetting: true }), /stark settings update failed/)
+      assert.deepEqual(await service.getSettings(), {
+        appearance: 'system',
+        reduceMotion: false,
+        confirmBeforeDestructiveActions: true
+      })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('reset works through the binding', async () => {
+    const { db, service } = openService()
+    try {
+      await service.updateSettings({ reduceMotion: true })
+      const bindings = createSettingsBindings(service)
+      const reset = bindings.find((binding) => binding.channel === 'stark:settings:reset')
+      assert.ok(reset !== undefined)
+      assert.deepEqual(await reset.invoke(), {
+        appearance: 'dark',
+        reduceMotion: false,
+        confirmBeforeDestructiveActions: true
+      })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('corrupt storage fails cleanly without internals', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      runMigrations(db, migrations)
+      db.exec("INSERT INTO key_value (key, value, updated_at) VALUES ('stark.settings', '{broken', 0)")
+      const service = new SettingsService(new KeyValueRepository(db))
+      const bindings = createSettingsBindings(service)
+      const get = bindings.find((binding) => binding.channel === 'stark:settings:get')
+      assert.ok(get !== undefined)
+      await assert.rejects(get.invoke(), /stark settings get failed: stored settings are invalid/)
+    } finally {
+      db.close()
+    }
+  })
+})

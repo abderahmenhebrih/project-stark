@@ -3,11 +3,40 @@
   "compilerOptions": {
     "noEmit": false,
     "outDir": ".test-dist",
-    "rootDir": "src/main/database",
+    "rootDir": "src",
     "module": "CommonJS",
     "moduleResolution": "Node",
     "declaration": false,
     "sourceMap": false
   },
-  "include": ["src/main/database/**/*.ts"]
+  "include": [
+    "src/main/**/*.ts",
+    "src/shared/**/*.ts",
+    "src/renderer/src/app/boot-state.ts",
+    "src/renderer/src/app/boot-state.test.ts",
+    "src/renderer/src/features/explorer/explorer-state.ts",
+    "src/renderer/src/features/explorer/explorer-state.test.ts",
+    "src/renderer/src/features/explorer/editor-state.ts",
+    "src/renderer/src/features/explorer/editor-guard.ts",
+    "src/renderer/src/features/explorer/editor-state.test.ts",
+    "src/renderer/src/features/explorer/content-safety.test.ts",
+    "src/renderer/src/lib/workspace-write-error.ts",
+    "src/renderer/src/lib/workspace-write-error.test.ts",
+    "src/renderer/src/lib/change-transaction-error.ts",
+    "src/renderer/src/lib/change-transaction-error.test.ts",
+    "src/renderer/src/features/changes/changes-state.ts",
+    "src/renderer/src/features/changes/changes-state.test.ts",
+    "src/renderer/src/features/editor/editor-language.ts",
+    "src/renderer/src/features/editor/editor-language.test.ts",
+    "src/renderer/src/features/editor/editor-eol.ts",
+    "src/renderer/src/features/editor/editor-eol.test.ts",
+    "src/renderer/src/features/editor/editor-document.ts",
+    "src/renderer/src/features/editor/editor-document.test.ts",
+    "src/renderer/src/features/editor/editor-focus.ts",
+    "src/renderer/src/features/editor/editor-focus.test.ts",
+    "src/renderer/src/features/editor/editor-theme.ts",
+    "src/renderer/src/features/editor/editor-theme.test.ts",
+    "src/renderer/src/features/search/search-state.ts",
+    "src/renderer/src/features/search/search-state.test.ts"
+  ]
 }

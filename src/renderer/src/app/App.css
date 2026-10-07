@@ -1,0 +1,28 @@
+.boot {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--stark-space-md);
+  background: var(--stark-bg);
+}
+
+.boot__text {
+  margin: 0;
+  font-family: var(--stark-font-mono);
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  color: var(--stark-text-dim);
+}
+
+.boot__retry {
+  padding: var(--stark-space-sm) var(--stark-space-lg);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--stark-accent-text);
+  background: var(--stark-accent);
+  border: none;
+  border-radius: var(--stark-radius-md);
+  cursor: pointer;
+}

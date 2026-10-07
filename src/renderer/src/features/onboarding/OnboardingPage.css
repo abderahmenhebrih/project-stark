@@ -1,0 +1,99 @@
+.onboarding {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--stark-space-xl) var(--stark-space-lg);
+  background: var(--stark-bg);
+}
+
+.onboarding__card {
+  width: 100%;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--stark-space-md);
+  padding: var(--stark-space-2xl) var(--stark-space-xl);
+  background: var(--stark-surface);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-lg);
+}
+
+.onboarding__brand {
+  margin: 0;
+  font-family: var(--stark-font-mono);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.35em;
+  color: var(--stark-text-dim);
+}
+
+.onboarding__question {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--stark-text);
+}
+
+.onboarding__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stark-space-sm);
+  margin-top: var(--stark-space-sm);
+}
+
+.onboarding__label {
+  font-family: var(--stark-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--stark-text-dim);
+}
+
+.onboarding__input {
+  padding: var(--stark-space-md);
+  font-size: 15px;
+  color: var(--stark-text);
+  background: var(--stark-elevated);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-md);
+}
+
+.onboarding__input::placeholder {
+  color: var(--stark-text-dim);
+  opacity: 0.6;
+}
+
+.onboarding__input:focus {
+  outline: none;
+  border-color: var(--stark-accent);
+}
+
+.onboarding__input:disabled {
+  opacity: 0.6;
+}
+
+.onboarding__error {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--stark-danger);
+}
+
+.onboarding__continue {
+  margin-top: var(--stark-space-sm);
+  padding: var(--stark-space-md);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--stark-accent-text);
+  background: var(--stark-accent);
+  border: none;
+  border-radius: var(--stark-radius-md);
+  cursor: pointer;
+}
+
+.onboarding__continue:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

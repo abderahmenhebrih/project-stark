@@ -16,12 +16,24 @@ export interface AppInfo {
   readonly node: string
 }
 
+import type { ProfileApi } from '../profile/types'
+import type { SettingsApi } from '../settings/types'
+import type { WorkspaceApi } from '../workspace/types'
+
 /**
  * The only API surface exposed to the renderer.
  * Raw Node.js / Electron APIs are never exposed directly.
+ *
+ * Namespaced per domain (app, settings, profile, …) so new domains do
+ * not grow a flat grab-bag. The app-info entry keeps its historical
+ * flat shape to avoid churning the working shell; new domains use
+ * namespaces.
  */
 export interface StarkApi {
   getAppInfo: () => Promise<AppInfo>
+  settings: SettingsApi
+  profile: ProfileApi
+  workspace: WorkspaceApi
 }
 
 /** Lifecycle status shown by the development shell. */

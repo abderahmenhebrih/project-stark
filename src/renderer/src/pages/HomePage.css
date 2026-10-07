@@ -15,22 +15,10 @@
 
 .home__title {
   margin: 0;
-  font-family: var(--stark-font-mono);
-  font-size: 56px;
-  font-weight: 700;
-  letter-spacing: 0.3em;
-  text-indent: 0.3em;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.4;
   color: var(--stark-text);
-}
-
-.home__title::after {
-  content: '';
-  display: block;
-  width: 64px;
-  height: 3px;
-  margin: var(--stark-space-md) auto 0;
-  background: var(--stark-accent);
-  border-radius: var(--stark-radius-pill);
 }
 
 .home__tagline {

@@ -1,4 +1,5 @@
 import { app, BrowserWindow } from 'electron'
+import { createServices } from './application/create-services'
 import { StarkDatabase } from './database/database'
 import { resolveDatabaseFile } from './database/paths'
 import { registerIpcHandlers } from './ipc'
@@ -48,11 +49,27 @@ function initializePersistence(): boolean {
 
 void app.whenReady().then(() => {
   applyContentSecurityPolicy()
-  registerIpcHandlers()
   if (!initializePersistence()) {
     app.quit()
     return
   }
+  // Services are constructed from initialized infrastructure first, then
+  // handed explicitly to the IPC layer — no database-backed handler
+  // exists before its dependencies do.
+  const services = createServices({
+    keyValue: starkDatabase.getKeyValue(),
+    workspaces: starkDatabase.getWorkspaces(),
+    changeTransactions: starkDatabase.getChangeTransactions()
+  })
+  registerIpcHandlers({
+    settingsService: services.settingsService,
+    profileService: services.profileService,
+    workspaceService: services.workspaceService,
+    workspaceFilesService: services.workspaceFilesService,
+    workspaceFileWriteService: services.workspaceFileWriteService,
+    workspaceSearchService: services.workspaceSearchService,
+    changeTransactionService: services.changeTransactionService
+  })
   createMainWindow()
 
   // Standard macOS behavior: re-create the window when the dock icon is
@@ -63,7 +80,6 @@ void app.whenReady().then(() => {
     }
   })
 })
-
 // Quit on Windows/Linux when every window closes; stay alive on macOS.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

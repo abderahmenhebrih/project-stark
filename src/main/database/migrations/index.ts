@@ -2,12 +2,18 @@ import type { DatabaseSync } from 'node:sqlite'
 import { DatabaseError, MigrationError } from '../errors'
 import type { Migration } from '../types'
 import { migration001Initial } from './001-initial'
+import { migration002Workspaces } from './002-workspaces'
+import { migration003ChangeTransactions } from './003-change-transactions'
 
 /**
  * Ordered migration registry. Append-only: add new migrations to the end
  * of this list in ascending version order. Never edit an applied migration.
  */
-export const migrations: readonly Migration[] = [migration001Initial]
+export const migrations: readonly Migration[] = [
+  migration001Initial,
+  migration002Workspaces,
+  migration003ChangeTransactions
+]
 
 /**
  * Validates a migration list definition. Rejects duplicate versions,

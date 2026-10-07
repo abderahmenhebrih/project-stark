@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 
@@ -39,6 +40,19 @@ export default defineConfig({
         input: 'src/renderer/index.html'
       }
     },
-    plugins: [react()]
+    plugins: [react()],
+    resolve: {
+      alias: [
+        {
+          // Monaco's package exports map only covers JS subpaths, so the
+          // bundled editor stylesheet needs an explicit file alias. The
+          // CSS still ships inside STARK's own assets — no remote origin.
+          find: 'monaco-editor/min/vs/editor/editor.main.css',
+          replacement: fileURLToPath(
+            new URL('./node_modules/monaco-editor/min/vs/editor/editor.main.css', import.meta.url)
+          )
+        }
+      ]
+    }
   }
 })

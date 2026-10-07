@@ -10,7 +10,7 @@
     "start": "electron ./out/main/index.js",
     "dist": "npm run build && electron-builder --publish=never",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test:db": "tsc -p tsconfig.test.json && node -e \"require('fs').writeFileSync('.test-dist/package.json', JSON.stringify({ type: 'commonjs' }))\" && node --test \".test-dist/**/*.test.js\" && node -e \"require('fs').rmSync('.test-dist', { recursive: true, force: true })\"",
+    "test": "tsc -p tsconfig.test.json && node -e \"require('fs').writeFileSync('.test-dist/package.json', JSON.stringify({ type: 'commonjs' }))\" && node --test \".test-dist/**/*.test.js\" && node -e \"require('fs').rmSync('.test-dist', { recursive: true, force: true })\"",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
@@ -18,6 +18,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "monaco-editor": "^0.57.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },

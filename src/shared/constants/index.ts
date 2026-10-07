@@ -20,7 +20,26 @@ export const FOUNDATION_LABEL = 'Foundation build' as const
  * and each channel has exactly one handler in src/main/ipc.
  */
 export const IPC_CHANNELS = {
-  getAppInfo: 'stark:get-app-info'
+  getAppInfo: 'stark:get-app-info',
+  settingsGet: 'stark:settings:get',
+  settingsUpdate: 'stark:settings:update',
+  settingsReset: 'stark:settings:reset',
+  profileGet: 'stark:profile:get',
+  profileSetDisplayName: 'stark:profile:set-display-name',
+  workspaceGetCurrent: 'stark:workspace:get-current',
+  workspaceListRecent: 'stark:workspace:list-recent',
+  workspaceChooseDirectory: 'stark:workspace:choose-directory',
+  workspaceOpen: 'stark:workspace:open',
+  workspaceFilesListDirectory: 'stark:workspace-files:list-directory',
+  workspaceFilesReadTextFile: 'stark:workspace-files:read-text-file',
+  workspaceFilesWriteTextFile: 'stark:workspace-files:write-text-file',
+  workspaceSearch: 'stark:workspace-search:search',
+  changesCreate: 'stark:changes:create',
+  changesGet: 'stark:changes:get',
+  changesListRecent: 'stark:changes:list-recent',
+  changesAccept: 'stark:changes:accept',
+  changesReject: 'stark:changes:reject',
+  changesRollback: 'stark:changes:rollback'
 } as const
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS]

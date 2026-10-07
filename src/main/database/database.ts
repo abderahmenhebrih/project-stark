@@ -3,7 +3,9 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { DatabaseError } from './errors'
 import { getUserVersion, migrations, runMigrations } from './migrations'
+import { ChangeTransactionRepository } from './repositories/change-transaction-repository'
 import { KeyValueRepository } from './repositories/key-value-repository'
+import { WorkspaceRepository } from './repositories/workspace-repository'
 import type { Migration } from './types'
 
 /**
@@ -79,6 +81,8 @@ function applyPragmas(db: DatabaseSync, isMemoryDatabase: boolean): void {
 export class StarkDatabase {
   private db: DatabaseSync | null = null
   private keyValueRepo: KeyValueRepository | null = null
+  private workspaceRepo: WorkspaceRepository | null = null
+  private changeTransactionRepo: ChangeTransactionRepository | null = null
   private schemaVersion = 0
 
   /**
@@ -105,6 +109,8 @@ export class StarkDatabase {
       this.db = db
       this.schemaVersion = version
       this.keyValueRepo = new KeyValueRepository(db)
+      this.workspaceRepo = new WorkspaceRepository(db)
+      this.changeTransactionRepo = new ChangeTransactionRepository(db)
     } catch (error) {
       try {
         db.close()
@@ -125,6 +131,8 @@ export class StarkDatabase {
     } finally {
       this.db = null
       this.keyValueRepo = null
+      this.workspaceRepo = null
+      this.changeTransactionRepo = null
       this.schemaVersion = 0
     }
   }
@@ -153,5 +161,21 @@ export class StarkDatabase {
       throw new DatabaseError('database is not initialized')
     }
     return this.keyValueRepo
+  }
+
+  /** Workspace repository access for main-process services. Throws when closed. */
+  getWorkspaces(): WorkspaceRepository {
+    if (this.workspaceRepo === null) {
+      throw new DatabaseError('database is not initialized')
+    }
+    return this.workspaceRepo
+  }
+
+  /** Change-transaction repository access for main-process services. Throws when closed. */
+  getChangeTransactions(): ChangeTransactionRepository {
+    if (this.changeTransactionRepo === null) {
+      throw new DatabaseError('database is not initialized')
+    }
+    return this.changeTransactionRepo
   }
 }

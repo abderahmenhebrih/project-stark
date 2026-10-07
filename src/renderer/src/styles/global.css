@@ -24,3 +24,17 @@ body {
 ::selection {
   background: var(--stark-accent-dim);
 }
+
+:focus-visible {
+  outline: 2px solid var(--stark-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
