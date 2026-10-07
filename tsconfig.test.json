@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".test-dist",
+    "rootDir": "src/main/database",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["src/main/database/**/*.ts"]
+}

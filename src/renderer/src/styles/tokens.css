@@ -1,0 +1,49 @@
+/**
+ * STARK design tokens.
+ *
+ * Single source of truth for the visual foundation:
+ * obsidian background, neon lime accent, restrained technical feel.
+ * Every component stylesheet must reference these variables —
+ * no hard-coded palette values in component CSS.
+ */
+:root {
+  /* Surfaces */
+  --stark-bg: #0a0c0a;
+  --stark-surface: #101412;
+  --stark-elevated: #171d19;
+
+  /* Text */
+  --stark-text: #e9f1ea;
+  --stark-text-dim: #93a196;
+
+  /* Lines */
+  --stark-border: #232b25;
+
+  /* Accent */
+  --stark-accent: #c8ff00;
+  --stark-accent-dim: rgba(200, 255, 0, 0.12);
+  --stark-accent-text: #0a0c0a;
+
+  /* Semantic */
+  --stark-success: #3ddc84;
+  --stark-warning: #fbbf24;
+  --stark-danger: #f87171;
+
+  /* Typography */
+  --stark-font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --stark-font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+
+  /* Spacing */
+  --stark-space-xs: 4px;
+  --stark-space-sm: 8px;
+  --stark-space-md: 16px;
+  --stark-space-lg: 24px;
+  --stark-space-xl: 32px;
+  --stark-space-2xl: 48px;
+
+  /* Radius */
+  --stark-radius-sm: 6px;
+  --stark-radius-md: 10px;
+  --stark-radius-lg: 16px;
+  --stark-radius-pill: 999px;
+}

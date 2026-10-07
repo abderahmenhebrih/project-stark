@@ -1,0 +1,56 @@
+.shell {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--stark-bg);
+}
+
+.shell__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--stark-space-md) var(--stark-space-lg);
+  border-bottom: 1px solid var(--stark-border);
+  background: var(--stark-surface);
+}
+
+.shell__brand {
+  font-family: var(--stark-font-mono);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.35em;
+  color: var(--stark-text);
+}
+
+.shell__stage {
+  font-family: var(--stark-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--stark-text-dim);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-pill);
+  padding: var(--stark-space-xs) var(--stark-space-md);
+  background: var(--stark-elevated);
+}
+
+.shell__main {
+  flex: 1;
+  display: flex;
+  padding: var(--stark-space-xl) var(--stark-space-lg);
+}
+
+.shell__footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--stark-space-sm) var(--stark-space-lg);
+  border-top: 1px solid var(--stark-border);
+  background: var(--stark-surface);
+}
+
+.shell__footer-version {
+  font-family: var(--stark-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--stark-text-dim);
+}

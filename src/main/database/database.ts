@@ -1,0 +1,157 @@
+import { mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { DatabaseError } from './errors'
+import { getUserVersion, migrations, runMigrations } from './migrations'
+import { KeyValueRepository } from './repositories/key-value-repository'
+import type { Migration } from './types'
+
+/**
+ * Single controlled owner of STARK's SQLite connection.
+ *
+ * Architectural note on threading: DatabaseSync is synchronous and runs
+ * on the main thread. That is acceptable at this stage because startup
+ * migrations and key/value access are tiny. If future workloads grow
+ * heavy, the move is to back the *repository* boundary
+ * (KeyValueRepository and its siblings) with a Worker Thread — feature
+ * code must keep depending on repositories, never on DatabaseSync, so
+ * that swap stays contained here.
+ *
+ * Exactly one instance is created by src/main/index.ts. Repositories are
+ * constructed from this connection; no other module may open its own.
+ */
+
+const BUSY_TIMEOUT_MS = 5000
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function readPragmaText(db: DatabaseSync, name: string): string {
+  const row: unknown = db.prepare(`PRAGMA ${name}`).get()
+  if (!isRecord(row)) {
+    throw new DatabaseError(`unable to read PRAGMA ${name}`)
+  }
+  const value = row[name]
+  if (typeof value !== 'string') {
+    throw new DatabaseError(`unable to read PRAGMA ${name}`)
+  }
+  return value
+}
+
+function readPragmaNumber(db: DatabaseSync, name: string): number {
+  const row: unknown = db.prepare(`PRAGMA ${name}`).get()
+  if (!isRecord(row)) {
+    throw new DatabaseError(`unable to read PRAGMA ${name}`)
+  }
+  const value = row[name]
+  if (typeof value !== 'number') {
+    throw new DatabaseError(`unable to read PRAGMA ${name}`)
+  }
+  return value
+}
+
+/**
+ * Applies the desktop-appropriate SQLite configuration:
+ * - foreign_keys = ON: enforce referential integrity (verified read-back).
+ * - journal_mode = WAL: crash-safe writes with concurrent readers; the
+ *   standard choice for local desktop databases (file-backed only).
+ * - synchronous = NORMAL: safe together with WAL, avoids a fsync per
+ *   commit while preserving durability on OS crash or power loss.
+ * - busy_timeout = 5000: wait up to 5s on locked reads/writes instead of
+ *   failing immediately when another connection holds a lock.
+ */
+function applyPragmas(db: DatabaseSync, isMemoryDatabase: boolean): void {
+  db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`)
+  db.exec('PRAGMA synchronous = NORMAL')
+  db.exec('PRAGMA foreign_keys = ON')
+  if (readPragmaNumber(db, 'foreign_keys') !== 1) {
+    throw new DatabaseError('foreign key enforcement could not be enabled')
+  }
+  if (!isMemoryDatabase) {
+    db.exec('PRAGMA journal_mode = WAL')
+    if (readPragmaText(db, 'journal_mode') !== 'wal') {
+      throw new DatabaseError('WAL journal mode could not be enabled')
+    }
+  }
+}
+
+export class StarkDatabase {
+  private db: DatabaseSync | null = null
+  private keyValueRepo: KeyValueRepository | null = null
+  private schemaVersion = 0
+
+  /**
+   * Opens the database, applies pragmas, and runs pending migrations.
+   * Accepts ':memory:' for isolated tests. Throws on any failure after
+   * closing the partially initialized connection — callers must treat a
+   * throw as "no usable database".
+   */
+  initialize(dbFilePath: string, migrationList: readonly Migration[] = migrations): void {
+    if (this.db !== null) {
+      throw new DatabaseError('database is already initialized')
+    }
+    if (dbFilePath !== ':memory:') {
+      try {
+        mkdirSync(dirname(dbFilePath), { recursive: true })
+      } catch (error) {
+        throw new DatabaseError('unable to create database directory', { cause: error })
+      }
+    }
+    const db = new DatabaseSync(dbFilePath)
+    try {
+      applyPragmas(db, dbFilePath === ':memory:')
+      const version = runMigrations(db, migrationList)
+      this.db = db
+      this.schemaVersion = version
+      this.keyValueRepo = new KeyValueRepository(db)
+    } catch (error) {
+      try {
+        db.close()
+      } catch {
+        // Best effort: the original initialization error below is what matters.
+      }
+      throw error
+    }
+  }
+
+  /** Idempotent close. Safe to call when never initialized. */
+  close(): void {
+    if (this.db === null) {
+      return
+    }
+    try {
+      this.db.close()
+    } finally {
+      this.db = null
+      this.keyValueRepo = null
+      this.schemaVersion = 0
+    }
+  }
+
+  /** True while a usable connection is held. */
+  isOpen(): boolean {
+    return this.db !== null
+  }
+
+  /** Current schema version, or 0 when closed. */
+  getSchemaVersion(): number {
+    return this.schemaVersion
+  }
+
+  /** Canonical user_version read straight from the database file. */
+  readStoredSchemaVersion(): number {
+    if (this.db === null) {
+      throw new DatabaseError('database is not initialized')
+    }
+    return getUserVersion(this.db)
+  }
+
+  /** Repository access for main-process services. Throws when closed. */
+  getKeyValue(): KeyValueRepository {
+    if (this.keyValueRepo === null) {
+      throw new DatabaseError('database is not initialized')
+    }
+    return this.keyValueRepo
+  }
+}

@@ -1,0 +1,15 @@
+.system-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--stark-space-sm);
+  margin-top: var(--stark-space-sm);
+}
+
+.system-status__meta {
+  margin: 0;
+  font-family: var(--stark-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--stark-text-dim);
+}
