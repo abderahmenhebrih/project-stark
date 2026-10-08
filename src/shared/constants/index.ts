@@ -62,7 +62,29 @@ export const IPC_CHANNELS = {
   providersTestConnection: 'stark:providers:test-connection',
   providersListModels: 'stark:providers:list-models',
   providersSetModel: 'stark:providers:set-model',
-  aiGenerateResponse: 'stark:ai:generate-response'
+  aiGenerateResponse: 'stark:ai:generate-response',
+  aiProposeFileChange: 'stark:ai:propose-file-change',
+  aiProposeChangeSet: 'stark:ai:propose-change-set',
+  aiRunBrain: 'stark:ai:run-brain',
+  changeSetsGet: 'stark:change-sets:get',
+  changeSetsListRecent: 'stark:change-sets:list-recent',
+  orchestrationGet: 'stark:orchestration:get',
+  orchestrationListRecent: 'stark:orchestration:list-recent',
+  heartGet: 'stark:heart:get',
+  heartUpdate: 'stark:heart:update',
+  looplinkCreateContinuation: 'stark:looplink:create-continuation',
+  looplinkGetForSession: 'stark:looplink:get-for-session',
+  looplinkDismiss: 'stark:looplink:dismiss',
+  recoveryGetConfig: 'stark:recovery:get-config',
+  recoveryUpdateConfig: 'stark:recovery:update-config',
+  recoveryGetForSource: 'stark:recovery:get-for-source',
+  recoveryGetForTarget: 'stark:recovery:get-for-target',
+  recoveryDismiss: 'stark:recovery:dismiss',
+  capabilitiesGetWorkspaceConfig: 'stark:capabilities:get-workspace-config',
+  capabilitiesUpdateWorkspaceConfig: 'stark:capabilities:update-workspace-config',
+  workerToolsGetPendingApproval: 'stark:worker-tools:get-pending-approval',
+  workerToolsApproveAndResume: 'stark:worker-tools:approve-and-resume',
+  workerToolsDenyAndResume: 'stark:worker-tools:deny-and-resume'
 } as const
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS]

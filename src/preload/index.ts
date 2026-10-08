@@ -57,7 +57,43 @@ import type {
   SaveProviderCredentialRequest,
   SetProviderModelRequest
 } from '../shared/providers/types'
-import type { AiApi, AiGenerateRequest, AiGenerateResult } from '../shared/ai/types'
+import type { AiApi, AiGenerateRequest, AiProposeFileChangeRequest, AiFileChangeProposalResult, AiProposeChangeSetRequest, AiChangeSetProposalResult, AiRunBrainRequest, AskRecoveryResult, WorkRecoveryResult } from '../shared/ai/types'
+import type { ChangeSetRequest, ChangeSetsApi, ListChangeSetsRequest } from '../shared/change-sets/types'
+import type { ChangeSet } from '../shared/change-sets/types'
+import type {
+  ListOrchestrationRunsRequest,
+  OrchestrationApi,
+  OrchestrationRun,
+  OrchestrationRunRequest
+} from '../shared/orchestration/types'
+import type { HeartApi, HeartConfig, UpdateHeartConfigRequest } from '../shared/heart/types'
+import type {
+  CreateLooplinkRequest,
+  CreateLooplinkResult,
+  LooplinkApi,
+  LooplinkForSessionRequest,
+  LooplinkPreview
+} from '../shared/looplink/types'
+import type {
+  RecoveryApi,
+  RecoveryConfig,
+  RecoveryEvent,
+  RecoveryForSourceRequest,
+  RecoveryForTargetRequest,
+  UpdateRecoveryConfigRequest
+} from '../shared/recovery/types'
+import type {
+  CapabilitiesApi,
+  GetWorkspaceCapabilityConfigRequest,
+  UpdateWorkspaceCapabilityConfigRequest,
+  WorkspaceCapabilityConfig
+} from '../shared/capabilities/types'
+import type {
+  DecideApprovalRequest,
+  GetPendingApprovalRequest,
+  WorkerToolApproval,
+  WorkerToolsApi
+} from '../shared/worker-tools/types'
 import type { AppInfo, StarkApi } from '../shared/types'
 
 /**
@@ -167,8 +203,87 @@ function createProvidersApi(): ProvidersApi {
 
 function createAiApi(): AiApi {
   return {
-    generateResponse: (request: AiGenerateRequest): Promise<AiGenerateResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.aiGenerateResponse, request) as Promise<AiGenerateResult>
+    generateResponse: (request: AiGenerateRequest): Promise<AskRecoveryResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.aiGenerateResponse, request) as Promise<AskRecoveryResult>,
+    proposeFileChange: (request: AiProposeFileChangeRequest): Promise<AiFileChangeProposalResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.aiProposeFileChange, request) as Promise<AiFileChangeProposalResult>,
+    proposeChangeSet: (request: AiProposeChangeSetRequest): Promise<AiChangeSetProposalResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.aiProposeChangeSet, request) as Promise<AiChangeSetProposalResult>,
+    runBrain: (request: AiRunBrainRequest): Promise<WorkRecoveryResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.aiRunBrain, request) as Promise<WorkRecoveryResult>
+  }
+}
+
+function createOrchestrationApi(): OrchestrationApi {
+  return {
+    get: (request: OrchestrationRunRequest): Promise<OrchestrationRun> =>
+      ipcRenderer.invoke(IPC_CHANNELS.orchestrationGet, request) as Promise<OrchestrationRun>,
+    listRecent: (request: ListOrchestrationRunsRequest): Promise<readonly OrchestrationRun[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.orchestrationListRecent, request) as Promise<readonly OrchestrationRun[]>
+  }
+}
+
+function createHeartApi(): HeartApi {
+  return {
+    get: (): Promise<HeartConfig | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.heartGet) as Promise<HeartConfig | null>,
+    update: (config: UpdateHeartConfigRequest): Promise<HeartConfig> =>
+      ipcRenderer.invoke(IPC_CHANNELS.heartUpdate, config) as Promise<HeartConfig>
+  }
+}
+
+function createLooplinkApi(): LooplinkApi {
+  return {
+    createContinuation: (request: CreateLooplinkRequest): Promise<CreateLooplinkResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.looplinkCreateContinuation, request) as Promise<CreateLooplinkResult>,
+    getForSession: (request: LooplinkForSessionRequest): Promise<LooplinkPreview | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.looplinkGetForSession, request) as Promise<LooplinkPreview | null>,
+    dismiss: (request: LooplinkForSessionRequest): Promise<LooplinkPreview> =>
+      ipcRenderer.invoke(IPC_CHANNELS.looplinkDismiss, request) as Promise<LooplinkPreview>
+  }
+}
+
+function createRecoveryApi(): RecoveryApi {
+  return {
+    getConfig: (): Promise<RecoveryConfig | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.recoveryGetConfig) as Promise<RecoveryConfig | null>,
+    updateConfig: (config: UpdateRecoveryConfigRequest): Promise<RecoveryConfig> =>
+      ipcRenderer.invoke(IPC_CHANNELS.recoveryUpdateConfig, config) as Promise<RecoveryConfig>,
+    getForSource: (request: RecoveryForSourceRequest): Promise<RecoveryEvent | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.recoveryGetForSource, request) as Promise<RecoveryEvent | null>,
+    getForTarget: (request: RecoveryForTargetRequest): Promise<RecoveryEvent | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.recoveryGetForTarget, request) as Promise<RecoveryEvent | null>,
+    dismiss: (request: RecoveryForTargetRequest): Promise<RecoveryEvent> =>
+      ipcRenderer.invoke(IPC_CHANNELS.recoveryDismiss, request) as Promise<RecoveryEvent>
+  }
+}
+
+function createCapabilitiesApi(): CapabilitiesApi {
+  return {
+    getWorkspaceConfig: (request: GetWorkspaceCapabilityConfigRequest): Promise<WorkspaceCapabilityConfig> =>
+      ipcRenderer.invoke(IPC_CHANNELS.capabilitiesGetWorkspaceConfig, request) as Promise<WorkspaceCapabilityConfig>,
+    updateWorkspaceConfig: (config: UpdateWorkspaceCapabilityConfigRequest): Promise<WorkspaceCapabilityConfig> =>
+      ipcRenderer.invoke(IPC_CHANNELS.capabilitiesUpdateWorkspaceConfig, config) as Promise<WorkspaceCapabilityConfig>
+  }
+}
+
+function createWorkerToolsApi(): WorkerToolsApi {
+  return {
+    getPendingApproval: (request: GetPendingApprovalRequest): Promise<WorkerToolApproval | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.workerToolsGetPendingApproval, request) as Promise<WorkerToolApproval | null>,
+    approveAndResume: (request: DecideApprovalRequest): Promise<WorkRecoveryResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.workerToolsApproveAndResume, request) as Promise<WorkRecoveryResult>,
+    denyAndResume: (request: DecideApprovalRequest): Promise<WorkRecoveryResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.workerToolsDenyAndResume, request) as Promise<WorkRecoveryResult>
+  }
+}
+
+function createChangeSetsApi(): ChangeSetsApi {
+  return {
+    get: (request: ChangeSetRequest): Promise<ChangeSet> =>
+      ipcRenderer.invoke(IPC_CHANNELS.changeSetsGet, request) as Promise<ChangeSet>,
+    listRecent: (request: ListChangeSetsRequest): Promise<readonly ChangeSet[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.changeSetsListRecent, request) as Promise<readonly ChangeSet[]>
   }
 }
 
@@ -247,7 +362,14 @@ const starkApi: StarkApi = {
   sessions: createSessionsApi(),
   sessionContext: createSessionContextApi(),
   providers: createProvidersApi(),
-  ai: createAiApi()
+  ai: createAiApi(),
+  changeSets: createChangeSetsApi(),
+  orchestration: createOrchestrationApi(),
+  heart: createHeartApi(),
+  looplink: createLooplinkApi(),
+  recovery: createRecoveryApi(),
+  capabilities: createCapabilitiesApi(),
+  workerTools: createWorkerToolsApi()
 }
 
 contextBridge.exposeInMainWorld('stark', starkApi)

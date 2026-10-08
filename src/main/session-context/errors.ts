@@ -74,6 +74,23 @@ export class InvalidContextRangeError extends SessionContextError {
   }
 }
 
+/** Stable copy for a file that changed after the user reviewed it. */
+export const STALE_CONTEXT_MESSAGE = 'This attached context changed on disk. Reattach it before sending.'
+
+/**
+ * A file-backed attachment went stale between prepare and send: the
+ * on-disk revision no longer equals the reviewed `sourceRevision`.
+ * The send must fail atomically — no persistence, no provider call —
+ * and the user must reattach explicitly. Never auto-refresh.
+ */
+export class StaleContextError extends SessionContextError {
+  override readonly name = 'StaleContextError'
+
+  constructor(options?: { cause?: unknown }) {
+    super(STALE_CONTEXT_MESSAGE, options)
+  }
+}
+
 export type ContextOperation = 'prepare' | 'send'
 
 /**
@@ -87,7 +104,8 @@ export function toPublicContextError(operation: ContextOperation, error: unknown
     error instanceof TooManyContextItemsError ||
     error instanceof UnsupportedContextFileError ||
     error instanceof ContextFileUnavailableError ||
-    error instanceof InvalidContextRangeError
+    error instanceof InvalidContextRangeError ||
+    error instanceof StaleContextError
   ) {
     return new Error(error.message)
   }

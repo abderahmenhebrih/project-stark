@@ -124,9 +124,32 @@ void app.whenReady().then(() => {
     keyValue: starkDatabase.getKeyValue(),
     workspaces: starkDatabase.getWorkspaces(),
     changeTransactions: starkDatabase.getChangeTransactions(),
+    changeSets: starkDatabase.getChangeSets(),
+    orchestrationRuns: starkDatabase.getOrchestrationRuns(),
+    heartStore: starkDatabase.getHeart(),
+    looplinkStore: starkDatabase.getLooplink(),
+    recoveryStore: starkDatabase.getRecovery(),
+    capabilityStore: starkDatabase.getCapabilities(),
+    workerToolStore: starkDatabase.getWorkerTools(),
     codingSessions: starkDatabase.getCodingSessions(),
     aiProviders: starkDatabase.getAiProviders()
   })
+  // Crash recovery, once: leftover running orchestration runs from a
+  // previous process become interrupted. No resume, no continuation.
+  try {
+    starkDatabase.getOrchestrationRuns().markRunningAsInterrupted(Date.now())
+  } catch {
+    // Best effort: a failed recovery mark must never block startup.
+  }
+  // Crash recovery for continuity: leftover running recovery events
+  // become interrupted. No provider calls, no resume, no continuation.
+  // Looplink stays pending and the target replay message is preserved
+  // for manual continuation.
+  try {
+    starkDatabase.getRecovery().markRunningAsInterrupted(Date.now())
+  } catch {
+    // Best effort: a failed recovery mark must never block startup.
+  }
   terminalManager = new TerminalManager(createNodePtyFactory(), createTerminalEventSink())
   registerIpcHandlers({    settingsService: services.settingsService,
     profileService: services.profileService,
@@ -141,7 +164,20 @@ void app.whenReady().then(() => {
     codingSessionService: services.codingSessionService,
     sessionContextService: services.sessionContextService,
     aiProviderService: services.aiProviderService,
-    aiCompletionService: services.aiCompletionService
+    aiCompletionService: services.aiCompletionService,
+    aiCodeProposalService: services.aiCodeProposalService,
+    aiMultiFileProposalService: services.aiMultiFileProposalService,
+    changeSetService: services.changeSetService,
+    aiBrainService: services.aiBrainService,
+    heartService: services.heartService,
+    looplinkService: services.looplinkService,
+    recoveryService: services.recoveryService,
+    recoveryStore: services.recoveryStore,
+    recoveryCoordinator: services.recoveryCoordinator,
+    capabilityService: services.capabilityService,
+    workerToolRunner: services.workerToolRunner,
+    workspaces: starkDatabase.getWorkspaces(),
+    codingSessions: starkDatabase.getCodingSessions()
   })
   printTemporaryAiBuildDiag()
   createMainWindow()

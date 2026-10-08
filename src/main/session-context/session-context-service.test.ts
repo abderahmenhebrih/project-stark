@@ -211,6 +211,9 @@ describe('session context service', () => {
   it('re-resolves file items from disk instead of trusting drafts', async () => {
     const { db, dir, service, workspaceId, root } = openHarness()
     try {
+      const prepared = await service.prepareExcerpt({ workspaceId, relativePath: 'a.ts', lineStart: 1, lineEnd: 1 })
+      const revision = (prepared as unknown as Record<string, unknown>)['sourceRevision']
+      assert.equal(typeof revision, 'string')
       const forged = {
         draftId: 'ctx-1',
         kind: 'file-excerpt',
@@ -219,12 +222,20 @@ describe('session context service', () => {
         lineStart: 1,
         lineEnd: 1,
         content: 'INVENTED BY RENDERER',
-        contentBytes: 20
+        contentBytes: 20,
+        sourceRevision: revision
       }
       const [resolved] = await service.resolveAttachmentsForSend(workspaceId, [forged], 2000)
       assert.equal(resolved?.content, 'line one')
       writeFileSync(join(root, 'vanishing.ts'), 'here\n')
-      const doomed = { ...forged, draftId: 'ctx-2', relativePath: 'vanishing.ts' }
+      const vanishing = await service.prepareExcerpt({
+        workspaceId,
+        relativePath: 'vanishing.ts',
+        lineStart: 1,
+        lineEnd: 1
+      })
+      const vanishingRevision = (vanishing as unknown as Record<string, unknown>)['sourceRevision']
+      const doomed = { ...forged, draftId: 'ctx-2', relativePath: 'vanishing.ts', sourceRevision: vanishingRevision }
       const { rmSync } = await import('node:fs')
       rmSync(join(root, 'vanishing.ts'))
       await assert.rejects(service.resolveAttachmentsForSend(workspaceId, [doomed], 2000), ContextFileUnavailableError)

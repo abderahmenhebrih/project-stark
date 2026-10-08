@@ -15,7 +15,7 @@ import {
 } from './errors'
 import { MAX_API_KEY_BYTES, MAX_MODEL_ID_CHARACTERS } from './limits'
 import { zeroBuffer, type CredentialProtector } from './credential-protector'
-import { ProviderRegistry } from './provider-adapter'
+import { ProviderRegistry, type AiProviderAdapter } from './provider-adapter'
 
 const encoder = new TextEncoder()
 
@@ -317,5 +317,31 @@ export class AiProviderService {
     const model = validateModelId(record['model'])
     this.providers.setSelectedModel(providerId, model, this.now())
     return this.getState({ providerId })
+  }
+
+  /**
+   * Resolves one explicit Heart-routed assignment for a single
+   * request: known adapter plus the stored credential decrypted for
+   * immediate use. Never reads or mutates the globally selected
+   * model — routing stays per-request with no global side effects.
+   * No renderer access; callers drop the key reference after use.
+   */
+  async resolveExplicitAssignment(
+    providerId: unknown,
+    model: unknown
+  ): Promise<{ adapter: AiProviderAdapter; apiKey: string; model: string }> {
+    const resolvedId = this.requireProvider(providerId)
+    if (typeof model !== 'string' || model === '' || model.includes('\0')) {
+      throw new InvalidProviderRequestError('model reference is invalid')
+    }
+    if (model.length > MAX_MODEL_ID_CHARACTERS) {
+      throw new InvalidProviderRequestError('model reference is invalid')
+    }
+    const adapter = this.registry.get(resolvedId)
+    if (adapter === undefined) {
+      throw new UnknownProviderError()
+    }
+    const apiKey = await this.decryptCredentialForUse(resolvedId)
+    return { adapter, apiKey, model }
   }
 }

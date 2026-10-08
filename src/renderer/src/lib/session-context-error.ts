@@ -17,6 +17,7 @@ export type ContextErrorKind =
   | 'unsupported'
   | 'unavailable'
   | 'invalid-range'
+  | 'stale'
   | 'generic'
 
 export interface NormalizedContextError {
@@ -31,6 +32,7 @@ const MAIN_TOO_MANY_MESSAGE = 'You can attach at most 20 context items to one me
 const MAIN_UNSUPPORTED_MESSAGE = 'This file can’t be attached. Only text files can be used as context.'
 const MAIN_UNAVAILABLE_MESSAGE = 'This file is no longer available.'
 const MAIN_RANGE_MESSAGE = 'The selected line range is invalid.'
+const MAIN_STALE_MESSAGE = 'This attached context changed on disk. Reattach it before sending.'
 const MAIN_PREPARE_MESSAGE = 'We couldn’t attach this context.'
 
 export const CONTEXT_ITEM_TOO_LARGE_MESSAGE = MAIN_ITEM_TOO_LARGE_MESSAGE
@@ -39,6 +41,7 @@ export const CONTEXT_TOO_MANY_MESSAGE = MAIN_TOO_MANY_MESSAGE
 export const CONTEXT_UNSUPPORTED_MESSAGE = MAIN_UNSUPPORTED_MESSAGE
 export const CONTEXT_UNAVAILABLE_MESSAGE = MAIN_UNAVAILABLE_MESSAGE
 export const CONTEXT_RANGE_MESSAGE = MAIN_RANGE_MESSAGE
+export const CONTEXT_STALE_MESSAGE = MAIN_STALE_MESSAGE
 export const CONTEXT_PREPARE_MESSAGE = MAIN_PREPARE_MESSAGE
 
 const KNOWN_OUTCOMES: readonly { readonly kind: ContextErrorKind; readonly mainMessage: string }[] = [
@@ -48,6 +51,7 @@ const KNOWN_OUTCOMES: readonly { readonly kind: ContextErrorKind; readonly mainM
   { kind: 'unsupported', mainMessage: MAIN_UNSUPPORTED_MESSAGE },
   { kind: 'unavailable', mainMessage: MAIN_UNAVAILABLE_MESSAGE },
   { kind: 'invalid-range', mainMessage: MAIN_RANGE_MESSAGE },
+  { kind: 'stale', mainMessage: MAIN_STALE_MESSAGE },
   { kind: 'generic', mainMessage: MAIN_PREPARE_MESSAGE }
 ]
 

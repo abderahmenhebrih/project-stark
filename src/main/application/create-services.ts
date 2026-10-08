@@ -1,18 +1,39 @@
 import { ChangeTransactionService } from '../change-transactions/change-transaction-service'
+import { ChangeSetService } from '../change-sets/change-set-service'
 import type { AiProviderRepository } from '../database/repositories/ai-provider-repository'
+import type { ChangeSetRepository } from '../database/repositories/change-set-repository'
 import type { ChangeTransactionRepository } from '../database/repositories/change-transaction-repository'
 import type { CodingSessionRepository } from '../database/repositories/coding-session-repository'
+import type { HeartRepository } from '../heart/heart-repository'
+import type { LooplinkRepository } from '../looplink/looplink-repository'
 import type { KeyValueRepository } from '../database/repositories/key-value-repository'
+import type { OrchestrationRepository } from '../database/repositories/orchestration-repository'
 import type { WorkspaceRepository } from '../database/repositories/workspace-repository'
 import { GitProcessRunner } from '../git/git-process-runner'
 import { GitService } from '../git/git-service'
 import { ProfileService } from '../profile/profile-service'
+import { AiBrainService } from '../ai/ai-brain-service'
+import { AiCodeProposalService } from '../ai/ai-code-proposal-service'
+import { AiMultiFileProposalService } from '../ai/ai-multi-file-proposal-service'
 import { AiCompletionService } from '../ai/ai-completion-service'
+import { AiOperationGuard } from '../ai/ai-operation-guard'
 import { AiProviderService } from '../ai/ai-provider-service'
 import { ElectronSafeStorageCredentialProtector, type CredentialProtector } from '../ai/credential-protector'
 import { OpenAiProviderAdapter, createOpenAiClient, type OpenAiClientFactory } from '../ai/openai-adapter'
 import { ProviderRegistry } from '../ai/provider-adapter'
 import { CodingSessionService } from '../sessions/coding-session-service'
+import { HeartService } from '../heart/heart-service'
+import { LooplinkService } from '../looplink/looplink-service'
+import { RecoveryRepository } from '../recovery/recovery-repository'
+import { RecoveryService } from '../recovery/recovery-service'
+import { AiRecoveryCoordinator } from '../recovery/recovery-coordinator'
+import { CapabilityRepository } from '../capabilities/capability-repository'
+import { CapabilityService } from '../capabilities/capability-service'
+import { CapabilityGate } from '../capabilities/capability-gate'
+import { WorkerToolRepository } from '../worker-tools/worker-tool-repository'
+import { WorkerToolApprovalService } from '../worker-tools/worker-tool-approval-service'
+import { WorkerReadToolService } from '../worker-tools/worker-tool-service'
+import { WorkerToolRunner } from '../worker-tools/worker-tool-runner'
 import { SessionContextService } from '../session-context/session-context-service'
 import { SettingsService } from '../settings/settings-service'
 import { WorkspaceFileWriteService } from '../workspace-files/workspace-file-write-service'
@@ -43,6 +64,29 @@ export interface ApplicationServices {
   readonly sessionContextService: SessionContextService
   readonly aiProviderService: AiProviderService
   readonly aiCompletionService: AiCompletionService
+  readonly aiCodeProposalService: AiCodeProposalService
+  /** Stage 17 grouped proposals. Absent in older harnesses without a change-set repository. */
+  readonly changeSetService?: ChangeSetService
+  readonly aiMultiFileProposalService?: AiMultiFileProposalService
+  /** Stage 18 Brain orchestration. Absent in older harnesses without an orchestration repository. */
+  readonly aiBrainService?: AiBrainService
+  /** Stage 19 Heart routing. Absent in older harnesses without a heart repository. */
+  readonly heartService?: HeartService
+  /** Stage 20 continuity. Absent in older harnesses without a looplink repository. */
+  readonly looplinkService?: LooplinkService
+  /** Stage 21 recovery. Absent in older harnesses without a recovery repository. */
+  readonly recoveryStore?: RecoveryRepository
+  readonly recoveryService?: RecoveryService
+  readonly recoveryCoordinator?: AiRecoveryCoordinator
+  /** Stage 22 capabilities. Absent in older harnesses without a capability repository. */
+  readonly capabilityStore?: CapabilityRepository
+  readonly capabilityService?: CapabilityService
+  readonly capabilityGate?: CapabilityGate
+  /** Stage 23 worker tools. Absent in older harnesses without a worker-tool repository. */
+  readonly workerToolStore?: WorkerToolRepository
+  readonly workerToolApprovalService?: WorkerToolApprovalService
+  readonly workerReadToolService?: WorkerReadToolService
+  readonly workerToolRunner?: WorkerToolRunner
 }
 
 export interface ServiceDependencies {
@@ -51,6 +95,20 @@ export interface ServiceDependencies {
   readonly changeTransactions: ChangeTransactionRepository
   readonly codingSessions: CodingSessionRepository
   readonly aiProviders: AiProviderRepository
+  /** Stage 17 change-set repository. Optional so older harnesses keep working. */
+  readonly changeSets?: ChangeSetRepository
+  /** Stage 18 orchestration repository. Optional so older harnesses keep working. */
+  readonly orchestrationRuns?: OrchestrationRepository
+  /** Stage 19 heart repository. Optional so older harnesses keep working. */
+  readonly heartStore?: HeartRepository
+  /** Stage 20 looplink repository. Optional so older harnesses keep working. */
+  readonly looplinkStore?: LooplinkRepository
+  /** Stage 21 recovery repository. Optional so older harnesses keep working. */
+  readonly recoveryStore?: RecoveryRepository
+  /** Stage 22 capability repository. Optional so older harnesses keep working. */
+  readonly capabilityStore?: CapabilityRepository
+  /** Stage 23 worker-tool repository. Optional so older harnesses keep working. */
+  readonly workerToolStore?: WorkerToolRepository
 }
 
 /**
@@ -81,32 +139,215 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
   const protector = providers?.credentialProtector ?? new ElectronSafeStorageCredentialProtector()
   const aiProviderService = new AiProviderService(deps.aiProviders, protector, registry)
   const workspaceFilesService = new WorkspaceFilesService(deps.workspaces)
+  const workspaceSearchService = new WorkspaceSearchService(deps.workspaces)
   const sessionContextService = new SessionContextService(deps.workspaces, workspaceFilesService)
+  // Shared per-session AI lock: normal generation and code proposals
+  // for the same session exclude each other.
+  const aiOperationGuard = new AiOperationGuard()
+  // Stage 23 pending approvals (optional): while an approval waits,
+  // new Ask/Work/Proposal operations in the same session are blocked
+  // with a safe error instead of holding the AI guard.
+  const workerToolStoreEarly = deps.workerToolStore
+  const pendingApprovals =
+    workerToolStoreEarly === undefined
+      ? undefined
+      : { hasPending: (sessionId: number): boolean => workerToolStoreEarly.hasPending(sessionId) }
+  const changeTransactionService = new ChangeTransactionService(
+    deps.workspaces,
+    deps.changeTransactions,
+    fileWriteService
+  )
+  // Stage 17 grouped proposals: built only when a change-set
+  // repository is supplied; older harnesses omit it.
+  const changeSetService =
+    deps.changeSets === undefined
+      ? undefined
+      : new ChangeSetService(deps.workspaces, deps.changeSets, deps.changeTransactions)
+  const aiMultiFileProposalService =
+    changeSetService === undefined
+      ? undefined
+      : new AiMultiFileProposalService(
+          deps.workspaces,
+          deps.codingSessions,
+          deps.aiProviders,
+          aiProviderService,
+          registry,
+          workspaceFilesService,
+          changeSetService,
+          { operationGuard: aiOperationGuard, pendingApprovals }
+        )
+  const heartService =
+    deps.heartStore === undefined
+      ? undefined
+      : new HeartService(deps.heartStore, deps.aiProviders, registry)
+  // Stage 20 continuity: built only when a looplink repository is
+  // supplied; older harnesses omit it and keep legacy AI behavior.
+  // Stage 21 couples handoff_ready dismissal with the recovery event
+  // when a recovery store is present (one atomic transaction).
+  const looplinkStore = deps.looplinkStore
+  const looplinkService =
+    looplinkStore === undefined
+      ? undefined
+      : new LooplinkService(
+          deps.workspaces,
+          deps.codingSessions,
+          looplinkStore,
+          aiOperationGuard,
+          deps.orchestrationRuns,
+          deps.changeSets,
+          deps.changeTransactions,
+          Date.now,
+          deps.recoveryStore
+        )
+  const looplinkOption =
+    looplinkService === undefined || looplinkStore === undefined
+      ? undefined
+      : { service: looplinkService, store: looplinkStore }
+  const aiBrainService =
+    deps.orchestrationRuns === undefined || heartService === undefined
+      ? undefined
+      : new AiBrainService(
+          deps.workspaces,
+          deps.codingSessions,
+          aiProviderService,
+          deps.orchestrationRuns,
+          heartService,
+          { operationGuard: aiOperationGuard, looplink: looplinkOption, pendingApprovals }
+        )
+  const aiCompletionService = new AiCompletionService(
+      deps.workspaces,
+      deps.codingSessions,
+      deps.aiProviders,
+      aiProviderService,
+      registry,
+      { operationGuard: aiOperationGuard, looplink: looplinkOption, pendingApprovals }
+    )
+  // Stage 21 recovery: built only when a recovery repository is
+  // supplied; older harnesses omit it and keep legacy AI behavior.
+  // Recovery defaults to off — never silently enabled.
+  const recoveryStore = deps.recoveryStore
+  const recoveryService =
+    recoveryStore === undefined
+      ? undefined
+      : new RecoveryService(recoveryStore, deps.aiProviders, registry)
+  const recoveryCoordinator =
+    recoveryStore === undefined ||
+    recoveryService === undefined ||
+    looplinkService === undefined ||
+    looplinkStore === undefined
+      ? undefined
+      : new AiRecoveryCoordinator({
+          workspaces: deps.workspaces,
+          sessions: deps.codingSessions,
+          orchestrationRuns: deps.orchestrationRuns,
+          completion: aiCompletionService,
+          brain: aiBrainService,
+          looplinkService,
+          looplinkStore,
+          recoveryStore,
+          recoveryService
+        })
+  // Stage 22 capabilities: built only when a capability repository
+  // is supplied; older harnesses omit it. Default is deny everywhere
+  // with the master switch off — never silently enabled.
+  const capabilityStore = deps.capabilityStore
+  const capabilityService =
+    capabilityStore === undefined
+      ? undefined
+      : new CapabilityService(capabilityStore, deps.workspaces)
+  const capabilityGate =
+    capabilityStore === undefined
+      ? undefined
+      : new CapabilityGate(deps.workspaces, deps.codingSessions, capabilityStore)
+  // Stage 23 worker tools: approval + read-only execution share the
+  // worker-tool repository.
+  const workerToolStore = deps.workerToolStore
+  const workerToolApprovalService =
+    workerToolStore === undefined || deps.orchestrationRuns === undefined
+      ? undefined
+      : new WorkerToolApprovalService(deps.workspaces, deps.codingSessions, deps.orchestrationRuns, workerToolStore)
+  const gitService = new GitService(deps.workspaces, new GitProcessRunner())
+  const workerReadToolService =
+    workerToolStore === undefined || capabilityGate === undefined
+      ? undefined
+      : new WorkerReadToolService({
+          gate: capabilityGate,
+          files: workspaceFilesService,
+          search: new WorkspaceSearchService(deps.workspaces),
+          git: gitService,
+          tools: workerToolStore
+        })
+  // Stage 23 tool-enabled Work runner: built only when Heart, gate,
+  // files/search/git, and worker-tool storage are all present.
+  // Older harnesses omit it and keep legacy Work.
+  const workerToolRunner =
+    workerToolStore === undefined ||
+    capabilityGate === undefined ||
+    workerReadToolService === undefined ||
+    workerToolApprovalService === undefined ||
+    aiBrainService === undefined ||
+    heartService === undefined ||
+    deps.orchestrationRuns === undefined
+      ? undefined
+      : new WorkerToolRunner(
+          {
+            workspaces: deps.workspaces,
+            sessions: deps.codingSessions,
+            providerService: aiProviderService,
+            runs: deps.orchestrationRuns,
+            heart: heartService,
+            guard: aiOperationGuard,
+            looplink: looplinkOption,
+            gate: capabilityGate,
+            files: workspaceFilesService,
+            search: workspaceSearchService,
+            git: gitService,
+            tools: workerToolStore,
+            approvals: workerToolApprovalService,
+            executor: workerReadToolService
+          },
+          undefined
+        )
   return {
     settingsService: new SettingsService(deps.keyValue),
     profileService: new ProfileService(deps.keyValue),
     workspaceService: new WorkspaceService(deps.workspaces),
     workspaceFilesService,
     workspaceFileWriteService: fileWriteService,
-    workspaceSearchService: new WorkspaceSearchService(deps.workspaces),
-    changeTransactionService: new ChangeTransactionService(
-      deps.workspaces,
-      deps.changeTransactions,
-      fileWriteService
-    ),
+    workspaceSearchService,
+    changeTransactionService,
     terminalService: new TerminalService(deps.workspaces),
-    gitService: new GitService(deps.workspaces, new GitProcessRunner()),
+    gitService,
     codingSessionService: new CodingSessionService(deps.workspaces, deps.codingSessions, {
       contextService: sessionContextService
     }),
     sessionContextService,
     aiProviderService,
-    aiCompletionService: new AiCompletionService(
+    aiCompletionService,
+    aiCodeProposalService: new AiCodeProposalService(
       deps.workspaces,
       deps.codingSessions,
       deps.aiProviders,
       aiProviderService,
-      registry
-    )
+      registry,
+      workspaceFilesService,
+      changeTransactionService,
+      { operationGuard: aiOperationGuard, pendingApprovals }
+    ),
+    changeSetService,
+    aiMultiFileProposalService,
+    aiBrainService,
+    heartService,
+    looplinkService,
+    recoveryStore,
+    recoveryService,
+    recoveryCoordinator,
+    capabilityStore,
+    capabilityService,
+    capabilityGate,
+    workerToolStore,
+    workerToolApprovalService,
+    workerReadToolService,
+    workerToolRunner
   }
 }

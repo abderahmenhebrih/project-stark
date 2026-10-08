@@ -32,11 +32,18 @@ describe('provider/AI preload contract', () => {
     }
   })
 
-  it('exposes ai.generateResponse and nothing else for AI', () => {
+  it('exposes ai.generateResponse, ai.proposeFileChange, ai.proposeChangeSet, and ai.runBrain', () => {
     const source = readPreloadSource()
     assert.ok(source.includes('IPC_CHANNELS.aiGenerateResponse'))
+    assert.ok(source.includes('IPC_CHANNELS.aiProposeFileChange'))
+    assert.ok(source.includes('IPC_CHANNELS.aiProposeChangeSet'))
+    assert.ok(source.includes('IPC_CHANNELS.aiRunBrain'))
+    assert.ok(source.includes('IPC_CHANNELS.orchestrationGet'))
+    assert.ok(source.includes('IPC_CHANNELS.orchestrationListRecent'))
     assert.ok(source.includes('createAiApi()'))
     assert.ok(source.includes('ai: createAiApi()'))
+    assert.ok(source.includes('createOrchestrationApi()'))
+    assert.ok(source.includes('orchestration: createOrchestrationApi()'))
   })
 
   it('exposes no secret-read or networking API', () => {
@@ -82,6 +89,8 @@ describe('provider/AI preload contract', () => {
   it('completion/IPC sources take no renderer provider parameters', () => {
     const completion = readFileSync(join(process.cwd(), 'src', 'main', 'ai', 'ai-completion-service.ts'), 'utf8')
     assert.ok(!completion.includes('baseURL') && !completion.includes('baseUrl'), 'completion must not accept endpoints')
+    const proposal = readFileSync(join(process.cwd(), 'src', 'main', 'ai', 'ai-code-proposal-service.ts'), 'utf8')
+    assert.ok(!proposal.includes('baseURL') && !proposal.includes('baseUrl'), 'proposal must not accept endpoints')
     const ipc = readFileSync(join(process.cwd(), 'src', 'main', 'ipc', 'ai.ts'), 'utf8')
     for (const forbidden of ['sendAssistant', 'send-assistant', 'tools', 'run-agent']) {
       assert.ok(!ipc.includes(forbidden), `AI IPC must not contain ${forbidden}`)

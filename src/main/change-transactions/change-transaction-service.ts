@@ -16,22 +16,19 @@ import { InvalidWorkspaceError, WorkspaceNotFoundError } from '../workspace/erro
 import { hashFileBytes, isValidRevision } from '../workspace-files/file-revision'
 import { MAX_REQUEST_PATH_LENGTH } from '../workspace-files/limits'
 import {
-  encodeWriteContent,
-  readGuardedCurrentFile,
   requireLiveWorkspace,
   type WorkspaceFileWriteService
 } from '../workspace-files/workspace-file-write-service'
-import { FileTooLargeError, WorkspaceFileConflictError } from '../workspace-files/errors'
+import { WorkspaceFileConflictError } from '../workspace-files/errors'
 import {
-  MAX_CHANGE_TRANSACTION_FILE_BYTES,
   MAX_FILES_PER_CHANGE_TRANSACTION,
   MAX_RECENT_CHANGE_TRANSACTIONS
 } from './limits'
+import { prepareFileChangeCandidate } from './prepare-file-change'
 import {
   CHANGE_CONFLICT_MESSAGE,
   CHANGE_ROLLBACK_CONFLICT_MESSAGE,
   ChangeTransactionConflictError,
-  ChangeTransactionNoChangesError,
   ChangeTransactionNotFoundError,
   ChangeTransactionStateError,
   CorruptChangeTransactionError
@@ -169,30 +166,26 @@ export class ChangeTransactionService {
    * Persists a single-file proposal WITHOUT touching the project file.
    * Fails as a conflict when the disk moved past the read revision, and
    * as a no-changes outcome when the proposal equals current bytes.
+   * Candidate validation is shared with multi-file Change Sets through
+   * `prepareFileChangeCandidate` — one rule set, no drift.
    */
   async createFileChange(rawRequest: unknown): Promise<ChangeTransaction> {
     const request = parseCreateFileChangeRequest(rawRequest)
     const workspace = await requireLiveWorkspace(this.workspaces, request.workspaceId)
-    const current = await readGuardedCurrentFile(workspace.rootPath, request.relativePath)
-    if (current.bytes.byteLength > MAX_CHANGE_TRANSACTION_FILE_BYTES) {
-      throw new FileTooLargeError()
-    }
-    if (current.revision !== request.expectedRevision) {
-      throw new ChangeTransactionConflictError(CHANGE_CONFLICT_MESSAGE)
-    }
-    // Stage 8 content rules: NUL-free, well-formed UTF-16, 1 MiB cap.
-    const proposedBytes = encodeWriteContent(request.proposedContent)
-    if (proposedBytes.equals(current.bytes)) {
-      throw new ChangeTransactionNoChangesError()
-    }
+    const candidate = await prepareFileChangeCandidate(
+      workspace.rootPath,
+      request.relativePath,
+      request.expectedRevision,
+      request.proposedContent
+    )
     const timestamp = this.now()
     const id = this.transactions.createWithFiles({ workspaceId: workspace.id, now: timestamp }, [
       {
-        relativePath: current.relativePath,
-        beforeRevision: current.revision,
-        beforeBytes: current.bytes,
-        proposedRevision: hashFileBytes(proposedBytes),
-        proposedBytes
+        relativePath: candidate.relativePath,
+        beforeRevision: candidate.beforeRevision,
+        beforeBytes: candidate.beforeBytes,
+        proposedRevision: candidate.proposedRevision,
+        proposedBytes: candidate.proposedBytes
       }
     ])
     return this.readPublicTransaction(id)

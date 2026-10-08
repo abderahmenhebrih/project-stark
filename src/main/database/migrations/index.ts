@@ -7,6 +7,13 @@ import { migration003ChangeTransactions } from './003-change-transactions'
 import { migration004CodingSessions } from './004-coding-sessions'
 import { migration005AiProviders } from './005-ai-providers'
 import { migration006MessageContext } from './006-message-context'
+import { migration007ChangeSets } from './007-change-sets'
+import { migration008OrchestrationRuns } from './008-orchestration-runs'
+import { migration009Heart } from './009-heart'
+import { migration010Looplink } from './010-looplink'
+import { migration011RecoveryContinuity } from './011-recovery-continuity'
+import { migration012AgentCapabilities } from './012-agent-capabilities'
+import { migration013WorkerTools } from './013-worker-tools'
 
 /**
  * Ordered migration registry. Append-only: add new migrations to the end
@@ -18,7 +25,14 @@ export const migrations: readonly Migration[] = [
   migration003ChangeTransactions,
   migration004CodingSessions,
   migration005AiProviders,
-  migration006MessageContext
+  migration006MessageContext,
+  migration007ChangeSets,
+  migration008OrchestrationRuns,
+  migration009Heart,
+  migration010Looplink,
+  migration011RecoveryContinuity,
+  migration012AgentCapabilities,
+  migration013WorkerTools
 ]
 
 /**

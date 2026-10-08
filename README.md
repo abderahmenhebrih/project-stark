@@ -146,13 +146,14 @@ and `window.stark` have no database access and no generic SQL IPC exists.
   so the dev server and a raw `electron ./out/...` launch may use
   different roots; the dev/prod *filename* split above always applies.)
 - Migrations: ordered, validated, transactional, tracked with
-  `PRAGMA user_version`. Current schema version: **5**.
+  `PRAGMA user_version`. Current schema version: **13**.
 - Tables: `key_value(key TEXT PRIMARY KEY, value TEXT (JSON), updated_at INTEGER)`,
   `workspaces(id, root_path UNIQUE, display_name, created_at, last_opened_at)`
   plus a recency index, `change_transactions` + `change_transaction_files`,
   `coding_sessions` + `coding_messages` (workspace/session cascades, recency
   and paging indexes), `ai_provider_configs` + `ai_provider_credentials`
-  (ciphertext BLOB only, config cascade).
+  (ciphertext BLOB only, config cascade), `message_context_items`,
+  `change_sets` + `change_set_items` (grouped-review linkage, cascades).
 - Pragmas: `foreign_keys = ON`, `journal_mode = WAL`, `synchronous = NORMAL`,
   `busy_timeout = 5000`.
 - Tests: `npm test` (Node built-in runner, real SQLite, isolated
@@ -497,8 +498,8 @@ a provider-neutral architecture (explicit `ProviderRegistry`, one
   until the real reply (plain text, same inert surface) lands.
 - Logging: production logs never include prompts, history,
   responses, keys, headers, or provider bodies — only provider id,
-  operation, safe category, and duration. Schema is **v6** (context
-  rows added; provider tables unchanged).
+  operation, safe category, and duration. Schema is **v13** (Worker
+  tool approval/event/state tables added; provider tables unchanged).
 
 ## Explicit bounded project context
 
@@ -517,7 +518,8 @@ before send, and history shows exactly which items traveled.
 - Model: `message_context_items(message_id → coding_messages
   CASCADE, kind CHECK, label, relative_path?, line_start/end?,
   content, content_bytes, created_at)` with a per-message index.
-  Schema is **v6** (`006-message-context.ts`, append-only).
+  Schema is **v7** (`006-message-context.ts`, append-only; v7 adds
+  change sets).
 - Bounds (centralized, UTF-8 measured): 20 items/message, 32 KiB per
   item, 200 KiB total, 16 KiB manual notes, 120-codepoint labels. No
   silent truncation — over-limit attachments fail with safe UI copy.
@@ -541,6 +543,357 @@ before send, and history shows exactly which items traveled.
   copy included), per-item Preview/Remove buttons, note form, and
   read-only history chips under their message — all real buttons and
   plain-text `<pre>` previews, keyboard/touch accessible.
+- Revision pinning: every file-backed draft carries the SHA-256 of
+  the exact bytes previewed. Send re-reads and compares; a mismatch
+  fails the whole send with "This attached context changed on disk.
+  Reattach it before sending." — never silent substitution, never
+  partial persist, never a provider call on stale source.
+
+## AI-proposed single-file changes
+
+The composer has two modes — **Ask** (default, unchanged Stage 14
+behavior) and **Propose change**. Propose change turns the trailing
+user message's exactly-one whole-file attachment into a pending
+Stage 9 Change Transaction via one structured provider call. The AI
+never writes disk; only a human Accept reaches the Stage 8 writer.
+
+- Scope: one existing text file per proposal, attached as whole-file
+  context to the latest user message (manual notes may accompany).
+  Excerpt-only, search-only, multi-file, creation, deletion, rename,
+  patch chains, tools, terminal, and Git are out of scope.
+- Eligibility: exactly one `whole-file` item, zero `file-excerpt` /
+  `search-match` items. Otherwise "Attach exactly one whole file to
+  propose a code change." — never a silent file choice.
+- Authority: renderer sends only `{workspaceId, sessionId}` to
+  `stark:ai:propose-file-change`. Main derives path + reviewed
+  content from the persisted latest user message. The model output
+  contains no path or revision, so it cannot choose a target.
+- Stale checks: before the provider call, current disk content must
+  exactly equal the persisted reviewed content ("This file changed
+  after you attached it. Attach it again before requesting a
+  change."). After the call, the transaction is created with the
+  pre-provider revision through `ChangeTransactionService`; a
+  mid-generation change fails with "The file changed while STARK was
+  preparing the proposal. Attach it again and try again."
+- Provider: Responses Structured Outputs (`text.format` json_schema
+  strict, main-owned `{summary, proposedContent}` schema), `store:
+  false`, no tools, no conversations, fixed main-owned instruction.
+  One attempt, 60 s budget, no retries, no model-name filtering; an
+  unsupported model maps to "The selected model could not create a
+  structured code proposal. Choose another model."
+- Validation: summary non-empty ≤500 codepoints; proposed content
+  Stage 8-compatible (no NUL, valid Unicode, ≤64 KiB, preserved
+  byte-for-byte, no auto-format). Identical content returns "STARK
+  did not propose any code changes." with no transaction.
+- Result: a `pending` Change Transaction only (disk still holds the
+  original bytes). The Session shows "Proposal ready" + summary +
+  Review change, which opens the existing TransactionReview + Monaco
+  DiffEditor. Existing Accept/Reject/Rollback behavior is unchanged;
+  Ask mode never creates transactions and Propose never calls normal
+  generation. One AI operation per session at a time ("STARK is
+  already generating a response for this session."). Single-file
+  proposals need no new tables — the pending transaction IS the
+  persistent proposal.
+
+## Persistent multi-file AI Change Sets
+
+Propose change also handles 2–5 whole-file attachments: one
+structured provider call becomes one persistent Change Set holding
+one pending Stage 9 transaction per changed file. The AI still never
+writes disk. One whole file keeps the Stage 16 single-transaction
+behavior.
+
+- Targets: 2–5 existing text files (`MIN_AI_CHANGE_SET_FILES`,
+  `MAX_AI_CHANGE_SET_FILES`), all attached as whole-file context
+  (notes may accompany); excerpt/search attachments block the
+  proposal. No creation, deletion, rename, move, copy, terminal,
+  Git, hidden context, or auto-discovery.
+- Target IDs: main assigns temporary opaque IDs (T1…Tn) mapped to
+  persisted context rows for one request only — never persisted. The
+  model sees `[TARGET Tn]` blocks (path informational) and returns
+  `{summary, changes: [{targetId, summary, proposedContent}]}` with a
+  strict main-owned schema. Unknown/duplicate target IDs reject the
+  whole proposal; omitted files stay untouched.
+- Stale checks: every attached file must exactly equal its reviewed
+  content before the provider call, or no call happens; every
+  proposed target is re-read after validation and must match its
+  pre-provider revision, or zero sets and zero transactions persist.
+- Limits: 64 KiB per proposed file, 256 KiB combined
+  (`MAX_AI_CHANGE_SET_TOTAL_PROPOSED_BYTES`), 500-codepoint global
+  summary, 300-codepoint file summaries. No-op files are dropped; all
+  no-op returns "STARK did not propose any code changes." No
+  truncation, no repair retries.
+- Persistence: `change_sets` + `change_set_items(file_summary)` plus
+  child `change_transactions`/`change_transaction_files` land in ONE
+  SQLite transaction (schema **v7**, `007-change-sets.ts`,
+  append-only; migrations 001–006 untouched). Group state
+  (pending/partially_resolved/resolved) is derived from children —
+  never a persisted column.
+- Review: Change Sets survive restart in Changes history beside
+  ungrouped transactions. Grouped review shows the global summary,
+  derived status, and per-file status with individual Review buttons
+  into the existing TransactionReview + DiffEditor. Accept/Reject/
+  Rollback stay per-file through the existing Changes API. There is
+  deliberately no Accept All: a Change Set groups reviewable
+  proposals; it is NOT a single atomic filesystem commit.
+
+## STARK Brain Stage 18
+
+The composer has three modes — **Ask** (direct normal provider
+response), **Work** (bounded Brain → optional Worker → Brain
+response), and **Propose** (existing Change Transaction paths).
+Work runs at most one Brain plan, at most one Worker call, and at
+most one Brain synthesis — three provider calls maximum, no loops,
+no retries, no tools, no filesystem authority.
+
+- Brain and Worker share the currently selected provider/model in
+  Stage 18 (no role models yet — Heart/model routing comes later).
+  Both receive only bounded Session history, the latest user's
+  explicit persisted context, and main-owned run artifacts. Worker
+  output is untrusted data in a user-role block, never an
+  instruction; synthesis keeps the main-owned instruction
+  authoritative. No chain-of-thought is requested or stored — only
+  the short plan summary and bounded text outputs.
+- Direct path: plan action `answer` persists its final answer as a
+  normal assistant message (1 provider call). Delegated path: plan
+  action `delegate` with one worker instruction → one Worker text
+  call → one synthesis call → final assistant message.
+- Persistence: `orchestration_runs` + `orchestration_steps`
+  (schema **v8**, `008-orchestration-runs.ts`, append-only). The run
+  is created running before the first provider call; steps append as
+  they complete; the final assistant message plus run completion land
+  in one SQLite transaction. Failures mark the run failed with safe
+  copy and persist no fake message. One bounded startup pass marks
+  crash-leftover running runs interrupted (no resume).
+- Concurrency: the whole run holds the shared per-session AI guard,
+  excluding Ask generation and both proposal paths until it
+  completes or fails ("STARK is already generating a response for
+  this session."). Explicit Retry Work starts a new run against the
+  same trailing user message without duplicating it.
+- UI: Work flight shows one honest preparing state ("Brain is
+  working…", no fake percentages); completed runs show persistent
+  details (Plan summary, per-step Plan/Worker result/Final response
+  states, expandable inert Worker text). Run history reloads from
+  storage, so details survive restart.
+
+## HEART Stage 19
+
+Heart is STARK's deterministic model-routing layer: the Brain
+requests a Worker task profile, Heart maps it to a user-configured
+provider/model assignment. Brain never names models; Heart never
+calls a model. Brain plan and Brain synthesis share one snapshotted
+Brain assignment per run.
+
+- Brain assignment: one configured provider/model used for both
+  planning and synthesis within a run (captured once — no mid-run
+  drift). Worker routing: Fixed mode always uses the configured
+  Worker assignment (the requested profile is recorded but does not
+  change routing); Auto-Swap maps the requested profile
+  (general/coding/reasoning/fast) to an explicit per-profile
+  assignment or the configured default — one result, no fallback
+  cascade. Auto-Swap is task routing, NOT failure fallback: a failed
+  Worker call fails the run with no retry on another model.
+- The user configures which model each profile means (no
+  name-prefix, pricing, or benchmark heuristics anywhere). First use
+  derives Brain and Fixed Worker once from the legacy selected
+  provider/model without mutating it; later routing never touches the
+  global selection — per-request models only.
+- Limits: 2–5 file rule untouched; 64 KiB per proposed file;
+  provider/model IDs bounded (100/200 codepoints). Work stays at max
+  3 provider calls; Heart adds zero LLM calls. Credentials stay in
+  Stage 14 storage; Heart tables hold IDs only.
+- Audit: every provider-backed step persists role/provider/model/
+  route/requested-profile atomically with the step, so run details
+  show exactly what ran what (requested coding → resolved default →
+  model-D). Historical Stage 18 rows show "Model information
+  unavailable for this older run." Ask/Propose modes keep the legacy
+  selected model in Stage 19.
+- Persistence: `ai_heart_settings` (singleton) +
+  `ai_heart_assignments` + `orchestration_step_models` (schema **v9**,
+  `009-heart.ts`, append-only). Config saves are single SQLite
+  transactions; group run state stays derived.
+
+## Looplink Stage 20
+
+Looplink is STARK's persistent continuity layer: explicit work from
+one coding Session continues in a NEW Session without copy/paste —
+"Your model stopped. Your work didn't." No AI summarizer, no hidden
+reads, no automatic sending; creation, reads, and dismissal use zero
+provider calls.
+
+- Explicit "Continue with Looplink" snapshots bounded already-
+  persisted state (≤12 recent messages newest-first, sent context
+  from the most recent contextual user message, latest orchestration
+  metadata with ≤32 KiB Worker result, ≤10 change references) into an
+  immutable versioned payload (≤128 KiB, SHA-256 verified on read)
+  and atomically creates the target Session ("Continue: …") plus its
+  pending handoff in the same Workspace. No message rows are cloned;
+  later source edits never mutate the snapshot; chained continuations
+  rebuild from the target's own messages (no nested payloads).
+- Historical file context inside a Looplink is conversational data,
+  never fresh Stage 15 proposal authority: Propose change stays
+  ineligible until the user attaches the current file again (stale-
+  file protections preserved). Target Ask/Work use current Heart
+  routing, so source A/B and target X/Y routings interoperate over
+  provider-neutral text with no response/conversation IDs crossing.
+- One-time continuity: the first successful Ask or Work response
+  consumes the handoff atomically with its assistant message (and,
+  for Work, the completed orchestration state); failures keep it
+  pending for explicit retry; a second request never resends it.
+  Dismiss marks it dismissed with the Session retained.
+
+## Continuity Recovery Stage 21
+
+Recovery is bounded single-hop continuity when an Ask or Work
+provider path fails with a recoverable availability condition:
+"Your model stopped. Your work didn't." One source request, one
+automatic Looplink handoff, one configured recovery route, one
+recovery attempt — then STOP. No fallback chains, no retry loops,
+no global model mutation, no proposal recovery.
+
+- Modes (default `off`, never silently enabled): `off` surfaces
+  failures normally; `handoff` creates one Looplink recovery target
+  ("Recovery ready", no provider call, `attempt_count=0`); `auto_once`
+  replays the failed request once using explicit Recovery models.
+- Recoverable categories only: `provider-rate-limit` (429/quota),
+  `provider-network`, `provider-timeout`, `provider-unavailable`,
+  `model-unavailable`, `structured-output-unsupported`. Auth (401),
+  permission (403), validation, storage, transaction, Looplink,
+  Heart, and renderer failures never trigger recovery.
+- Recovery assignments (user-chosen, IDs only, no credentials):
+  Ask Recovery, Brain Recovery, Worker Recovery. Recovery Work uses
+  a fixed topology (Recovery Brain → optional Recovery Worker →
+  same Recovery Brain, `route_key=recovery`); the Brain-requested
+  profile is audited but never changes routing. `auto_once` requires
+  all three; `off`/`handoff` leave them optional.
+- Ask ≤2 total provider calls (1 primary + 1 recovery); Work ≤6
+  (3 primary + 3 recovery). Policy, Looplink preparation, and config
+  resolution perform zero calls. Per-call ≤60s, per-Work-run ≤150s.
+  No second handoff, no second route, no automatic retry.
+- Recovery target is a new Session ("Recovery: …", 80-codepoint
+  bound): handoff creates session + Looplink + event atomically;
+  auto_once additionally persists one replay user message with
+  exactly the failed text and zero fresh context attachments.
+  Historical Looplink context stays non-authoritative — Propose
+  remains ineligible until the user reattaches current files.
+  Whole-Work restart only: recovery never resumes half-run provider
+  state; the source failed run stays failed and the target starts a
+  new run.
+- Persistence (schema **v10 → v11** adds recovery tables):
+  `ai_recovery_settings` (singleton `off`), `ai_recovery_assignments`
+  (`ask`/`brain`/`worker`), `ai_recovery_events` (source tuple unique,
+  handoff unique, `handoff_ready`/`running`/`succeeded`/`failed`/
+  `dismissed`/`interrupted`), `ai_recovery_event_routes`
+  (actual `ask`/`brain`/`worker` routes). Crash marks leftover
+  `running` as `interrupted` with no resume; Looplink stays pending
+  and the replay message is preserved for manual continuation.
+- No global mutation: legacy selected model, Heart Brain/routes/mode
+  never change. No quota polling, billing APIs, or dashboards.
+  Renderer shows safe mode toggles, explicit Save Recovery (no
+  autosave), source/target banners with failure/policy/status plus
+  route IDs only, and Open recovery session — no percentages,
+  countdowns, credentials, or raw provider bodies.
+
+## Workspace Capabilities Stage 22
+
+Stage 22 is the default-deny permission boundary future Worker tools
+must pass before invoking any bounded application capability. It
+defines permissions only — it executes zero tools and adds zero
+provider calls.
+
+- Five main-owned capabilities only: `workspace.read` (future bounded
+  Stage 6 file reads), `workspace.search` (future bounded Stage 7
+  literal search), `git.read` (future read-only Stage 12 status/diff,
+  never commit/checkout/push), `change.propose` (future pending Stage 9
+  / Change Set proposals only, never Accept), `terminal.execute`
+  (future user-visible bounded command, no implementation yet). There
+  is deliberately no `direct-file-write`, `accept/reject/rollback`,
+  `delete/rename/move`, `raw-shell`, `arbitrary-node/fs`, or
+  `credential/provider-secret-read` capability — direct AI file-writing
+  remains architecturally impossible.
+- Modes: `deny` (forbidden), `ask` (explicit per-action human approval
+  in a later stage), `allow` (may proceed without an extra prompt but
+  still through all bounded security layers). Terminal allows only
+  `deny`/`ask`; saving `terminal.execute=allow` fails validation
+  because exact-command approval must always be required.
+- Default deny: after migration no Workspace gains any capability, no
+  opt-in initializer exists, and absent rows synthesize
+  `enabled=false` + all `deny`. Existing Ask/Work/Propose keep working
+  because they are not tool invocations.
+- Master kill switch: per-workspace `enabled` (default `false`).
+  Authorization requires enabled AND the capability decision;
+  disabled denies everything with `workspace-disabled` while preserving
+  configured modes for later re-enable.
+- Gate (`CapabilityGate.authorize`, main-internal, never in preload):
+  validates workspace/session ownership, rejects unknown capabilities,
+  denies `brain` always (`brain-has-no-tool-authority`), checks master,
+  then maps stored mode to `deny` / `requires_approval` / `allow`.
+  Local bounded DB lookup, deterministic, no side effects, no
+  filesystem, no tools. `ask` returns `requires_approval` without
+  resolving it — Stage 23+ will create action-specific requests.
+- Saves are complete-replacement in one transaction (settings + all
+  five rows); unknown/duplicate/missing/mode/terminal-allow/extra
+  fields reject; failure keeps the old config. Tables hold only
+  workspace/enabled/capability/mode/timestamps — no keys, models,
+  commands, paths, or output. No approval or audit tables yet.
+- UI: Agent Permissions with master `[ Disabled / Enabled ]`,
+  per-capability Deny/Ask/Allow (terminal Deny/Ask only), safety copy
+  that permissions never bypass Workspace security or review, terminal
+  exact-command copy, proposal review/Accept copy, explicit Save
+  permissions, disabled-master read-only selectors with preserved
+  choices, no tool/approve UI, no autosave/polling.
+- Human isolation: Explorer, Search, Git tab, human terminal, Change
+  review/Accept/Reject, Propose, Ask, Work, Heart, Looplink, Recovery
+  never consult the gate and behave exactly as before.
+
+## Read-Only Worker Tools Stage 23
+
+Stage 23 introduces the first actual Worker tools — read-only only
+(`workspace_read`, `workspace_search`, `git_read`), each gated by the
+Stage 22 CapabilityGate with concrete per-action human approval. Brain
+stays tool-free; Worker is the only tool actor. No proposal or
+terminal tools exist.
+
+- Flow per request: validate name/args → `CapabilityGate.authorize`
+  (worker) → `deny` returns a bounded denied result (counts toward
+  budget, Worker continues), `allow` executes immediately through the
+  existing bounded Stage 6/7/12 services, `ask` creates one exact
+  approval and parks the run as `waiting_for_approval` (guard released,
+  no polling, no open provider call). Approval covers one exact
+  invocation (path/query/operation); policy never mutates and no
+  session-wide grant exists.
+- Bounds: max 4 tool calls per run (allowed/denied/approval/failure
+  all count), max 5 Worker provider turns (initial + follow-ups),
+  max 7 Work provider calls (1 plan + 5 worker + 1 synthesis). One
+  tool per turn; multiples or tool+text fail with zero execution.
+  Explicit `for (turn < MAX_WORKER_TURNS)` — no `while(true)`, no
+  recursion. Results are untrusted data blocks, never instructions.
+- Tools: `workspace_read{relativePath}` reuses Stage 6 validation
+  (containment, symlink refusal, text rules) plus a 64 KiB agent cap
+  (larger fails, never truncated; revision informational only, never
+  proposal authority); `workspace_search{query}` is literal only
+  (128-codepoint query, 30 results, 32 KiB payload, secret exclusions,
+  `truncated` flag); `git_read` accepts `{status}` or
+  `{diff, staged|unstaged, relativePath|null}` and reuses the Stage 12
+  read-only service (shell:false, top-level check, caps, 64 KiB bound,
+  no mutation).
+- Approvals persist (`pending`→`approved`/`denied`/`expired`→`consumed`
+  once; denied/expired terminal) with deterministic arg JSON + SHA-256
+  (tampering fails, no execution), 15-minute lazy expiry (no timers),
+  approve/deny-and-resume by IDs only (main derives everything).
+  Denial resumes the Worker with a denied result (run may still
+  succeed). Run state (instruction, request, context, continuity,
+  history, counts, route snapshot, hashes; ≤256 KiB) makes resume
+  crash-safe with the same Worker model (no Heart re-read).
+  Restart reloads the card with no provider call; expiry fails the run.
+- Looplink stays pending while waiting and consumes only on final
+  successful completion. Tool-enabled Work disables Stage 21 auto
+  recovery after the first tool interaction (fail normally, no target);
+  pre-tool failures may still use Stage 21. New Ask/Work/Proposal in a
+  session with a pending approval is blocked with a safe message
+  (explicit state, not a held guard). Audit (`worker_tool_events` +
+  per-turn `worker`/`worker_followup` model rows) survives restart
+  with no secrets or provider-native IDs.
 
 ## Current status
 
@@ -562,4 +915,12 @@ before send, and history shows exactly which items traveled.
 - [x] Persistent coding sessions: workspace-scoped SQLite sessions + append-only user messages, explicit New session, deterministic first-message titles, 50-session / 100-message paging, 64 KiB limit, local-only with no AI provider yet (schema v4 → v5 keeps session tables)
 - [x] AI provider foundation: OpenAI-only adapter (Responses API, store:false, 4096 tokens, explicit context only), safeStorage-encrypted key persistence with fail-closed platforms, one selected model, explicit discovery/test, real assistant replies in Sessions with Retry (schema v5 → v6 keeps provider tables)
 - [x] Explicit bounded project context: user-attached excerpts/whole-file/search-match/notes with visible removable chips, main-side re-resolution, 20-item/32 KiB/200 KiB bounds, deterministic provider blocks, persisted per-message history (schema v6)
+- [x] AI-proposed single-file changes: Ask vs Propose change composer modes, one whole-file attachment, Responses Structured Outputs, full-file replacement into a pending Change Transaction, human Accept required, no AI disk writes
+- [x] Persistent multi-file AI Change Sets: 2–5 whole-file targets with temporary target IDs (model cannot choose paths), one structured call, one pending Stage 9 transaction per changed file in a single atomic aggregate, grouped review with per-file Accept/Reject/Rollback, no Accept All, no group filesystem atomicity claim (schema v6 → v7 adds change sets)
+- [x] STARK Brain orchestration: Ask/Work/Propose composer modes, bounded Brain → optional Worker → Brain synthesis (max 3 provider calls, no loops/retries/tools), same selected model for both roles, persisted runs with ordered steps and atomic final completion, crash-interrupted recovery, shared per-session AI guard (schema v7 → v8 adds orchestration runs)
+- [x] HEART model routing: Brain assignment plus Fixed/Auto-Swap Worker modes over general/coding/reasoning/fast profiles, deterministic local resolution with zero AI calls, per-run routing snapshot, per-step model audit, atomic config saves, legacy-compat initialization without global mutation (schema v8 → v9 adds Heart tables)
+- [x] Looplink continuity: explicit same-Workspace continuation into a new Session with an immutable bounded snapshot (messages, sent context, orchestration and change metadata, SHA-256 verified), zero provider calls to create/read/dismiss, one-time atomic consumption by first successful Ask/Work, historical code never becomes proposal authority (schema v9 → v10 adds handoffs)
+- [x] Continuity Recovery: bounded single-hop Ask/Work failover on six recoverable provider/model categories only, off/handoff/auto_once (default off), explicit Ask/Brain/Worker recovery assignments, Ask ≤2 and Work ≤6 total calls, one Looplink target + one event + one attempt then STOP, whole-Work restart, atomic target and completion transactions, route audit, crash-interrupted with no resume, no global mutation, no proposal recovery (schema v10 → v11 adds recovery tables)
+- [x] Workspace capabilities: persistent default-deny permission boundary for future Worker tools — five main-owned capabilities (`workspace.read`, `workspace.search`, `git.read`, `change.propose`, `terminal.execute`), Deny/Ask/Allow with terminal never persistent Allow, workspace master kill switch (default disabled, preserves modes), Brain always denied, deterministic local gate with session ownership, complete-replacement atomic saves, no approval/audit rows yet, existing human Explorer/Search/Git/Terminal/Propose/Ask/Work/Heart/Looplink/Recovery unchanged, zero tools executed, zero provider calls (schema v11 → v12 adds capability tables)
+- [x] Read-only Worker tools: first actual Worker tools (`workspace_read`, `workspace_search`, `git_read`) gated by CapabilityGate with exact per-action approval (pending/approved/denied/expired/consumed, 15-min lazy expiry, hash-verified single-use), max 4 tools and 5 Worker turns per run (max 7 provider calls: 1 plan + 5 worker + 1 synthesis), explicit bounded for-loop, Brain tool-free, guard released while waiting with pending-block on new ops, restart-safe persisted state (256 KiB, same Worker route), Looplink consumed only on final success, tool-enabled recovery disabled after first tool, no terminal/proposal tools, tool data never authority (schema v12 → v13 adds approval/event/state tables)
 - [ ] Agent orchestration, model routing, auth, Supabase — later stages

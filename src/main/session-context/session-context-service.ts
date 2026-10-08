@@ -1,11 +1,14 @@
 import { TextEncoder } from 'node:util'
 import type {
+  FileSessionContextDraft,
+  ManualNoteSessionContextDraft,
   SessionContextDraft,
   SessionContextKind
 } from '../../shared/context/types'
 import type { NewMessageContext } from '../database/repositories/coding-session-repository'
 import type { WorkspaceFilesService } from '../workspace-files/workspace-files-service'
 import type { WorkspaceRepository } from '../database/repositories/workspace-repository'
+import { isValidRevision } from '../workspace-files/file-revision'
 import {
   FileTooLargeError,
   UnsupportedFileError,
@@ -20,6 +23,7 @@ import {
   ContextItemTooLargeError,
   InvalidContextRangeError,
   InvalidContextRequestError,
+  StaleContextError,
   TooManyContextItemsError,
   TotalContextTooLargeError,
   UnsupportedContextFileError
@@ -59,6 +63,29 @@ function countCodePoints(value: string): number {
 }
 
 const VALID_KINDS: readonly SessionContextKind[] = ['file-excerpt', 'whole-file', 'search-match', 'manual-note']
+
+const FILE_ATTACHMENT_KEYS: readonly string[] = [
+  'draftId',
+  'kind',
+  'label',
+  'relativePath',
+  'lineStart',
+  'lineEnd',
+  'content',
+  'contentBytes',
+  'sourceRevision'
+]
+
+const NOTE_ATTACHMENT_KEYS: readonly string[] = [
+  'draftId',
+  'kind',
+  'label',
+  'relativePath',
+  'lineStart',
+  'lineEnd',
+  'content',
+  'contentBytes'
+]
 
 function isValidLineNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1
@@ -115,15 +142,19 @@ function mapFileReadError(error: unknown): never {
 }
 
 /**
- * Explicit project-context domain service (Stage 15).
+ * Explicit project-context domain service (Stage 15, pinned in 15B).
  *
  * Prepare methods read workspace files through the existing trusted
- * Stage 6 flow and return preview drafts. At send time every
- * file-based draft is re-resolved from disk, so renderer-supplied
- * file content is never trusted; only manual-note text originates
- * from the renderer (validated like message text). No network, no
- * provider, no AI concerns here — formatting for the provider is a
- * pure function (`formatProviderContext`).
+ * Stage 6 flow and return preview drafts pinned to the exact on-disk
+ * SHA-256 revision (Stage 8 mechanism). At send time every file-based
+ * draft is re-read and its current revision compared against the
+ * reviewed `sourceRevision`: a mismatch fails the whole send with a
+ * controlled stale-context error — never a silent substitution, never
+ * a partial persist. Renderer-supplied file content is preview-only
+ * and never trusted; only manual-note text originates from the
+ * renderer (validated like message text). No network, no provider, no
+ * AI concerns here — formatting for the provider is a pure function
+ * (`formatProviderContext`).
  */
 export class SessionContextService {
   private draftCounter = 0
@@ -144,27 +175,31 @@ export class SessionContextService {
     }
   }
 
-  private async readFileText(workspaceId: number, relativePath: unknown): Promise<{ content: string; path: string }> {
+  private async readFileText(
+    workspaceId: number,
+    relativePath: unknown
+  ): Promise<{ content: string; path: string; revision: string }> {
     if (typeof relativePath !== 'string') {
       throw new InvalidContextRequestError('context file reference is invalid')
     }
     this.requireWorkspace(workspaceId)
     try {
       const file = await this.files.readTextFile({ workspaceId, relativePath })
-      return { content: file.content, path: file.relativePath }
+      return { content: file.content, path: file.relativePath, revision: file.revision }
     } catch (error) {
       return mapFileReadError(error)
     }
   }
 
-  private makeDraft(
-    kind: SessionContextKind,
+  private makeFileDraft(
+    kind: FileSessionContextDraft['kind'],
     label: string,
-    relativePath: string | null,
-    lineStart: number | null,
-    lineEnd: number | null,
-    content: string
-  ): SessionContextDraft {
+    relativePath: string,
+    lineStart: number,
+    lineEnd: number,
+    content: string,
+    sourceRevision: string
+  ): FileSessionContextDraft {
     return {
       draftId: this.nextDraftId(),
       kind,
@@ -172,6 +207,20 @@ export class SessionContextService {
       relativePath,
       lineStart,
       lineEnd,
+      content,
+      contentBytes: enforceItemBytes(content),
+      sourceRevision
+    }
+  }
+
+  private makeNoteDraft(label: string, content: string): ManualNoteSessionContextDraft {
+    return {
+      draftId: this.nextDraftId(),
+      kind: 'manual-note',
+      label,
+      relativePath: null,
+      lineStart: null,
+      lineEnd: null,
       content,
       contentBytes: enforceItemBytes(content)
     }
@@ -190,16 +239,17 @@ export class SessionContextService {
     if (!isValidLineNumber(lineStart) || !isValidLineNumber(lineEnd) || (lineEnd as number) < (lineStart as number)) {
       throw new InvalidContextRangeError()
     }
-    const { content, path } = await this.readFileText(workspaceId, relativePath)
+    const { content, path, revision } = await this.readFileText(workspaceId, relativePath)
     const lines = sliceLines(content, lineStart as number, lineEnd as number)
     const actualEnd = Math.min(lineEnd as number, splitLines(content).length)
-    return this.makeDraft(
+    return this.makeFileDraft(
       'file-excerpt',
       `${path} · lines ${String(lineStart)}–${String(actualEnd)}`,
       path,
       lineStart as number,
       actualEnd,
-      joinLines(lines)
+      joinLines(lines),
+      revision
     )
   }
 
@@ -213,9 +263,9 @@ export class SessionContextService {
     if (!isValidId(workspaceId)) {
       throw new InvalidContextRequestError('workspace reference is invalid')
     }
-    const { content, path } = await this.readFileText(workspaceId, relativePath)
+    const { content, path, revision } = await this.readFileText(workspaceId, relativePath)
     const lineCount = splitLines(content).length
-    return this.makeDraft('whole-file', `${path} · whole file`, path, 1, lineCount, content)
+    return this.makeFileDraft('whole-file', `${path} · whole file`, path, 1, lineCount, content, revision)
   }
 
   /** Prepares the excerpt window around one search-match line. */
@@ -231,15 +281,16 @@ export class SessionContextService {
     if (!isValidLineNumber(line)) {
       throw new InvalidContextRangeError()
     }
-    const { content, path } = await this.readFileText(workspaceId, relativePath)
+    const { content, path, revision } = await this.readFileText(workspaceId, relativePath)
     const window = windowAroundLine(content, line as number, SEARCH_MATCH_CONTEXT_RADIUS)
-    return this.makeDraft(
+    return this.makeFileDraft(
       'search-match',
       `${path} · line ${String(line)}`,
       path,
       window.lineStart,
       window.lineEnd,
-      joinLines(window.lines)
+      joinLines(window.lines),
+      revision
     )
   }
 
@@ -267,14 +318,17 @@ export class SessionContextService {
       throw new ContextItemTooLargeError()
     }
     const finalLabel = label === undefined ? 'Manual note' : validateContextLabel(label, 'Manual note')
-    return this.makeDraft('manual-note', finalLabel, null, null, null, validated)
+    return this.makeNoteDraft(finalLabel, validated)
   }
 
   /**
-   * Resolves send-time attachments into persistable rows. File-based
-   * drafts are re-read from disk (fresh snapshot wins; vanished files
-   * fail the send); manual-note content is re-validated. Enforces
-   * count and total byte budgets — never truncates silently.
+   * Resolves send-time attachments into persistable rows. Every
+   * file-based draft is re-read from disk and its current SHA-256
+   * compared against the reviewed `sourceRevision`; any mismatch
+   * fails the entire send with `StaleContextError` before anything
+   * is persisted. Vanished files fail the send; manual-note content
+   * is re-validated. Enforces count and total byte budgets — never
+   * truncates silently.
    */
   async resolveAttachmentsForSend(
     workspaceId: number,
@@ -305,16 +359,19 @@ export class SessionContextService {
   }
 
   private async resolveOneAttachment(workspaceId: number, draft: unknown, now: number): Promise<NewMessageContext> {
-    if (!hasStrictShape(draft, ['draftId', 'kind', 'label', 'relativePath', 'lineStart', 'lineEnd', 'content', 'contentBytes'])) {
+    if (typeof draft !== 'object' || draft === null || Array.isArray(draft)) {
       throw new InvalidContextRequestError('context attachment is invalid')
     }
-    const record = draft as Record<string, unknown>
-    const kind = record['kind']
+    const kind = (draft as Record<string, unknown>)['kind']
     if (typeof kind !== 'string' || !VALID_KINDS.includes(kind as SessionContextDraft['kind'])) {
       throw new InvalidContextRequestError('context attachment kind is invalid')
     }
     const contextKind = kind as SessionContextDraft['kind']
     if (contextKind === 'manual-note') {
+      if (!hasStrictShape(draft, NOTE_ATTACHMENT_KEYS)) {
+        throw new InvalidContextRequestError('context attachment is invalid')
+      }
+      const record = draft as Record<string, unknown>
       let validated: string
       try {
         validated = validateUserMessageContent(record['content'])
@@ -331,13 +388,25 @@ export class SessionContextService {
       const bytes = enforceItemBytes(validated)
       return { kind: contextKind, label, relativePath: null, lineStart: null, lineEnd: null, content: validated, contentBytes: bytes, createdAt: now }
     }
-    // File-based items: re-resolve from disk; submitted content is
-    // preview-only and never trusted.
+    // File-based items: main authority is workspaceId + relativePath +
+    // range + sourceRevision. Submitted preview content/contentBytes are
+    // display-only and never trusted.
+    if (!hasStrictShape(draft, FILE_ATTACHMENT_KEYS)) {
+      throw new InvalidContextRequestError('context attachment is invalid')
+    }
+    const record = draft as Record<string, unknown>
+    const sourceRevision = record['sourceRevision']
+    if (!isValidRevision(sourceRevision)) {
+      throw new InvalidContextRequestError('context attachment is invalid')
+    }
     const relativePath = record['relativePath']
     if (typeof relativePath !== 'string') {
       throw new InvalidContextRequestError('context file reference is invalid')
     }
-    const { content, path } = await this.readFileText(workspaceId, relativePath)
+    const { content, path, revision: currentRevision } = await this.readFileText(workspaceId, relativePath)
+    if (currentRevision !== sourceRevision) {
+      throw new StaleContextError()
+    }
     if (kind === 'whole-file') {
       const label = validateContextLabel(record['label'], `${path} · whole file`)
       const bytes = enforceItemBytes(content)
@@ -357,25 +426,18 @@ export class SessionContextService {
     if (!isValidLineNumber(lineStart) || !isValidLineNumber(lineEnd) || (lineEnd as number) < (lineStart as number)) {
       throw new InvalidContextRangeError()
     }
-    if (kind === 'search-match') {
-      const window = windowAroundLine(content, lineStart as number, SEARCH_MATCH_CONTEXT_RADIUS)
-      const label = validateContextLabel(record['label'], `${path} · line ${String(lineStart)}`)
-      const joined = joinLines(window.lines)
-      const bytes = enforceItemBytes(joined)
-      return {
-        kind: contextKind,
-        label,
-        relativePath: path,
-        lineStart: window.lineStart,
-        lineEnd: window.lineEnd,
-        content: joined,
-        contentBytes: bytes,
-        createdAt: now
-      }
-    }
+    // Both excerpt and search-match reconstruct by slicing the validated
+    // original range from the revision-pinned bytes. Because the revision
+    // matches, this must equal what the user reviewed. Search-match must
+    // NOT recompute a ±3 window around a new anchor — the stored
+    // lineStart/lineEnd already are the reviewed window.
     const lines = sliceLines(content, lineStart as number, lineEnd as number)
     const actualEnd = Math.min(lineEnd as number, splitLines(content).length)
-    const label = validateContextLabel(record['label'], `${path} · lines ${String(lineStart)}–${String(actualEnd)}`)
+    const fallback =
+      kind === 'search-match'
+        ? `${path} · line ${String(lineStart)}`
+        : `${path} · lines ${String(lineStart)}–${String(actualEnd)}`
+    const label = validateContextLabel(record['label'], fallback)
     const joined = joinLines(lines)
     const bytes = enforceItemBytes(joined)
     return {

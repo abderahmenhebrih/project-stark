@@ -40,7 +40,7 @@ const MAIN_TIMEOUT = 'The AI provider request timed out. Try again.'
 const MAIN_NETWORK = 'The AI provider could not be reached. Check your connection.'
 const MAIN_MODEL_UNAVAILABLE = 'The selected model is not available. Choose another model.'
 const MAIN_MODEL_MISSING = 'No AI model is selected yet.'
-const MAIN_IN_FLIGHT = 'A response is already being generated.'
+const MAIN_IN_FLIGHT = 'STARK is already generating a response for this session.'
 const MAIN_NOTHING_TO_ANSWER = 'There is no new message for STARK to answer.'
 const MAIN_GENERIC = 'We couldn’t get a response from the AI provider.'
 

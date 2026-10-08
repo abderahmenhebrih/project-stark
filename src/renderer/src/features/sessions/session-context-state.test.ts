@@ -16,7 +16,8 @@ function makeDraft(draftId: string, label = 'a.ts · lines 1–2'): SessionConte
     lineStart: 1,
     lineEnd: 2,
     content: 'const a = 1\n',
-    contentBytes: 12
+    contentBytes: 12,
+    sourceRevision: 'a'.repeat(64)
   }
 }
 

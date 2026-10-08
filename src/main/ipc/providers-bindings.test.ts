@@ -277,7 +277,12 @@ describe('AI provider IPC bindings', () => {
       const aiBindings = createAiBindings(services.aiCompletionService)
       const generate = aiBindings.find((binding) => binding.channel === 'stark:ai:generate-response')
       assert.ok(generate !== undefined)
-      const result = (await generate.invoke({ workspaceId: workspace.id, sessionId: session.id })) as {
+      const raw = (await generate.invoke({ workspaceId: workspace.id, sessionId: session.id })) as {
+        kind?: string
+        result?: { message: { role: string; content: string } }
+        message?: { role: string; content: string }
+      }
+      const result = raw.kind === 'completed' && raw.result !== undefined ? raw.result : raw as {
         message: { role: string; content: string }
       }
       assert.equal(result.message.role, 'assistant')

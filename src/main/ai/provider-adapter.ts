@@ -30,6 +30,46 @@ export interface ProviderGenerateResult {
 }
 
 /**
+ * Provider-neutral structured-generation request (Stage 16).
+ * Main-process-owned JSON schema only — never renderer supplied.
+ * No tools, no URLs, no conversations.
+ */
+export interface ProviderStructuredRequest {
+  readonly model: string
+  readonly instructions: string
+  readonly messages: readonly ProviderContextMessage[]
+  readonly maxOutputTokens: number
+  readonly schemaName: string
+  readonly schema: unknown
+}
+
+/** Provider-neutral structured result: the raw JSON envelope text. */
+export interface ProviderStructuredResult {
+  readonly outputText: string
+}
+
+/** One tool schema advertised to the Worker (main-owned, never renderer). */
+export interface ProviderWorkerToolSchema {
+  readonly name: string
+  readonly description: string
+  readonly parameters: unknown
+}
+
+/** Worker-turn request: bounded messages plus advertised tool schemas. */
+export interface ProviderWorkerTurnRequest {
+  readonly model: string
+  readonly instructions: string
+  readonly messages: readonly ProviderContextMessage[]
+  readonly maxOutputTokens: number
+  readonly tools: readonly ProviderWorkerToolSchema[]
+}
+
+/** Normalized Worker-turn result: exactly one tool request or final text. */
+export type ProviderWorkerTurnResult =
+  | { readonly kind: 'tool_request'; readonly tool: string; readonly args: unknown }
+  | { readonly kind: 'final_text'; readonly text: string }
+
+/**
  * Safe, secret-free outcome of one diagnostic transport path.
  * Statuses and booleans only — never bodies, headers, or keys.
  * TEMPORARY Stage 14C diagnostic shape; remove after root cause is found.
@@ -61,6 +101,28 @@ export interface AiProviderAdapter {
   readonly displayName: string
   listModels(apiKey: string): Promise<readonly ProviderModel[]>
   generateText(request: ProviderGenerateRequest & { readonly apiKey: string }): Promise<ProviderGenerateResult>
+  /**
+   * Structured generation seam (Stage 16). Adapters without it are
+   * treated as structured-output unsupported — the caller maps that
+   * to safe copy with no fallback request. Implemented by OpenAI via
+   * Responses Structured Outputs (`text.format` json_schema strict).
+   */
+  generateStructured?(
+    request: ProviderStructuredRequest & { readonly apiKey: string }
+  ): Promise<ProviderStructuredResult>
+  /**
+   * Bounded Worker-turn seam (Stage 23): one Worker model turn with
+   * advertised read-only tool schemas. Returns exactly one normalized
+   * tool request or final text — never both, never multiples. Only
+   * the Worker path may call this; Brain plan/synthesis, Ask, and
+   * Propose must never reference tools. Adapters without it are
+   * treated as tools-unsupported (no fallback). Tests implement it
+   * with deterministic fakes; production may fall back to structured
+   * JSON where native function calling is unavailable.
+   */
+  generateWorkerTurn?(
+    request: ProviderWorkerTurnRequest & { readonly apiKey: string }
+  ): Promise<ProviderWorkerTurnResult>
   /**
    * TEMPORARY Stage 14C diagnostic hook (dev-only, caller-gated).
    * Adapters without it fall back to the normal single-path flow.

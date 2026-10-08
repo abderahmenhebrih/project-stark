@@ -14,6 +14,10 @@ describe('context error boundary', () => {
       ],
       ['This file is no longer available.', 'This file is no longer available.'],
       ['The selected line range is invalid.', 'The selected line range is invalid.'],
+      [
+        'This attached context changed on disk. Reattach it before sending.',
+        'This attached context changed on disk. Reattach it before sending.'
+      ],
       ['We couldn’t attach this context.', 'We couldn’t attach this context.']
     ]
     for (const [transported, expected] of cases) {

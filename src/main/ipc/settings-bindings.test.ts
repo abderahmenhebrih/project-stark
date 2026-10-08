@@ -2,11 +2,14 @@ import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, it } from 'node:test'
 import { ChangeTransactionService } from '../change-transactions/change-transaction-service'
+import { ChangeSetService } from '../change-sets/change-set-service'
 import { runMigrations, migrations } from '../database/migrations/index'
+import { ChangeSetRepository } from '../database/repositories/change-set-repository'
 import { ChangeTransactionRepository } from '../database/repositories/change-transaction-repository'
 import { AiProviderRepository } from '../database/repositories/ai-provider-repository'
 import { CodingSessionRepository } from '../database/repositories/coding-session-repository'
 import { KeyValueRepository } from '../database/repositories/key-value-repository'
+import { OrchestrationRepository } from '../database/repositories/orchestration-repository'
 import { WorkspaceRepository } from '../database/repositories/workspace-repository'
 import { ProfileService } from '../profile/profile-service'
 import { SettingsService } from '../settings/settings-service'
@@ -16,7 +19,12 @@ import { WorkspaceSearchService } from '../workspace-search/workspace-search-ser
 import { WorkspaceService } from '../workspace/workspace-service'
 import { GitProcessRunner } from '../git/git-process-runner'
 import { GitService } from '../git/git-service'
+import { AiBrainService } from '../ai/ai-brain-service'
+import { AiCodeProposalService } from '../ai/ai-code-proposal-service'
+import { AiMultiFileProposalService } from '../ai/ai-multi-file-proposal-service'
 import { AiCompletionService } from '../ai/ai-completion-service'
+import { HeartRepository } from '../heart/heart-repository'
+import { HeartService } from '../heart/heart-service'
 import { AiProviderService } from '../ai/ai-provider-service'
 import type { CredentialProtector } from '../ai/credential-protector'
 import { OpenAiProviderAdapter } from '../ai/openai-adapter'
@@ -43,6 +51,10 @@ function openService(): {
   sessionContext: SessionContextService
   aiProviders: AiProviderService
   aiCompletion: AiCompletionService
+  aiCodeProposal: AiCodeProposalService
+  aiMultiProposal: AiMultiFileProposalService
+  changeSets: ChangeSetService
+  aiBrain: AiBrainService
 } {
   const db = new DatabaseSync(':memory:')
   runMigrations(db, migrations)
@@ -62,6 +74,9 @@ function openService(): {
     })
   )
   const aiProviders = new AiProviderService(aiProviderRows, new FakeSurfaceProtector(), registry)
+  const changeSetRows = new ChangeSetRepository(db)
+  const orchestrationRows = new OrchestrationRepository(db)
+  const changeSets = new ChangeSetService(workspaces, changeSetRows, changeTransactions)
   return {
     db,
     service: new SettingsService(repository),
@@ -76,7 +91,30 @@ function openService(): {
     sessions: new CodingSessionService(workspaces, codingSessions),
     sessionContext: new SessionContextService(workspaces, filesService),
     aiProviders,
-    aiCompletion: new AiCompletionService(workspaces, codingSessions, aiProviderRows, aiProviders, registry)
+    aiCompletion: new AiCompletionService(workspaces, codingSessions, aiProviderRows, aiProviders, registry),
+    aiCodeProposal: new AiCodeProposalService(
+      workspaces,
+      codingSessions,
+      aiProviderRows,
+      aiProviders,
+      registry,
+      filesService,
+      new ChangeTransactionService(workspaces, changeTransactions, fileWrites)
+    ),
+    aiMultiProposal: new AiMultiFileProposalService(
+      workspaces,
+      codingSessions,
+      aiProviderRows,
+      aiProviders,
+      registry,
+      filesService,
+      changeSets
+    ),
+    changeSets,
+    aiBrain: (() => {
+      const heart = new HeartService(new HeartRepository(db), aiProviderRows, registry)
+      return new AiBrainService(workspaces, codingSessions, aiProviders, orchestrationRows, heart)
+    })()
   }
 }
 
@@ -97,6 +135,13 @@ const EXPECTED_CHANNELS = ['stark:settings:get', 'stark:settings:reset', 'stark:
 
 const EXPECTED_ALL_CHANNELS = [
   'stark:ai:generate-response',
+  'stark:ai:propose-change-set',
+  'stark:ai:propose-file-change',
+  'stark:ai:run-brain',
+  'stark:change-sets:get',
+  'stark:change-sets:list-recent',
+  'stark:orchestration:get',
+  'stark:orchestration:list-recent',
   'stark:changes:accept',
   'stark:changes:create',
   'stark:changes:get',
@@ -156,7 +201,7 @@ describe('settings IPC bindings', () => {
   })
 
   it('the full IPC surface contains no arbitrary channels', () => {
-    const { db, service, profile, workspace, files, fileWrites, search, changes, terminal, git, sessions, sessionContext, aiProviders, aiCompletion } = openService()
+    const { db, service, profile, workspace, files, fileWrites, search, changes, terminal, git, sessions, sessionContext, aiProviders, aiCompletion, aiCodeProposal, aiMultiProposal, changeSets, aiBrain } = openService()
     try {
       const terminalManager = new TerminalManager(
         {
@@ -180,9 +225,13 @@ describe('settings IPC bindings', () => {
         codingSessionService: sessions,
         sessionContextService: sessionContext,
         aiProviderService: aiProviders,
-        aiCompletionService: aiCompletion
+        aiCompletionService: aiCompletion,
+        aiCodeProposalService: aiCodeProposal,
+        aiMultiFileProposalService: aiMultiProposal,
+        changeSetService: changeSets,
+        aiBrainService: aiBrain
       }).map((binding) => binding.channel)
-      assert.deepEqual([...channels].sort(), EXPECTED_ALL_CHANNELS)
+      assert.deepEqual([...channels].sort(), [...EXPECTED_ALL_CHANNELS].sort())
     } finally {
       db.close()
     }

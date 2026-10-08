@@ -16,10 +16,14 @@ import {
   prepareContextSearchMatch
 } from '../../lib/session-context-api'
 import { normalizeContextError } from '../../lib/session-context-error'
+import { getChangeSet, listRecentChangeSets } from '../../lib/change-sets-api'
 import { getWorkspaceFilesApi } from '../../lib/stark-api'
 import type { WorkspaceSearchMatch } from '../../../../shared/workspace-search/types'
 import type { SessionContextDraft } from '../../../../shared/context/types'
 import { ChangesPanel } from '../changes/ChangesPanel'
+import { ChangeSetPanel } from '../changes/ChangeSetPanel'
+import { ChangeSetReview } from '../changes/ChangeSetReview'
+import { changeSetPanelReducer, initialChangeSetPanelState } from '../changes/change-set-state'
 import { TransactionReview } from '../changes/TransactionReview'
 import { changesReducer, initialChangesState } from '../changes/changes-state'
 import { CodeEditor, type EditorSelection } from '../editor/CodeEditor'
@@ -139,6 +143,21 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile }: TreeNod
 interface ExplorerProps {
   readonly workspaceId: number
   readonly contextDraftsDispatch: Dispatch<SessionContextDraftAction>
+  /** Stage 16 review handoff: when set, open this transaction's existing review. */
+  readonly externalReviewTransactionId?: number | null
+  /** Stage 17 review handoff: when set, open this change set's grouped review. */
+  readonly externalReviewChangeSetId?: number | null
+}
+
+function toChangeSetsError(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message !== '') {
+    for (const known of ['We couldn’t load change sets.', 'That change set is no longer available.']) {
+      if (error.message.includes(known)) {
+        return known
+      }
+    }
+  }
+  return fallback
 }
 
 function toReadError(error: unknown): string {
@@ -169,7 +188,7 @@ function toReadError(error: unknown): string {
  * workspace are ignored, and switching workspaces resets tree,
  * preview, search, editor, change review, and Git diff.
  */
-export function Explorer({ workspaceId, contextDraftsDispatch }: ExplorerProps): ReactElement {
+export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTransactionId = null, externalReviewChangeSetId = null }: ExplorerProps): ReactElement {
   const [state, dispatch] = useReducer(explorerReducer, workspaceId, (id) => ({
     ...initialExplorerState(),
     workspaceId: id
@@ -184,6 +203,10 @@ export function Explorer({ workspaceId, contextDraftsDispatch }: ExplorerProps):
   const [editorSelection, setEditorSelection] = useState<EditorSelection | null>(null)
   const [changes, changesDispatch] = useReducer(changesReducer, workspaceId, (id) => ({
     ...initialChangesState(),
+    workspaceId: id
+  }))
+  const [changeSets, changeSetsDispatch] = useReducer(changeSetPanelReducer, workspaceId, (id) => ({
+    ...initialChangeSetPanelState(),
     workspaceId: id
   }))
   const [gitDiff, gitDiffDispatch] = useReducer(gitDiffReducer, workspaceId, (id) => ({
@@ -243,16 +266,75 @@ export function Explorer({ workspaceId, contextDraftsDispatch }: ExplorerProps):
     }
   }, [workspaceId])
 
+  const refreshChangeSets = useCallback(async (): Promise<void> => {
+    const targetWorkspaceId = workspaceId
+    changeSetsDispatch({ type: 'sets-loading' })
+    try {
+      const sets = await listRecentChangeSets({ workspaceId: targetWorkspaceId })
+      changeSetsDispatch({ type: 'sets-loaded', workspaceId: targetWorkspaceId, sets })
+    } catch (error: unknown) {
+      changeSetsDispatch({ type: 'sets-failed', message: toChangeSetsError(error, 'We couldn’t load change sets.') })
+    }
+  }, [workspaceId])
+
   useEffect(() => {
     changesDispatch({ type: 'workspace-changed', workspaceId })
     changesDispatch({ type: 'history-loading' })
     void refreshHistory()
-  }, [workspaceId, refreshHistory])
+    changeSetsDispatch({ type: 'workspace-changed', workspaceId })
+    void refreshChangeSets()
+  }, [workspaceId, refreshHistory, refreshChangeSets])
 
   useEffect(() => {
     gitDiffDispatch({ type: 'workspace-changed', workspaceId })
     gitDiffRequestRef.current = 0
   }, [workspaceId])
+
+  // Stage 16 review handoff: open the newly proposed transaction in the
+  // existing review + DiffEditor and refresh history. Consumed once per
+  // id; null clears nothing. Tab switch here is a one-shot external
+  // navigation request, not derived state.
+  useEffect(() => {
+    if (externalReviewTransactionId === null) {
+      return
+    }
+    const transactionId = externalReviewTransactionId
+    // One-shot external navigation: the Session panel requested review
+    // of a newly created proposal transaction.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setTab('changes')
+    changesDispatch({ type: 'review-loading', transactionId })
+    getChangeTransaction({ transactionId }).then(
+      (transaction) =>
+        changesDispatch({ type: 'review-loaded', workspaceId: transaction.workspaceId, transaction }),
+      (error: unknown) =>
+        changesDispatch({ type: 'review-failed', message: normalizeChangeTransactionError(error).message })
+    )
+    void refreshHistory()
+  }, [workspaceId, externalReviewTransactionId, refreshHistory])
+
+  // Stage 17 review handoff: open the newly proposed change set in the
+  // grouped review and refresh history. Consumed once per id.
+  useEffect(() => {
+    if (externalReviewChangeSetId === null) {
+      return
+    }
+    const changeSetId = externalReviewChangeSetId
+    // One-shot external navigation: the Session panel requested review
+    // of a newly created grouped proposal.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setTab('changes')
+    changesDispatch({ type: 'review-closed' })
+    changeSetsDispatch({ type: 'set-loading', changeSetId })
+    getChangeSet({ changeSetId }).then(
+      (changeSet) =>
+        changeSetsDispatch({ type: 'set-loaded', workspaceId: changeSet.workspaceId, changeSet }),
+      (error: unknown) =>
+        changeSetsDispatch({ type: 'set-failed', message: toChangeSetsError(error, 'We couldn’t load change sets.') })
+    )
+    void refreshChangeSets()
+    void refreshHistory()
+  }, [workspaceId, externalReviewChangeSetId, refreshHistory, refreshChangeSets])
 
   function handleToggle(path: string): void {
     const expanding = !state.expanded.includes(path)
@@ -471,6 +553,24 @@ export function Explorer({ workspaceId, contextDraftsDispatch }: ExplorerProps):
     )
   }
 
+  function handleSelectChangeSet(changeSetId: number): void {
+    if (!confirmDiscardUnsavedDraft()) {
+      return
+    }
+    changesDispatch({ type: 'review-closed' })
+    changeSetsDispatch({ type: 'set-loading', changeSetId })
+    getChangeSet({ changeSetId }).then(
+      (changeSet) =>
+        changeSetsDispatch({ type: 'set-loaded', workspaceId: changeSet.workspaceId, changeSet }),
+      (error: unknown) =>
+        changeSetsDispatch({ type: 'set-failed', message: toChangeSetsError(error, 'We couldn’t load change sets.') })
+    )
+  }
+
+  function handleCloseChangeSet(): void {
+    changeSetsDispatch({ type: 'set-closed' })
+  }
+
   function handleCloseReview(): void {
     changesDispatch({ type: 'review-closed' })
   }
@@ -495,6 +595,7 @@ export function Explorer({ workspaceId, contextDraftsDispatch }: ExplorerProps):
       }
       changesDispatch({ type: 'action-succeeded', transaction, notice: 'Change applied' })
       void refreshHistory()
+      void refreshChangeSets()
     } catch (error: unknown) {
       changesDispatch({ type: 'action-failed', message: normalizeChangeTransactionError(error).message })
     }
@@ -529,6 +630,7 @@ export function Explorer({ workspaceId, contextDraftsDispatch }: ExplorerProps):
       }
       changesDispatch({ type: 'action-succeeded', transaction, notice: null })
       void refreshHistory()
+      void refreshChangeSets()
     } catch (error: unknown) {
       changesDispatch({ type: 'action-failed', message: normalizeChangeTransactionError(error).message })
     }
@@ -554,6 +656,7 @@ export function Explorer({ workspaceId, contextDraftsDispatch }: ExplorerProps):
       }
       changesDispatch({ type: 'action-succeeded', transaction, notice: 'Change rolled back' })
       void refreshHistory()
+      void refreshChangeSets()
     } catch (error: unknown) {
       changesDispatch({ type: 'action-failed', message: normalizeChangeTransactionError(error).message })
     }
@@ -628,13 +731,22 @@ export function Explorer({ workspaceId, contextDraftsDispatch }: ExplorerProps):
               onOpenFile={handleOpenGitFile}
             />
           ) : (
-            <ChangesPanel
-              history={changes.history}
-              loading={changes.historyLoading}
-              error={changes.historyError}
-              selectedId={changes.selectedId}
-              onSelect={handleSelectTransaction}
-            />
+            <>
+              <ChangeSetPanel
+                sets={changeSets.sets}
+                loading={changeSets.setsLoading}
+                error={changeSets.setsError}
+                selectedId={changeSets.selectedSetId}
+                onSelect={handleSelectChangeSet}
+              />
+              <ChangesPanel
+                history={changes.history}
+                loading={changes.historyLoading}
+                error={changes.historyError}
+                selectedId={changes.selectedId}
+                onSelect={handleSelectTransaction}
+              />
+            </>
           )}
         </div>
       </aside>
@@ -699,6 +811,20 @@ export function Explorer({ workspaceId, contextDraftsDispatch }: ExplorerProps):
         ) : changes.detailError !== null ? (
           <p className="explorer__error explorer__status--centered" role="alert">
             {changes.detailError}
+          </p>
+        ) : changeSets.setDetail !== null ? (
+          <ChangeSetReview
+            changeSet={changeSets.setDetail}
+            onReviewFile={handleSelectTransaction}
+            onClose={handleCloseChangeSet}
+          />
+        ) : changeSets.setDetailLoading ? (
+          <p className="explorer__status explorer__status--centered" role="status">
+            Loading change set…
+          </p>
+        ) : changeSets.setDetailError !== null ? (
+          <p className="explorer__error explorer__status--centered" role="alert">
+            {changeSets.setDetailError}
           </p>
         ) : state.preview === null ? (
           <p className="explorer__status explorer__status--centered">Select a file to open</p>

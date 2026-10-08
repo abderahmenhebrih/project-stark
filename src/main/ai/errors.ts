@@ -138,7 +138,7 @@ export class GenerationInFlightError extends AiProviderError {
   override readonly name = 'GenerationInFlightError'
 
   constructor() {
-    super('A response is already being generated.')
+    super('STARK is already generating a response for this session.')
   }
 }
 
@@ -157,6 +157,15 @@ export class ProviderModelMissingError extends AiProviderError {
 
   constructor() {
     super('No AI model is selected yet.')
+  }
+}
+
+/** The selected model cannot serve a structured-output request. */
+export class ProviderStructuredOutputUnsupportedError extends AiProviderError {
+  override readonly name = 'ProviderStructuredOutputUnsupportedError'
+
+  constructor(options?: { cause?: unknown }) {
+    super('The selected model could not create a structured code proposal. Choose another model.', options)
   }
 }
 
@@ -206,6 +215,7 @@ export function toPublicProviderError(operation: ProviderOperation, error: unkno
     error instanceof GenerationInFlightError ||
     error instanceof NothingToAnswerError ||
     error instanceof ProviderModelMissingError ||
+    error instanceof ProviderStructuredOutputUnsupportedError ||
     error instanceof UnknownProviderError
   ) {
     return new Error(error.message)

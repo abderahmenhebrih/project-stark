@@ -21,6 +21,13 @@ import type { SessionsApi } from '../sessions/types'
 import type { SessionContextApi } from '../context/types'
 import type { ProvidersApi } from '../providers/types'
 import type { AiApi } from '../ai/types'
+import type { ChangeSetsApi } from '../change-sets/types'
+import type { HeartApi } from '../heart/types'
+import type { LooplinkApi } from '../looplink/types'
+import type { RecoveryApi } from '../recovery/types'
+import type { CapabilitiesApi } from '../capabilities/types'
+import type { WorkerToolsApi } from '../worker-tools/types'
+import type { OrchestrationApi } from '../orchestration/types'
 import type { SettingsApi } from '../settings/types'
 import type { TerminalApi } from '../terminal/types'
 import type { GitApi } from '../git/types'
@@ -46,6 +53,13 @@ export interface StarkApi {
   sessionContext: SessionContextApi
   providers: ProvidersApi
   ai: AiApi
+  changeSets: ChangeSetsApi
+  orchestration: OrchestrationApi
+  heart: HeartApi
+  looplink: LooplinkApi
+  recovery: RecoveryApi
+  capabilities: CapabilitiesApi
+  workerTools: WorkerToolsApi
 }
 
 /** Lifecycle status shown by the development shell. */

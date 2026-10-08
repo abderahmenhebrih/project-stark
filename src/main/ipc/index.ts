@@ -2,7 +2,20 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { APP_NAME, IPC_CHANNELS, type IpcChannel } from '../../shared/constants'
 import { RENDERER_DEV_URL, RENDERER_ENTRY } from '../security/app-urls'
 import type { ChangeTransactionService } from '../change-transactions/change-transaction-service'
+import type { ChangeSetService } from '../change-sets/change-set-service'
+import type { HeartService } from '../heart/heart-service'
+import type { LooplinkService } from '../looplink/looplink-service'
+import type { RecoveryService } from '../recovery/recovery-service'
+import type { CapabilityService } from '../capabilities/capability-service'
+import type { WorkerToolRunner } from '../worker-tools/worker-tool-runner'
+import type { AiRecoveryCoordinator } from '../recovery/recovery-coordinator'
+import type { RecoveryRepository } from '../recovery/recovery-repository'
+import type { WorkspaceRepository } from '../database/repositories/workspace-repository'
+import type { CodingSessionRepository } from '../database/repositories/coding-session-repository'
+import type { AiBrainService } from '../ai/ai-brain-service'
+import type { AiCodeProposalService } from '../ai/ai-code-proposal-service'
 import type { AiCompletionService } from '../ai/ai-completion-service'
+import type { AiMultiFileProposalService } from '../ai/ai-multi-file-proposal-service'
 import type { AiProviderService } from '../ai/ai-provider-service'
 import type { GitService } from '../git/git-service'
 import type { CodingSessionService } from '../sessions/coding-session-service'
@@ -18,6 +31,13 @@ import type { WorkspaceSearchService } from '../workspace-search/workspace-searc
 import { getAppInfo } from '../services/app-info'
 import type { IpcBinding } from './binding'
 import { createAiBindings } from './ai'
+import { createCapabilityBindings } from './capabilities'
+import { createWorkerToolBindings } from './worker-tools'
+import { createChangeSetBindings } from './change-sets'
+import { createHeartBindings } from './heart'
+import { createLooplinkBindings } from './looplink'
+import { createRecoveryBindings } from './recovery'
+import { createOrchestrationBindings } from './orchestration'
 import { createChangeTransactionBindings } from './change-transactions'
 import { createGitBindings } from './git'
 import { createProfileBindings } from './profile'
@@ -73,6 +93,27 @@ export interface IpcDependencies {
   readonly sessionContextService: SessionContextService
   readonly aiProviderService: AiProviderService
   readonly aiCompletionService: AiCompletionService
+  /** Stage 16 proposal service. Optional in older harnesses; absent means no proposal channel. */
+  readonly aiCodeProposalService?: AiCodeProposalService
+  /** Stage 17 grouped proposals. Optional in older harnesses; absent means no change-set channels. */
+  readonly aiMultiFileProposalService?: AiMultiFileProposalService
+  readonly changeSetService?: ChangeSetService
+  /** Stage 18 Brain orchestration. Optional in older harnesses; absent means no orchestration channels. */
+  readonly aiBrainService?: AiBrainService
+  /** Stage 19 Heart routing. Optional in older harnesses; absent means no heart channels. */
+  readonly heartService?: HeartService
+  /** Stage 20 continuity. Optional in older harnesses; absent means no looplink channels. */
+  readonly looplinkService?: LooplinkService
+  /** Stage 21 recovery. Optional in older harnesses; absent means no recovery channels. */
+  readonly recoveryService?: RecoveryService
+  readonly recoveryStore?: RecoveryRepository
+  readonly recoveryCoordinator?: AiRecoveryCoordinator
+  /** Stage 22 capabilities. Optional in older harnesses; absent means no capability channels. */
+  readonly capabilityService?: CapabilityService
+  /** Stage 23 worker tools. Optional; absent means no approval channels and legacy Work. */
+  readonly workerToolRunner?: WorkerToolRunner
+  readonly workspaces?: WorkspaceRepository
+  readonly codingSessions?: CodingSessionRepository
 }
 
 /**
@@ -81,7 +122,7 @@ export interface IpcDependencies {
  * is the only place ipcMain.handle is reachable.
  */
 export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] {
-  return [
+  const bindings: IpcBinding[] = [
     ...createSettingsBindings(deps.settingsService),
     ...createProfileBindings(deps.profileService),
     ...createWorkspaceBindings(deps.workspaceService, electronDirectoryPicker),
@@ -93,8 +134,39 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
     ...createSessionBindings(deps.codingSessionService),
     ...createSessionContextBindings(deps.sessionContextService),
     ...createProviderBindings(deps.aiProviderService),
-    ...createAiBindings(deps.aiCompletionService)
+    ...createAiBindings(
+      deps.aiCompletionService,
+      deps.aiCodeProposalService,
+      deps.aiMultiFileProposalService,
+      deps.recoveryCoordinator
+    )
   ]
+  if (deps.changeSetService !== undefined) {
+    bindings.push(...createChangeSetBindings(deps.changeSetService))
+  }
+  if (deps.aiBrainService !== undefined) {
+    bindings.push(...createOrchestrationBindings(deps.aiBrainService, deps.recoveryCoordinator, deps.workerToolRunner))
+  }
+  if (deps.heartService !== undefined) {
+    bindings.push(...createHeartBindings(deps.heartService))
+  }
+  if (deps.looplinkService !== undefined) {
+    bindings.push(...createLooplinkBindings(deps.looplinkService))
+  }
+  if (deps.recoveryService !== undefined && deps.recoveryStore !== undefined) {
+    if (deps.workspaces !== undefined && deps.codingSessions !== undefined) {
+      bindings.push(
+        ...createRecoveryBindings(deps.recoveryService, deps.recoveryStore, deps.workspaces, deps.codingSessions)
+      )
+    }
+  }
+  if (deps.capabilityService !== undefined) {
+    bindings.push(...createCapabilityBindings(deps.capabilityService))
+  }
+  if (deps.workerToolRunner !== undefined) {
+    bindings.push(...createWorkerToolBindings(deps.workerToolRunner))
+  }
+  return bindings
 }
 
 /**

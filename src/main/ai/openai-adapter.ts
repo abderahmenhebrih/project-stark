@@ -5,6 +5,7 @@ import {
   type AiProviderAdapter,
   type ConnectionDiagnosis,
   type ProviderGenerateRequest,
+  type ProviderStructuredRequest,
   type SafePathDiagnosis
 } from './provider-adapter'
 import type { ProviderModel } from '../../shared/providers/types'
@@ -15,6 +16,7 @@ import {
   ProviderModelUnavailableError,
   ProviderNetworkError,
   ProviderRateLimitedError,
+  ProviderStructuredOutputUnsupportedError,
   ProviderTimeoutError
 } from './errors'
 
@@ -35,6 +37,7 @@ export interface OpenAiResponsesClient {
       input: readonly { role: 'user' | 'assistant' | 'system' | 'developer'; content: string }[]
       max_output_tokens: number
       store: boolean
+      text?: unknown
     },
     options?: { timeout?: number; maxRetries?: number }
   ): Promise<{ output_text?: string; output?: readonly unknown[] }>
@@ -155,6 +158,52 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
     } catch (error) {
       if (error instanceof ProviderEmptyResponseError) {
         throw error
+      }
+      throw classifyProviderError(error)
+    }
+  }
+
+  /**
+   * Structured generation via Responses Structured Outputs (Stage 16):
+   * exactly one attempt, `text.format` json_schema strict, `store:
+   * false`, no tools, no conversations, no `previous_response_id`.
+   * Returns the raw JSON envelope text for the caller to parse and
+   * validate. Models without structured support surface as
+   * `ProviderStructuredOutputUnsupportedError`.
+   */
+  async generateStructured(
+    request: ProviderStructuredRequest & { readonly apiKey: string }
+  ): Promise<{ outputText: string }> {
+    try {
+      const response = await this.clients(request.apiKey).responses.create(
+        {
+          model: request.model,
+          instructions: request.instructions,
+          input: request.messages.map((entry) => ({ role: entry.role, content: entry.content })),
+          max_output_tokens: request.maxOutputTokens,
+          store: false,
+          text: {
+            format: {
+              type: 'json_schema',
+              name: request.schemaName,
+              schema: request.schema,
+              strict: true
+            }
+          }
+        },
+        { timeout: AI_GENERATE_TIMEOUT_MS, maxRetries: 0 }
+      )
+      const text = extractOutputText(response)
+      if (text === null || text === '') {
+        throw new ProviderEmptyResponseError()
+      }
+      return { outputText: text }
+    } catch (error) {
+      if (error instanceof ProviderEmptyResponseError) {
+        throw error
+      }
+      if (isStructuredUnsupported(error)) {
+        throw new ProviderStructuredOutputUnsupportedError({ cause: error })
       }
       throw classifyProviderError(error)
     }
@@ -294,6 +343,24 @@ async function diagnoseNativeFetchPath(apiKey: string): Promise<SafePathDiagnosi
       contentTypeJson: false
     }
   }
+}
+
+/** Detects a model/endpoint refusal of the structured-output format (no model-name filtering). */
+function isStructuredUnsupported(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
+  const status =
+    typeof error === 'object' && error !== null && 'status' in error
+      ? (error as { status?: unknown }).status
+      : undefined
+  const markers = ['json_schema', 'json-schema', 'response_format', 'response format', 'text.format', 'structured output']
+  const mentionsFormat = markers.some((marker) => message.includes(marker))
+  if (status === 400 && mentionsFormat) {
+    return true
+  }
+  if (message.includes('structured outputs are not supported') || message.includes('unsupported value:')) {
+    return mentionsFormat || message.includes('text')
+  }
+  return false
 }
 
 async function collectAsync<T>(iterable: AsyncIterable<T>): Promise<T[]> {

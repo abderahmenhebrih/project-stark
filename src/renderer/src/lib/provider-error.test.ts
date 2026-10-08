@@ -13,7 +13,7 @@ describe('provider error boundary', () => {
       ['The AI provider could not be reached. Check your connection.', 'The AI provider could not be reached. Check your connection.'],
       ['The selected model is not available. Choose another model.', 'The selected model is not available. Choose another model.'],
       ['No AI model is selected yet.', 'No AI model is selected yet.'],
-      ['A response is already being generated.', 'A response is already being generated.'],
+      ['STARK is already generating a response for this session.', 'STARK is already generating a response for this session.'],
       ['There is no new message for STARK to answer.', 'There is no new message for STARK to answer.'],
       ['We couldn’t get a response from the AI provider.', 'We couldn’t get a response from the AI provider.']
     ]

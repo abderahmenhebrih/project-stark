@@ -85,6 +85,7 @@ export type SessionPanelAction =
   | { readonly type: 'send-succeeded'; readonly workspaceId: number; readonly session: CodingSession; readonly message: CodingMessage }
   | { readonly type: 'send-failed'; readonly workspaceId: number; readonly sessionId: number; readonly message: string }
   | { readonly type: 'send-error-dismissed' }
+  | { readonly type: 'work-completed'; readonly workspaceId: number; readonly session: CodingSession; readonly message: CodingMessage }
   | { readonly type: 'generate-started'; readonly workspaceId: number; readonly sessionId: number; readonly requestId: number }
   | {
       readonly type: 'generate-succeeded'
@@ -246,6 +247,16 @@ export function sessionPanelReducer(state: SessionPanelState, action: SessionPan
     }
     case 'send-error-dismissed':
       return { ...state, sendError: null }
+    case 'work-completed': {
+      if (state.workspaceId !== action.workspaceId || state.selectedSessionId !== action.session.id) {
+        return state
+      }
+      return {
+        ...state,
+        sessions: upsertSessionTop(state.sessions, action.session),
+        messages: [...state.messages, action.message]
+      }
+    }
     case 'generate-started': {
       if (state.workspaceId !== action.workspaceId || state.selectedSessionId !== action.sessionId) {
         return state

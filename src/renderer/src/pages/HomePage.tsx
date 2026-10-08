@@ -30,6 +30,13 @@ export function HomePage(): ReactElement {
   const activeId = active?.id ?? null
   const [sessionOpen, setSessionOpen] = useState(true)
   const [sessionWorkspace, setSessionWorkspace] = useState(activeId)
+  // Stage 16 proposal review handoff: the Session panel reports the
+  // newly created pending transaction id; the Explorer opens its
+  // existing TransactionReview + DiffEditor. Cleared on workspace
+  // switch; the Explorer consumes it once via effect.
+  const [reviewTransactionId, setReviewTransactionId] = useState<number | null>(null)
+  // Stage 17 Change Set handoff: same pattern for grouped proposals.
+  const [reviewChangeSetId, setReviewChangeSetId] = useState<number | null>(null)
   // Explicit context drafts live here so both the Explorer attach
   // actions (left/center) and the Session composer (right) share one
   // workspace-scoped list. Drafts never leave this boundary except
@@ -46,6 +53,8 @@ export function HomePage(): ReactElement {
   if (sessionWorkspace !== activeId) {
     setSessionWorkspace(activeId)
     setSessionOpen(true)
+    setReviewTransactionId(null)
+    setReviewChangeSetId(null)
   }
 
   useEffect(() => {
@@ -82,6 +91,8 @@ export function HomePage(): ReactElement {
           key={active.id}
           workspaceId={active.id}
           contextDraftsDispatch={contextDraftsDispatch}
+          externalReviewTransactionId={reviewTransactionId}
+          externalReviewChangeSetId={reviewChangeSetId}
         />
         {sessionOpen ? (
           <aside className="workbench__session" aria-label="Session panel">
@@ -92,6 +103,8 @@ export function HomePage(): ReactElement {
               contextDrafts={contextDrafts.drafts}
               contextDraftsDispatch={contextDraftsDispatch}
               contextDraftError={contextDrafts.error}
+              onReviewTransaction={(transactionId) => setReviewTransactionId(transactionId)}
+              onReviewChangeSet={(changeSetId) => setReviewChangeSetId(changeSetId)}
             />
           </aside>
         ) : (
