@@ -895,6 +895,77 @@ terminal tools exist.
   per-turn `worker`/`worker_followup` model rows) survives restart
   with no secrets or provider-native IDs.
 
+## Worker Change Proposals Stage 24
+
+Stage 24 adds exactly one Worker tool — `change_propose` (`change.propose`) —
+creating reviewable proposals only. The Worker may propose; it may never
+choose a filesystem target, write, or Accept. A valid target must come from
+a successful `workspace_read` earlier in THE SAME Worker run.
+
+- Target authority: successful `workspace_read` results expose a
+  main-generated opaque same-run `readRef` (`R1`, `R2`, … deterministic
+  per run, bounded by the four-tool budget, persisted in normalized Worker
+  state/tool audit). Main maintains `readRef → successful worker_tool_event
+  → workspace/session/run → relative path → exact revision → exact content`.
+  On restart the mapping reconstructs from persisted successful tool
+  events/state. Only `workspace_read` creates authority — `workspace_search`
+  previews, `git_read` data, denied/failed reads, and historical Looplink
+  files never do. Unknown (`R99`), duplicate (`R1` twice), cross-run,
+  cross-session, cross-workspace, search/Git refs all reject with no
+  proposal record.
+- Arguments: exactly `{changes:[{targetRef,summary,proposedContent}]}`,
+  1–5 targets (reachable count bounded further by actual reads/tool budget),
+  per-file 64 KiB (`MAX_AI_PROPOSED_FILE_BYTES`), total 192 KiB
+  (`MAX_WORKER_PROPOSAL_TOTAL_BYTES`), 300-codepoint summaries
+  (`MAX_WORKER_PROPOSAL_FILE_SUMMARY_CODEPOINTS`), UTF-8 measured, no
+  truncation, no formatting, no fence parsing, extra fields rejected. Model
+  paths in summary/content are inert text — resolution uses only the
+  `readRef` mapping through a strict main-owned decoder (tampered payloads
+  fail safely).
+- Single file → exactly one pending Stage 9 transaction via the existing
+  `ChangeTransactionService` (shared `prepare-file-change` validation:
+  existing file, ownership, symlink refusal, expected revision, Unicode/text
+  rules, stale detection). Multi (2+) → existing Stage 17 `ChangeSetService`
+  with one pending child transaction per effective changed file. Disk
+  remains unchanged; no group Apply, no Accept All. No-op items (proposed
+  equals exact read content) are dropped; all-no-op returns `no_changes`
+  with no persistence; mixed no-op with one effective file becomes an
+  ordinary single transaction. Stale reads (disk moved past the read
+  revision, including mid-approval races) fail with "The file changed after
+  STARK read it. Read it again before proposing a change." — no silent
+  re-read, no `readRef` update. Because reads require existing files, no
+  proposal can create new files.
+- Gate: every invocation authorizes `change.propose` for `worker` at
+  execution time. `deny` persists a denied event and returns
+  "Change proposals are not allowed for this Workspace." (one tool call,
+  Worker may continue). `allow` creates the pending proposal immediately
+  (no disk write). `ask` creates one exact approval and parks the run as
+  `waiting_for_approval` (no proposal yet); the approval binds targetRefs,
+  summaries, and proposedContent through deterministic JSON + SHA-256, lists
+  resolved relative paths + summaries (never bare `R1`), and states
+  "Approval creates a reviewable proposal only. It does not modify files."
+  Approval shows file count/paths/summaries (full diff stays in later
+  Transaction/ChangeSet review). Approve re-validates hash, re-resolves
+  refs, re-checks staleness, consumes exactly once, then resumes the bounded
+  Worker loop; deny returns "The user denied creation of this code proposal."
+  Expiry reuses the 15-minute lazy rule with no timers. Proposal creation
+  adds zero provider calls; budgets stay 4 tools / 5 Worker turns / 7 Work
+  calls; no retries, repair, recursion, polling, background jobs, fallback,
+  or broad kills. After ANY tool interaction Stage 21 recovery stays
+  disabled; proposals survive later synthesis failure and remain reviewable.
+- Persistence: schema stays **v13** (`worker_tool_events` result_payload
+  holds the normalized `{proposal_created|no_changes}` result with IDs only;
+  canonical proposals live in `change_transactions` / `change_sets`;
+  run details link via stored IDs to existing Transaction/ChangeSet review —
+  no new tables, no new diff viewer, no new IPC (existing
+  `get-pending-approval` / `approve-and-resume` / `deny-and-resume` only,
+  no preload execution API). Audit stores tool name, capability, bounded
+  arguments JSON (with proposed code for hash/audit), approval link, safe
+  result (no code duplication, no secrets). Worker instruction explains
+  readRef-only proposals, no-write, human-Accept-required semantics. Only
+  `allow`/`ask` advertise the schema; `deny` hides it with defense-in-depth
+  execution-time recheck. Stage 8 remains the sole disk writer.
+
 ## Current status
 
 - [x] Electron main process, preload bridge, React shell
@@ -923,4 +994,5 @@ terminal tools exist.
 - [x] Continuity Recovery: bounded single-hop Ask/Work failover on six recoverable provider/model categories only, off/handoff/auto_once (default off), explicit Ask/Brain/Worker recovery assignments, Ask ≤2 and Work ≤6 total calls, one Looplink target + one event + one attempt then STOP, whole-Work restart, atomic target and completion transactions, route audit, crash-interrupted with no resume, no global mutation, no proposal recovery (schema v10 → v11 adds recovery tables)
 - [x] Workspace capabilities: persistent default-deny permission boundary for future Worker tools — five main-owned capabilities (`workspace.read`, `workspace.search`, `git.read`, `change.propose`, `terminal.execute`), Deny/Ask/Allow with terminal never persistent Allow, workspace master kill switch (default disabled, preserves modes), Brain always denied, deterministic local gate with session ownership, complete-replacement atomic saves, no approval/audit rows yet, existing human Explorer/Search/Git/Terminal/Propose/Ask/Work/Heart/Looplink/Recovery unchanged, zero tools executed, zero provider calls (schema v11 → v12 adds capability tables)
 - [x] Read-only Worker tools: first actual Worker tools (`workspace_read`, `workspace_search`, `git_read`) gated by CapabilityGate with exact per-action approval (pending/approved/denied/expired/consumed, 15-min lazy expiry, hash-verified single-use), max 4 tools and 5 Worker turns per run (max 7 provider calls: 1 plan + 5 worker + 1 synthesis), explicit bounded for-loop, Brain tool-free, guard released while waiting with pending-block on new ops, restart-safe persisted state (256 KiB, same Worker route), Looplink consumed only on final success, tool-enabled recovery disabled after first tool, no terminal/proposal tools, tool data never authority (schema v12 → v13 adds approval/event/state tables)
+- [x] Worker change proposals: exactly one additional Worker tool (`change_propose` → `change.propose`) creating reviewable proposals only from same-run successful `workspace_read` opaque refs (`R1…`, deterministic, restart-reconstructed; search/Git/Looplink/denied/foreign refs never authority), 1–5 targets with 64 KiB per file / 192 KiB total / 300-cp summaries, single → pending Stage 9 transaction and multi → Stage 17 Change Set via existing services (shared validation, stale protection, no-op dropping, disk unchanged, no creation, no Accept), Ask gives exact proposal-creation approval (paths + summaries + non-apply copy, hash-bound single-use, 15-min lazy expiry, stale rechecked on resume), zero new provider calls with 4-tool / 5-turn / 7-call bounds intact, proposals survive later run failure with recovery disabled after tools, existing Changes/Transaction/ChangeSet review reused, no new IPC/tables (schema stays v13)
 - [ ] Agent orchestration, model routing, auth, Supabase — later stages

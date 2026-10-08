@@ -275,7 +275,9 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
           files: workspaceFilesService,
           search: new WorkspaceSearchService(deps.workspaces),
           git: gitService,
-          tools: workerToolStore
+          tools: workerToolStore,
+          transactions: changeTransactionService,
+          changeSets: changeSetService
         })
   // Stage 23 tool-enabled Work runner: built only when Heart, gate,
   // files/search/git, and worker-tool storage are all present.

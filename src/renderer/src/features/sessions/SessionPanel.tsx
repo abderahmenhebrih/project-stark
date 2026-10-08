@@ -1420,13 +1420,15 @@ export function SessionPanel({
       {pendingApproval !== null && (
         <div className="session__recovery" aria-label="Worker approval">
           <p className="session__status" role="status">
-            STARK Worker needs permission
+            {pendingApproval.toolName === 'change_propose' ? 'Worker wants to create a reviewable proposal.' : 'STARK Worker needs permission'}
           </p>
           <p className="session__hint" role="note">
             {pendingApproval.summary}
           </p>
           <p className="session__hint" role="note">
-            This approval applies only to this exact action.
+            {pendingApproval.toolName === 'change_propose'
+              ? 'Approval creates a reviewable proposal only. Files will not change until you review and Accept them.'
+              : 'This approval applies only to this exact action.'}
           </p>
           <div className="session__settings-row">
             <button

@@ -2,17 +2,19 @@ import type { AgentCapability } from '../../shared/capabilities/types'
 import type { WorkerToolName } from '../../shared/worker-tools/types'
 
 /**
- * Static Worker tool registry (Stage 23): exactly three read-only
- * tools mapped to Stage 22 capabilities. Main-owned — never from
+ * Static Worker tool registry (Stage 24): exactly four tools —
+ * three read-only plus one reviewable-proposal tool — mapped to
+ * Stage 22 capabilities. Main-owned — never from
  * renderer, provider, or Brain/Worker output.
  */
 
-export const WORKER_TOOLS: readonly WorkerToolName[] = ['workspace_read', 'workspace_search', 'git_read']
+export const WORKER_TOOLS: readonly WorkerToolName[] = ['workspace_read', 'workspace_search', 'git_read', 'change_propose']
 
 const TOOL_TO_CAPABILITY: Readonly<Record<WorkerToolName, AgentCapability>> = {
   workspace_read: 'workspace.read',
   workspace_search: 'workspace.search',
-  git_read: 'git.read'
+  git_read: 'git.read',
+  change_propose: 'change.propose'
 }
 
 const KNOWN: ReadonlySet<string> = new Set<string>(WORKER_TOOLS)
@@ -32,7 +34,7 @@ export function workerToolSchemas(): { readonly name: WorkerToolName; readonly d
   return [
     {
       name: 'workspace_read',
-      description: 'Read one workspace text file (bounded, read-only).',
+      description: 'Read one workspace text file (bounded, read-only). Returns an opaque readRef authorizing a later proposal.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -42,7 +44,7 @@ export function workerToolSchemas(): { readonly name: WorkerToolName; readonly d
     },
     {
       name: 'workspace_search',
-      description: 'Literal workspace search (bounded, read-only).',
+      description: 'Literal workspace search (bounded, read-only). Previews only; never proposal authority.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -52,7 +54,7 @@ export function workerToolSchemas(): { readonly name: WorkerToolName; readonly d
     },
     {
       name: 'git_read',
-      description: 'Read-only Git status or diff (no mutation).',
+      description: 'Read-only Git status or diff (no mutation). Never proposal authority.',
       parameters: {
         type: 'object',
         additionalProperties: false,
@@ -61,6 +63,32 @@ export function workerToolSchemas(): { readonly name: WorkerToolName; readonly d
           operation: { type: 'string', enum: ['status', 'diff'] },
           scope: { type: 'string', enum: ['staged', 'unstaged'] },
           relativePath: { type: ['string', 'null'] }
+        }
+      }
+    },
+    {
+      name: 'change_propose',
+      description: 'Create a reviewable code proposal only for files already read successfully in this run (opaque targetRef like R1). Never writes files; human review required.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['changes'],
+        properties: {
+          changes: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 5,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['targetRef', 'summary', 'proposedContent'],
+              properties: {
+                targetRef: { type: 'string' },
+                summary: { type: 'string' },
+                proposedContent: { type: 'string' }
+              }
+            }
+          }
         }
       }
     }
@@ -74,6 +102,20 @@ export function approvalSummaryFor(tool: WorkerToolName, args: Record<string, un
   }
   if (tool === 'workspace_search') {
     return `Search workspace for "${String(args['query'] ?? '')}"`
+  }
+  if (tool === 'change_propose') {
+    // Fallback when resolved paths are unavailable (validation failed
+    // before resolution). Resolved summaries are built by the proposal
+    // helper and carry exact relative paths.
+    const changes = args['changes']
+    const count = Array.isArray(changes) ? changes.length : 0
+    if (count === 1) {
+      return 'Create reviewable change proposal'
+    }
+    if (count > 1) {
+      return `Create reviewable change proposal for ${String(count)} files`
+    }
+    return 'Create reviewable change proposal'
   }
   const operation = args['operation']
   if (operation === 'status') {

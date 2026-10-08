@@ -30,5 +30,17 @@ export const MAX_WORKER_GIT_RESULT_BYTES = 64 * 1024
 /** Largest persisted Worker tool state, exact UTF-8 bytes (256 KiB). */
 export const MAX_WORKER_TOOL_STATE_BYTES = 256 * 1024
 
+/** Largest single proposed file inside change_propose, exact UTF-8 bytes (64 KiB, reuse Stage 16 bound). */
+export const MAX_WORKER_PROPOSAL_FILE_BYTES = 64 * 1024
+
+/** Most requested targets inside one change_propose invocation. */
+export const MAX_WORKER_PROPOSAL_CHANGES = 5
+
+/** Longest per-file proposal summary inside change_propose, Unicode code points. */
+export const MAX_WORKER_PROPOSAL_FILE_SUMMARY_CODEPOINTS = 300
+
+/** Largest combined proposed content inside one change_propose invocation, exact UTF-8 bytes (192 KiB). */
+export const MAX_WORKER_PROPOSAL_TOTAL_BYTES = 192 * 1024
+
 /** Lazy approval expiry (15 minutes, no background jobs). */
 export const APPROVAL_MAX_AGE_MS = 15 * 60 * 1000

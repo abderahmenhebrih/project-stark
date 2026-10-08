@@ -91,6 +91,8 @@ function mapApproval(row: unknown): StoredToolApproval {
 export interface StoredToolEvent {
   readonly id: number
   readonly runId: number
+  readonly workspaceId: number
+  readonly sessionId: number
   readonly toolName: string
   readonly capability: string
   readonly argsJson: string
@@ -152,7 +154,7 @@ export class WorkerToolRepository {
         'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     )
     this.listEventsStmt = db.prepare(
-      'SELECT id, orchestration_run_id, tool_name, capability, arguments_json, result_summary, result_payload, ' +
+      'SELECT id, workspace_id, session_id, orchestration_run_id, tool_name, capability, arguments_json, result_summary, result_payload, ' +
         'result_bytes, status, approval_id, created_at FROM worker_tool_events WHERE orchestration_run_id = ? ORDER BY id ASC'
     )
     this.upsertStateStmt = db.prepare(
@@ -295,6 +297,8 @@ export class WorkerToolRepository {
       if (!isRecord(row)) throw new DatabaseError('stored tool event row is invalid')
       const id = row['id']
       const run = row['orchestration_run_id']
+      const workspaceId = row['workspace_id']
+      const sessionId = row['session_id']
       const toolName = row['tool_name']
       const capability = row['capability']
       const argsJson = row['arguments_json']
@@ -304,7 +308,8 @@ export class WorkerToolRepository {
       const status = row['status']
       const createdAt = row['created_at']
       if (
-        typeof id !== 'number' || typeof run !== 'number' || typeof toolName !== 'string' ||
+        typeof id !== 'number' || typeof run !== 'number' || typeof workspaceId !== 'number' ||
+        typeof sessionId !== 'number' || typeof toolName !== 'string' ||
         typeof capability !== 'string' || typeof argsJson !== 'string' || typeof summary !== 'string' ||
         typeof payload !== 'string' || typeof bytes !== 'number' || typeof status !== 'string' ||
         typeof createdAt !== 'number'
@@ -312,7 +317,7 @@ export class WorkerToolRepository {
         throw new DatabaseError('stored tool event row is invalid')
       }
       return {
-        id, runId: run, toolName, capability, argsJson, summary, payload, bytes, status,
+        id, runId: run, workspaceId, sessionId, toolName, capability, argsJson, summary, payload, bytes, status,
         approvalId: asNullableNumber(row['approval_id']), createdAt
       }
     })

@@ -44,6 +44,12 @@ import { WorkerToolRepository, hashState, hashToolArgs, serializeToolArgs } from
 import { WorkerToolApprovalService } from './worker-tool-approval-service'
 import { WorkerReadToolService, parseWorkerToolRequest } from './worker-tool-service'
 import { approvalSummaryFor, capabilityForTool, isKnownWorkerTool, workerToolSchemas } from './worker-tool-registry'
+import { buildProposalApprovalSummary, resolveProposalTargets } from './worker-proposal-service'
+import {
+  WORKER_PROPOSAL_DENY_MESSAGE,
+  WORKER_PROPOSAL_UNKNOWN_TARGET_MESSAGE,
+  WORKER_PROPOSAL_USER_DENY_MESSAGE
+} from './worker-proposal-validation'
 import {
   MAX_WORKER_TOOL_CALLS,
   MAX_WORKER_TOOL_STATE_BYTES,
@@ -90,8 +96,14 @@ function contextBytes(messages: readonly { readonly content: string }[]): number
 
 const WORKER_TOOL_INSTRUCTIONS =
   STAGE_18_FIXED_WORKER_INSTRUCTIONS +
-  ' You may request exactly one read-only tool per turn (workspace_read, workspace_search, git_read) ' +
-  'or return final text. Never request more than one tool, never combine a tool request with final text.'
+  " You may use STARK's read-only tools to inspect the project. " +
+  'You may request exactly one tool per turn (workspace_read, workspace_search, git_read, change_propose) ' +
+  'or return final text. Never request more than one tool, never combine a tool request with final text. ' +
+  'If change_propose is available, you may create a reviewable code proposal only for files you previously read successfully in this run. ' +
+  'Use the readRef returned by workspace_read. ' +
+  'A proposal does not modify files. ' +
+  'A human must review and Accept every change before disk is modified. ' +
+  'Do not claim a proposal was applied.'
 
 export interface WorkerToolRunnerDeps {
   readonly workspaces: WorkspaceRepository
@@ -151,8 +163,15 @@ export class WorkerToolRunner {
 
   /** True when at least one tool is advertised (not hard-deny, master on). */
   toolsAdvertised(workspaceId: number, sessionId: number): boolean {
-    for (const tool of ['workspace_read', 'workspace_search', 'git_read'] as const) {
-      const capability = tool === 'workspace_read' ? 'workspace.read' : tool === 'workspace_search' ? 'workspace.search' : 'git.read'
+    for (const tool of ['workspace_read', 'workspace_search', 'git_read', 'change_propose'] as const) {
+      const capability =
+        tool === 'workspace_read'
+          ? 'workspace.read'
+          : tool === 'workspace_search'
+            ? 'workspace.search'
+            : tool === 'git_read'
+              ? 'git.read'
+              : 'change.propose'
       const decision = this.deps.gate.authorize({ workspaceId, sessionId, actor: 'worker', capability })
       if (decision.decision === 'allow' || decision.decision === 'requires_approval') {
         return true
@@ -387,10 +406,22 @@ export class WorkerToolRunner {
         const argsRecord = this.argsRecord(parsed)
         const argsJson = serializeToolArgs(argsRecord)
         const argsHash = hashToolArgs(argsJson)
-        const summary = approvalSummaryFor(parsed.tool, argsRecord)
+        let summary = approvalSummaryFor(parsed.tool, argsRecord)
+        // Stage 24: resolved human-readable summary for proposals (exact
+        // relative paths, per-file summaries, non-apply copy). Resolution
+        // uses only same-run successful reads; search/Git/foreign refs
+        // never produce a summary here.
+        if (parsed.tool === 'change_propose') {
+          const changes = (parsed as { changes: readonly { targetRef: string; summary: string; proposedContent: string }[] }).changes
+          const resolvedForSummary = resolveProposalTargets({ tools: this.deps.tools, runId, workspaceId, sessionId, changes })
+          if (resolvedForSummary.ok) {
+            summary = buildProposalApprovalSummary(resolvedForSummary.resolved)
+          }
+        }
         // Authoritative execution-time gate (snapshot never authority).
         const gateDecision = this.deps.gate.authorize({ workspaceId, sessionId, actor: 'worker', capability: capabilityForTool(parsed.tool) })
         if (gateDecision.decision === 'deny') {
+          const deniedHistoryPayload = parsed.tool === 'change_propose' ? WORKER_PROPOSAL_DENY_MESSAGE : ''
           this.deps.tools.appendEvent({
             workspaceId, sessionId, runId, toolName: parsed.tool, capability: capabilityForTool(parsed.tool),
             argsJson, summary, payload: '', bytes: 0, status: 'denied', approvalId: null, now: this.now()
@@ -399,11 +430,32 @@ export class WorkerToolRunner {
             { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: `Tool ${parsed.tool} denied.`, now: this.now() },
             { role: 'worker', providerId: workerRoute.assignment.providerId, model: workerRoute.assignment.model, routeKey: workerRoute.routeKey, requestedProfile: workerProfile }
           )
-          history.push({ tool: parsed.tool, argsJson, status: 'denied', payload: '', summary })
+          history.push({ tool: parsed.tool, argsJson, status: 'denied', payload: deniedHistoryPayload, summary })
           this.saveToolState({ runId, workerInstruction, activeUserMessageId: latest.id, continuityUsed: loop !== null, state: { workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history, toolCallCount, workerProviderId: workerRoute.assignment.providerId, workerModel: workerRoute.assignment.model, brainProviderId: routing.brain.providerId, brainModel, routeKey: workerRoute.routeKey, requestedProfile: workerProfile, looplinkId, activeUserMessageId: latest.id } })
           continue
         }
         if (gateDecision.decision === 'requires_approval') {
+          // Stage 24: an unresolvable proposal target never parks — it
+          // fails bounded as a tool result with no transaction/set.
+          if (parsed.tool === 'change_propose') {
+            const changes = (parsed as { changes: readonly { targetRef: string; summary: string; proposedContent: string }[] }).changes
+            const precheck = resolveProposalTargets({ tools: this.deps.tools, runId, workspaceId, sessionId, changes })
+            if (!precheck.ok) {
+              const failedSummary = 'Create reviewable change proposal'
+              this.deps.tools.appendEvent({
+                workspaceId, sessionId, runId, toolName: parsed.tool, capability: capabilityForTool(parsed.tool),
+                argsJson, summary: failedSummary, payload: '', bytes: 0, status: 'failed', approvalId: null, now: this.now()
+              })
+              this.deps.runs.appendStepWithModel(
+                { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: failedSummary, now: this.now() },
+                { role: 'worker', providerId: workerRoute.assignment.providerId, model: workerRoute.assignment.model, routeKey: workerRoute.routeKey, requestedProfile: workerProfile }
+              )
+              history.push({ tool: parsed.tool, argsJson, status: 'failed', payload: WORKER_PROPOSAL_UNKNOWN_TARGET_MESSAGE, summary: failedSummary })
+              this.saveToolState({ runId, workerInstruction, activeUserMessageId: latest.id, continuityUsed: loop !== null, state: { workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history, toolCallCount, workerProviderId: workerRoute.assignment.providerId, workerModel: workerRoute.assignment.model, brainProviderId: routing.brain.providerId, brainModel, routeKey: workerRoute.routeKey, requestedProfile: workerProfile, looplinkId, activeUserMessageId: latest.id } })
+              continue
+            }
+            summary = buildProposalApprovalSummary(precheck.resolved)
+          }
           const state: PersistedToolState = {
             workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history,
             toolCallCount, workerProviderId: workerRoute.assignment.providerId, workerModel: workerRoute.assignment.model,
@@ -445,7 +497,7 @@ export class WorkerToolRunner {
           }
         }
         // Allow: execute immediately through the bounded service.
-        let execResult: { status: 'succeeded' | 'denied' | 'failed'; summary: string; payload: string }
+        let execResult: { status: 'succeeded' | 'denied' | 'failed'; summary: string; payload: string; reason?: string }
         try {
           execResult = await this.deps.executor.execute({
             workspaceId, sessionId, runId, tool: parsed.tool, args: parsed as never, argsJson, approvalId: null, now: this.now()
@@ -457,7 +509,16 @@ export class WorkerToolRunner {
           { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: execResult.summary, now: this.now() },
           { role: 'worker', providerId: workerRoute.assignment.providerId, model: workerRoute.assignment.model, routeKey: workerRoute.routeKey, requestedProfile: workerProfile }
         )
-        history.push({ tool: parsed.tool, argsJson, status: execResult.status, payload: execResult.status === 'succeeded' ? execResult.payload : '', summary: execResult.summary })
+        // Stage 24: failed proposal reasons (stale/unknown) stay visible to
+        // the Worker as bounded untrusted data; succeeded payloads carry
+        // the normalized proposal result (IDs only, no code).
+        const historyPayload =
+          execResult.status === 'succeeded'
+            ? execResult.payload
+            : parsed.tool === 'change_propose' && typeof execResult.reason === 'string' && execResult.reason !== ''
+              ? execResult.reason
+              : ''
+        history.push({ tool: parsed.tool, argsJson, status: execResult.status, payload: historyPayload, summary: execResult.summary })
         this.saveToolState({ runId, workerInstruction, activeUserMessageId: latest.id, continuityUsed: loop !== null, state: { workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history, toolCallCount, workerProviderId: workerRoute.assignment.providerId, workerModel: workerRoute.assignment.model, brainProviderId: routing.brain.providerId, brainModel, routeKey: workerRoute.routeKey, requestedProfile: workerProfile, looplinkId, activeUserMessageId: latest.id } })
       }
       if (workerOutput === null) {
@@ -567,15 +628,23 @@ export class WorkerToolRunner {
       if (!this.deps.tools.transitionApproval(approvalId, 'approved', this.now())) {
         throw new InvalidWorkerToolRequestError('approval is not pending')
       }
-      // Execute exactly once, then consume.
+      // Execute exactly once, then consume. Re-validates exact args hash,
+      // re-resolves same-run readRefs, and re-checks stale revisions —
+      // approval alone never authorizes a proposal.
       const execResult = await this.deps.executor.executeApproved({
-        workspaceId, sessionId, runId: stored.runId, tool: stored.toolName as 'workspace_read' | 'workspace_search' | 'git_read',
+        workspaceId, sessionId, runId: stored.runId, tool: stored.toolName as 'workspace_read' | 'workspace_search' | 'git_read' | 'change_propose',
         args: parsedArgs as never, argsJson: stored.argsJson, approvalId, now: this.now()
       })
       if (!this.deps.tools.transitionApproval(approvalId, 'consumed', this.now())) {
         throw new InvalidWorkerToolRequestError('approval could not be consumed')
       }
-      return await this.continueAfterTool({ workspaceId, sessionId, runId: stored.runId, state, historyAppend: { tool: stored.toolName, argsJson: stored.argsJson, status: execResult.status, payload: execResult.status === 'succeeded' ? execResult.payload : '', summary: execResult.summary } })
+      const approvedHistoryPayload =
+        execResult.status === 'succeeded'
+          ? execResult.payload
+          : stored.toolName === 'change_propose' && typeof execResult.reason === 'string' && execResult.reason !== ''
+            ? execResult.reason
+            : ''
+      return await this.continueAfterTool({ workspaceId, sessionId, runId: stored.runId, state, historyAppend: { tool: stored.toolName, argsJson: stored.argsJson, status: execResult.status, payload: approvedHistoryPayload, summary: execResult.summary } })
     }
     if (!this.deps.tools.transitionApproval(approvalId, 'denied', this.now())) {
       throw new InvalidWorkerToolRequestError('approval is not pending')
@@ -584,7 +653,8 @@ export class WorkerToolRunner {
       workspaceId, sessionId, runId: stored.runId, toolName: stored.toolName, capability: stored.capability,
       argsJson: stored.argsJson, summary: stored.summary, payload: '', bytes: 0, status: 'denied', approvalId, now: this.now()
     })
-    return await this.continueAfterTool({ workspaceId, sessionId, runId: stored.runId, state, historyAppend: { tool: stored.toolName, argsJson: stored.argsJson, status: 'denied', payload: '', summary: stored.summary } })
+    const deniedHistoryPayload = stored.toolName === 'change_propose' ? WORKER_PROPOSAL_USER_DENY_MESSAGE : ''
+    return await this.continueAfterTool({ workspaceId, sessionId, runId: stored.runId, state, historyAppend: { tool: stored.toolName, argsJson: stored.argsJson, status: 'denied', payload: deniedHistoryPayload, summary: stored.summary } })
   }
 
   private async continueAfterTool(input: {
@@ -653,18 +723,42 @@ export class WorkerToolRunner {
           const parsed = parseWorkerToolRequest(turnResult.tool, turnResult.args)
           const argsRecord = this.argsRecord(parsed)
           const argsJson = serializeToolArgs(argsRecord)
+          let resumeSummary = approvalSummaryFor(parsed.tool, argsRecord)
+          if (parsed.tool === 'change_propose') {
+            const changes = (parsed as { changes: readonly { targetRef: string; summary: string; proposedContent: string }[] }).changes
+            const resolvedForSummary = resolveProposalTargets({ tools: this.deps.tools, runId, workspaceId, sessionId, changes })
+            if (resolvedForSummary.ok) {
+              resumeSummary = buildProposalApprovalSummary(resolvedForSummary.resolved)
+            }
+          }
           const gateDecision = this.deps.gate.authorize({ workspaceId, sessionId, actor: 'worker', capability: capabilityForTool(parsed.tool) })
           if (gateDecision.decision === 'deny') {
+            const deniedPayload = parsed.tool === 'change_propose' ? WORKER_PROPOSAL_DENY_MESSAGE : ''
             this.deps.tools.appendEvent({
               workspaceId, sessionId, runId, toolName: parsed.tool, capability: capabilityForTool(parsed.tool),
-              argsJson, summary: approvalSummaryFor(parsed.tool, argsRecord), payload: '', bytes: 0, status: 'denied', approvalId: null, now: this.now()
+              argsJson, summary: resumeSummary, payload: '', bytes: 0, status: 'denied', approvalId: null, now: this.now()
             })
-            history.push({ tool: parsed.tool, argsJson, status: 'denied', payload: '', summary: approvalSummaryFor(parsed.tool, argsRecord) })
+            history.push({ tool: parsed.tool, argsJson, status: 'denied', payload: deniedPayload, summary: resumeSummary })
             this.saveToolState({ runId, workerInstruction: state.workerInstruction, activeUserMessageId: state.activeUserMessageId, continuityUsed: state.continuityBlock !== null, state: { ...state, history: [...history] } })
             continue
           }
           if (gateDecision.decision === 'requires_approval') {
-            const summary = approvalSummaryFor(parsed.tool, argsRecord)
+            let summary = resumeSummary
+            if (parsed.tool === 'change_propose') {
+              const changes = (parsed as { changes: readonly { targetRef: string; summary: string; proposedContent: string }[] }).changes
+              const precheck = resolveProposalTargets({ tools: this.deps.tools, runId, workspaceId, sessionId, changes })
+              if (!precheck.ok) {
+                const failedSummary = 'Create reviewable change proposal'
+                this.deps.tools.appendEvent({
+                  workspaceId, sessionId, runId, toolName: parsed.tool, capability: capabilityForTool(parsed.tool),
+                  argsJson, summary: failedSummary, payload: '', bytes: 0, status: 'failed', approvalId: null, now: this.now()
+                })
+                history.push({ tool: parsed.tool, argsJson, status: 'failed', payload: WORKER_PROPOSAL_UNKNOWN_TARGET_MESSAGE, summary: failedSummary })
+                this.saveToolState({ runId, workerInstruction: state.workerInstruction, activeUserMessageId: state.activeUserMessageId, continuityUsed: state.continuityBlock !== null, state: { ...state, history: [...history] } })
+                continue
+              }
+              summary = buildProposalApprovalSummary(precheck.resolved)
+            }
             const newState: PersistedToolState = { ...state, history: [...history] }
             const stateJson = JSON.stringify(newState)
             this.deps.tools.createApprovalAndPark({
@@ -697,7 +791,13 @@ export class WorkerToolRunner {
           const execResult = await this.deps.executor.execute({
             workspaceId, sessionId, runId, tool: parsed.tool, args: parsed as never, argsJson, approvalId: null, now: this.now()
           })
-          history.push({ tool: parsed.tool, argsJson, status: execResult.status, payload: execResult.status === 'succeeded' ? execResult.payload : '', summary: execResult.summary })
+          const resumeHistoryPayload =
+            execResult.status === 'succeeded'
+              ? execResult.payload
+              : parsed.tool === 'change_propose' && typeof (execResult as { reason?: unknown }).reason === 'string' && ((execResult as { reason?: string }).reason ?? '') !== ''
+                ? ((execResult as { reason?: string }).reason as string)
+                : ''
+          history.push({ tool: parsed.tool, argsJson, status: execResult.status, payload: resumeHistoryPayload, summary: execResult.summary })
           this.saveToolState({ runId, workerInstruction: state.workerInstruction, activeUserMessageId: state.activeUserMessageId, continuityUsed: state.continuityBlock !== null, state: { ...state, history: [...history] } })
         }
         this.deps.runs.failRun(runId, toPublicBrainError('run', new InvalidBrainPlanError()).message, this.now())
