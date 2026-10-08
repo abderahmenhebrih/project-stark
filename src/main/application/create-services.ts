@@ -30,6 +30,8 @@ import { AiRecoveryCoordinator } from '../recovery/recovery-coordinator'
 import { CapabilityRepository } from '../capabilities/capability-repository'
 import { CapabilityService } from '../capabilities/capability-service'
 import { CapabilityGate } from '../capabilities/capability-gate'
+import { WorkerCommandRepository } from '../worker-tools/worker-command-repository'
+import { WorkerCommandService } from '../worker-tools/worker-command-service'
 import { WorkerToolRepository } from '../worker-tools/worker-tool-repository'
 import { WorkerToolApprovalService } from '../worker-tools/worker-tool-approval-service'
 import { WorkerReadToolService } from '../worker-tools/worker-tool-service'
@@ -87,6 +89,9 @@ export interface ApplicationServices {
   readonly workerToolApprovalService?: WorkerToolApprovalService
   readonly workerReadToolService?: WorkerReadToolService
   readonly workerToolRunner?: WorkerToolRunner
+  /** Stage 25 worker commands. Absent in older harnesses without a command repository. */
+  readonly workerCommandStore?: WorkerCommandRepository
+  readonly workerCommandService?: WorkerCommandService
 }
 
 export interface ServiceDependencies {
@@ -109,6 +114,8 @@ export interface ServiceDependencies {
   readonly capabilityStore?: CapabilityRepository
   /** Stage 23 worker-tool repository. Optional so older harnesses keep working. */
   readonly workerToolStore?: WorkerToolRepository
+  /** Stage 25 worker command-execution repository. Optional so older harnesses keep working. */
+  readonly workerCommandStore?: WorkerCommandRepository
 }
 
 /**
@@ -267,6 +274,18 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
       ? undefined
       : new WorkerToolApprovalService(deps.workspaces, deps.codingSessions, deps.orchestrationRuns, workerToolStore)
   const gitService = new GitService(deps.workspaces, new GitProcessRunner())
+  // Stage 25 worker commands: reservation + bounded non-interactive
+  // execution share the command repository. Built only when the command
+  // repository, capability gate, and worker-tool storage are present.
+  const workerCommandStore = deps.workerCommandStore
+  const workerCommandService =
+    workerCommandStore === undefined || capabilityGate === undefined || workerToolStore === undefined
+      ? undefined
+      : new WorkerCommandService({
+          workspaces: deps.workspaces,
+          gate: capabilityGate,
+          commands: workerCommandStore
+        })
   const workerReadToolService =
     workerToolStore === undefined || capabilityGate === undefined
       ? undefined
@@ -277,7 +296,8 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
           git: gitService,
           tools: workerToolStore,
           transactions: changeTransactionService,
-          changeSets: changeSetService
+          changeSets: changeSetService,
+          commands: workerCommandService
         })
   // Stage 23 tool-enabled Work runner: built only when Heart, gate,
   // files/search/git, and worker-tool storage are all present.
@@ -350,6 +370,8 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
     workerToolStore,
     workerToolApprovalService,
     workerReadToolService,
-    workerToolRunner
+    workerToolRunner,
+    workerCommandStore,
+    workerCommandService
   }
 }

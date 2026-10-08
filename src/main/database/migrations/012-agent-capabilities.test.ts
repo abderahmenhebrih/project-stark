@@ -69,8 +69,8 @@ describe('migration 12 (agent capabilities)', () => {
   it('fresh DB migrates to v12', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 13)
-      assert.equal(getUserVersion(db), 13)
+      assert.equal(runMigrations(db, migrations), 14)
+      assert.equal(getUserVersion(db), 14)
     } finally {
       db.close()
     }
@@ -80,8 +80,8 @@ describe('migration 12 (agent capabilities)', () => {
     const db = openFresh()
     try {
       seedV11(db)
-      assert.equal(runMigrations(db, migrations), 13)
-      assert.equal(getUserVersion(db), 13)
+      assert.equal(runMigrations(db, migrations), 14)
+      assert.equal(getUserVersion(db), 14)
     } finally {
       db.close()
     }
@@ -91,7 +91,7 @@ describe('migration 12 (agent capabilities)', () => {
     const db = openFresh()
     try {
       seedV11(db)
-      assert.equal(runMigrations(db, migrations), 13)
+      assert.equal(runMigrations(db, migrations), 14)
       for (const table of [
         'key_value',
         'workspaces',
@@ -153,7 +153,7 @@ describe('migration 12 (agent capabilities)', () => {
       runMigrations(db, migrations)
       db.exec("INSERT INTO workspaces (root_path, display_name, created_at, last_opened_at) VALUES ('w', 'w', 1, 1)")
       db.exec('INSERT INTO workspace_agent_settings (workspace_id, enabled, created_at, updated_at) VALUES (1, 0, 1, 1)')
-      assert.equal(runMigrations(db, migrations), 13)
+      assert.equal(runMigrations(db, migrations), 14)
       const count: unknown = db.prepare('SELECT COUNT(*) AS n FROM workspace_agent_settings').get()
       assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }))
     } finally {
@@ -201,7 +201,7 @@ describe('migration 12 (agent capabilities)', () => {
   it('migration 12 is registered after migration 11', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     )
     assert.equal(migration012AgentCapabilities.version, 12)
   })

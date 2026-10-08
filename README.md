@@ -146,14 +146,17 @@ and `window.stark` have no database access and no generic SQL IPC exists.
   so the dev server and a raw `electron ./out/...` launch may use
   different roots; the dev/prod *filename* split above always applies.)
 - Migrations: ordered, validated, transactional, tracked with
-  `PRAGMA user_version`. Current schema version: **13**.
+  `PRAGMA user_version`. Current schema version: **14**.
 - Tables: `key_value(key TEXT PRIMARY KEY, value TEXT (JSON), updated_at INTEGER)`,
   `workspaces(id, root_path UNIQUE, display_name, created_at, last_opened_at)`
   plus a recency index, `change_transactions` + `change_transaction_files`,
   `coding_sessions` + `coding_messages` (workspace/session cascades, recency
   and paging indexes), `ai_provider_configs` + `ai_provider_credentials`
   (ciphertext BLOB only, config cascade), `message_context_items`,
-  `change_sets` + `change_set_items` (grouped-review linkage, cascades).
+  `change_sets` + `change_set_items` (grouped-review linkage, cascades),
+  `worker_tool_approvals` + `worker_tool_events` + `worker_tool_run_state`
+  (exact approvals, immutable audit, bounded resume state),
+  `worker_command_executions` (at-most-once bounded command runs, UNIQUE approval).
 - Pragmas: `foreign_keys = ON`, `journal_mode = WAL`, `synchronous = NORMAL`,
   `busy_timeout = 5000`.
 - Tests: `npm test` (Node built-in runner, real SQLite, isolated
@@ -964,7 +967,76 @@ a successful `workspace_read` earlier in THE SAME Worker run.
   result (no code duplication, no secrets). Worker instruction explains
   readRef-only proposals, no-write, human-Accept-required semantics. Only
   `allow`/`ask` advertise the schema; `deny` hides it with defense-in-depth
-  execution-time recheck. Stage 8 remains the sole disk writer.
+  execution-time recheck. Stage 8 remains the exclusive writer for direct
+  STARK-managed code edits.
+
+## Worker Terminal Commands Stage 25
+
+Stage 25 adds exactly one Worker-only tool — `terminal_execute`
+(`terminal.execute`) — running one bounded non-interactive external command
+per exact human approval. The Worker may REQUEST a command; it may NEVER
+silently execute it. There is NO automatic terminal execution, ever.
+
+- Security boundary: STARK itself never gives the AI direct
+  filesystem-write authority, and direct STARK code changes still require
+  proposal → human review → human Accept → Stage 8 writer. BUT an
+  explicitly human-approved terminal command executes as an external process
+  under the user's OS account and MAY modify files, access the network, or
+  start subprocesses. Stage 8 therefore remains the exclusive writer for
+  direct STARK-managed code edits — NOT the exclusive OS writer. Approval is
+  always exact-action precisely because external commands are powerful.
+- Request flow: strict argument validation → `CapabilityGate`
+  (`actor=worker`, `terminal.execute`, must be `requires_approval`) →
+  persist exact approval → STOP. Human sees exact program + exact argv +
+  warning → Approve → revalidate exact hashed action + re-run the gate →
+  reserve execution at most once → spawn one bounded process → capture
+  bounded output → Worker continues in budget. Persistent `allow` is
+  forbidden by Stage 22 and fails closed again here: a gate `allow` (even
+  seeded past the service) never spawns.
+- Tool schema: exactly `{program, args}` (`program` bare executable name
+  ≤128 codepoints, no `/ \ :`, no paths; `args` ≤32 inert strings ≤2048
+  codepoints each, ≤12 KiB serialized total). No command string, cwd, env,
+  shell, stdin, timeout, background, or session fields. `&& | > $()`
+  backticks in argv stay literal DATA through argv execution (`shell:false`).
+- Execution: `WorkerCommandService` resolves the bare program through a
+  bounded sanitized PATH search (≤128 entries, 32 KiB, PATHEXT on Windows,
+  never Workspace-root/cwd precedence; failure is a safe `spawn_failed`),
+  spawns with `cwd` = trusted Workspace root, `shell:false`,
+  `detached:false`, stdin ignored, piped stdout/stderr, `windowsHide`, and a
+  minimal environment (PATH/PATHEXT/SystemRoot/WINDIR/COMSPEC/HOME/
+  USERPROFILE/HOMEDRIVE/HOMEPATH/TEMP/TMP/APPDATA/LOCALAPPDATA/PROGRAMDATA/
+  LANG/LC_ALL where present, plus `CI=1` — never provider keys or STARK
+  secrets). No PTY, no input after launch; the Stage 11 human terminal is a
+  separate session Worker bytes never enter.
+- Bounds: 60 s runtime (`MAX_WORKER_COMMAND_RUNTIME_MS`, one attempt, exact
+  child-handle termination only — never by name, never broadly, 5 s cleanup
+  bound), 64 KiB combined output (`MAX_WORKER_COMMAND_OUTPUT_BYTES`: stop,
+  terminate, mark `output_limit` + `truncated`, expose bounded output).
+  Results (`completed` even on nonzero exit with its code, `spawn_failed`,
+  `timed_out`, `output_limit`) normalize stdout/stderr to valid Unicode
+  (NUL/controls → U+FFFD) and persist without executable path, PID, or env.
+  Failures continue the Worker in budget; integrity failures fail the run.
+- At-most-once: BEFORE spawn, ONE transaction verifies pending approval +
+  exact hash, records approval, inserts the `launching` row, and consumes
+  the approval. Only then does the process spawn (→ `running` → terminal
+  outcome). Crash between reservation and spawn NEVER re-executes: startup
+  marks `launching`/`running` → `interrupted` (no PID kills — PIDs are never
+  persisted) and fails parked runs with "An approved Worker command was
+  interrupted. Start the Work request again." Approvals stay consumed.
+- Approval card: `STARK Worker needs permission`, `Capability: Terminal
+  command`, exact `Program` + indexed `Arguments` + `Working directory:
+  Workspace root` (never the host path), "This exact command will run with
+  your user account from the Workspace root. It may modify files, start
+  subprocesses, or access the network." plus "This approval applies only to
+  this exact program and argument list." Deny/Approve only. Run details show
+  status/program/args/exit/duration/stdout/stderr as inert text. Deny
+  records "The user denied this command." with no row and no spawn.
+- Budget: one tool call however it ends; Worker turns ≤5, Work provider
+  calls ≤7, execution adds zero. Post-tool Stage 21 recovery stays disabled;
+  Looplink stays pending while waiting/running and consumes only on final
+  success. Commands that rewrite files stale old `readRef`s (Worker must
+  re-read); output never auto-Accepts anything. Schema is **v14**
+  (`014-worker-command-executions.ts`, append-only; 001–013 untouched).
 
 ## Current status
 
@@ -979,7 +1051,7 @@ a successful `workspace_read` earlier in THE SAME Worker run.
 - [x] Workspace Explorer: lazy tree + Monaco file preview, workspace-scoped security (no writes/AI)
 - [x] Workspace Search: bounded literal on-demand search + safe preview reuse, workspace-scoped security (no index/AI)
 - [x] Single-file editing: Monaco editor + SHA-256 stale-write protection + atomic same-directory replacement, existing files only (no autosave/AI)
-- [x] Change transactions: persisted pending proposals + explicit Accept/Reject + guarded Rollback, Stage 8 writer stays the only mutator (no AI)
+- [x] Change transactions: persisted pending proposals + explicit Accept/Reject + guarded Rollback, Stage 8 writer stays the exclusive writer for direct STARK-managed code edits (human-approved terminal commands remain an explicitly authorized external-process boundary, never a STARK write path)
 - [x] Monaco code editor + transaction DiffEditor: local assets/workers, line focus, CRLF preservation, mixed-EOL read-only safety (no LSP/tabs/AI)
 - [x] Human terminal: xterm.js bottom panel + node-pty PTY, one session per window, Workspace-root cwd, explicit Start/Kill, no agent access, no persistence (schema v3)
 - [x] Read-only Git: system-git status/branch/upstream awareness + staged/working diff viewer, Workspace-root equality gate, no polling, no mutation, no network (schema v3 → v4 keeps Git table-free)
@@ -995,4 +1067,5 @@ a successful `workspace_read` earlier in THE SAME Worker run.
 - [x] Workspace capabilities: persistent default-deny permission boundary for future Worker tools — five main-owned capabilities (`workspace.read`, `workspace.search`, `git.read`, `change.propose`, `terminal.execute`), Deny/Ask/Allow with terminal never persistent Allow, workspace master kill switch (default disabled, preserves modes), Brain always denied, deterministic local gate with session ownership, complete-replacement atomic saves, no approval/audit rows yet, existing human Explorer/Search/Git/Terminal/Propose/Ask/Work/Heart/Looplink/Recovery unchanged, zero tools executed, zero provider calls (schema v11 → v12 adds capability tables)
 - [x] Read-only Worker tools: first actual Worker tools (`workspace_read`, `workspace_search`, `git_read`) gated by CapabilityGate with exact per-action approval (pending/approved/denied/expired/consumed, 15-min lazy expiry, hash-verified single-use), max 4 tools and 5 Worker turns per run (max 7 provider calls: 1 plan + 5 worker + 1 synthesis), explicit bounded for-loop, Brain tool-free, guard released while waiting with pending-block on new ops, restart-safe persisted state (256 KiB, same Worker route), Looplink consumed only on final success, tool-enabled recovery disabled after first tool, no terminal/proposal tools, tool data never authority (schema v12 → v13 adds approval/event/state tables)
 - [x] Worker change proposals: exactly one additional Worker tool (`change_propose` → `change.propose`) creating reviewable proposals only from same-run successful `workspace_read` opaque refs (`R1…`, deterministic, restart-reconstructed; search/Git/Looplink/denied/foreign refs never authority), 1–5 targets with 64 KiB per file / 192 KiB total / 300-cp summaries, single → pending Stage 9 transaction and multi → Stage 17 Change Set via existing services (shared validation, stale protection, no-op dropping, disk unchanged, no creation, no Accept), Ask gives exact proposal-creation approval (paths + summaries + non-apply copy, hash-bound single-use, 15-min lazy expiry, stale rechecked on resume), zero new provider calls with 4-tool / 5-turn / 7-call bounds intact, proposals survive later run failure with recovery disabled after tools, existing Changes/Transaction/ChangeSet review reused, no new IPC/tables (schema stays v13)
+- [x] Worker terminal commands: exactly one additional Worker-only tool (`terminal_execute` → `terminal.execute`) running one bounded non-interactive external command per exact human approval — bare program + inert argv only (never a shell string, cwd, env, shell, stdin, or timeout; metacharacters stay data via argv execution), trusted Workspace-root cwd, sanitized allowlist environment (`CI=1`, no provider secrets injected), stdin closed, 60 s runtime cap with child-only termination, 64 KiB combined output cap with output-limit termination, nonzero exits reported as completed failures with no retry, persistent Allow forbidden and fails closed even when seeded (advertised on `ask` only), at-most-once reservation (approval consume + `launching` row in ONE transaction before spawn; crashes mark `interrupted` with no re-execution and no PID kills; parked runs fail with safe copy), counts toward the 4-tool budget with total Work calls still ≤7 and zero new provider calls, post-tool recovery disabled, Looplink pending-while-waiting/consumed-on-success, command side effects stale old `readRef`s without auto-Accept, human terminal stays a separate interactive PTY, Stage 8 remains the exclusive direct STARK writer (explicitly approved commands may still mutate files as external OS processes), no new IPC/preload execution API (schema v13 → v14 adds command executions)
 - [ ] Agent orchestration, model routing, auth, Supabase — later stages

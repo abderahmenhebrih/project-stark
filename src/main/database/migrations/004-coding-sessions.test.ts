@@ -52,8 +52,8 @@ describe('migration 4 (coding sessions)', () => {
   it('fresh DB migrates through v6 with session tables', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 13)
-      assert.equal(getUserVersion(db), 13)
+      assert.equal(runMigrations(db, migrations), 14)
+      assert.equal(getUserVersion(db), 14)
     } finally {
       db.close()
     }
@@ -63,8 +63,8 @@ describe('migration 4 (coding sessions)', () => {
     const db = openFresh()
     try {
       assert.equal(runMigrations(db, [migration001Initial, migration002Workspaces, migration003ChangeTransactions]), 3)
-      assert.equal(runMigrations(db, migrations), 13)
-      assert.equal(getUserVersion(db), 13)
+      assert.equal(runMigrations(db, migrations), 14)
+      assert.equal(getUserVersion(db), 14)
     } finally {
       db.close()
     }
@@ -74,7 +74,7 @@ describe('migration 4 (coding sessions)', () => {
     const db = openFresh()
     try {
       seedV3(db)
-      assert.equal(runMigrations(db, migrations), 13)
+      assert.equal(runMigrations(db, migrations), 14)
       const settings: unknown = db.prepare("SELECT value FROM key_value WHERE key = 'stark.settings'").get()
       const profile: unknown = db.prepare("SELECT value FROM key_value WHERE key = 'stark.profile'").get()
       assert.equal(JSON.stringify(settings), JSON.stringify({ value: '{"appearance":"dark"}' }))
@@ -88,7 +88,7 @@ describe('migration 4 (coding sessions)', () => {
     const db = openFresh()
     try {
       seedV3(db)
-      assert.equal(runMigrations(db, migrations), 13)
+      assert.equal(runMigrations(db, migrations), 14)
       const workspace: unknown = db
         .prepare('SELECT root_path, display_name FROM workspaces WHERE root_path = ?')
         .get('C:\\proj\\a')
@@ -102,7 +102,7 @@ describe('migration 4 (coding sessions)', () => {
     const db = openFresh()
     try {
       seedV3(db)
-      assert.equal(runMigrations(db, migrations), 13)
+      assert.equal(runMigrations(db, migrations), 14)
       const count: unknown = db.prepare("SELECT COUNT(*) AS n FROM change_transactions WHERE status = 'pending'").get()
       assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }))
     } finally {
@@ -176,7 +176,7 @@ describe('migration 4 (coding sessions)', () => {
       db.exec("INSERT INTO workspaces (root_path, display_name, created_at, last_opened_at) VALUES ('w', 'w', 1, 1)")
       db.exec("INSERT INTO coding_sessions (workspace_id, title, created_at, updated_at) VALUES (1, 'New session', 1, 1)")
       db.exec("INSERT INTO coding_messages (session_id, role, content, created_at) VALUES (1, 'user', 'hi', 1)")
-      assert.equal(runMigrations(db, migrations), 13)
+      assert.equal(runMigrations(db, migrations), 14)
       const sessions: unknown = db.prepare('SELECT COUNT(*) AS n FROM coding_sessions').get()
       const messages: unknown = db.prepare('SELECT COUNT(*) AS n FROM coding_messages').get()
       assert.equal(JSON.stringify(sessions), JSON.stringify({ n: 1 }))
@@ -218,7 +218,7 @@ describe('migration 4 (coding sessions)', () => {
   it('migration 4 remains registered before migration 5', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     )
     assert.equal(migration004CodingSessions.version, 4)
   })
@@ -232,7 +232,7 @@ describe('migration 4 (coding sessions)', () => {
       let sessionId = 0
       try {
         first.initialize(file)
-        assert.equal(first.getSchemaVersion(), 13)
+        assert.equal(first.getSchemaVersion(), 14)
         workspaceId = first.getWorkspaces().create({ rootPath: 'w', displayName: 'w', now: 100 }).id
         sessionId = first.getCodingSessions().createSession({ workspaceId, title: 'New session', now: 200 })
         first.getCodingSessions().appendMessage({
@@ -248,8 +248,8 @@ describe('migration 4 (coding sessions)', () => {
       const second = new StarkDatabase()
       try {
         second.initialize(file)
-        assert.equal(second.getSchemaVersion(), 13)
-        assert.equal(second.readStoredSchemaVersion(), 13)
+        assert.equal(second.getSchemaVersion(), 14)
+        assert.equal(second.readStoredSchemaVersion(), 14)
         const reopened = second.getCodingSessions().findSessionById(sessionId)
         assert.equal(reopened?.title, 'Hello STARK')
         assert.equal(reopened?.updatedAt, 300)

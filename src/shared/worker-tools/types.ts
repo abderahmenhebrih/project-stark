@@ -1,24 +1,29 @@
 /**
- * Shared Worker tool contract (Stage 24).
+ * Shared Worker tool contract (Stage 25).
  *
- * Read-only Worker tools plus one reviewable-proposal tool:
- * workspace_read, workspace_search, git_read, change_propose.
- * Plain TypeScript — no Node/DOM APIs. Renderer never
- * submits tool names, args, or results; all derive main-side.
- * Approval is per exact action; policy never mutates on approval.
- * change_propose targets are opaque same-run readRefs (R1…), never
- * model-controlled paths; only successful workspace_read in the
- * same run creates proposal authority.
+ * Worker tools: workspace_read, workspace_search, git_read,
+ * change_propose, terminal_execute. Plain TypeScript — no Node/DOM
+ * APIs. Renderer never submits tool names, args, or results; all
+ * derive main-side. Approval is per exact action; policy never
+ * mutates on approval. change_propose targets are opaque same-run
+ * readRefs (R1…); terminal_execute carries only a bare program plus
+ * inert argv (never a shell string, cwd, env, or timeout).
  */
 
-/** Exactly the four Stage 24 tools. */
-export type WorkerToolName = 'workspace_read' | 'workspace_search' | 'git_read' | 'change_propose'
+/** Exactly the five Stage 25 tools. */
+export type WorkerToolName = 'workspace_read' | 'workspace_search' | 'git_read' | 'change_propose' | 'terminal_execute'
 
 /** One requested file change inside a change_propose invocation (model supplies only opaque ref). */
 export interface WorkerProposalChange {
   readonly targetRef: string
   readonly summary: string
   readonly proposedContent: string
+}
+
+/** One requested terminal command (bare program plus inert argv data). */
+export interface WorkerTerminalCommand {
+  readonly program: string
+  readonly args: readonly string[]
 }
 
 /** Discriminated tool arguments (exactly one shape per tool). */
@@ -28,6 +33,7 @@ export type WorkerToolArguments =
   | { readonly tool: 'git_read'; readonly operation: 'status' }
   | { readonly tool: 'git_read'; readonly operation: 'diff'; readonly scope: 'staged' | 'unstaged'; readonly relativePath: string | null }
   | { readonly tool: 'change_propose'; readonly changes: readonly WorkerProposalChange[] }
+  | { readonly tool: 'terminal_execute'; readonly program: string; readonly args: readonly string[] }
 
 /** Normalized tool result returned to the Worker as DATA (never authority). */
 export type WorkerToolResultStatus = 'succeeded' | 'denied' | 'failed'

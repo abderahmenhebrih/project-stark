@@ -208,8 +208,8 @@ function askPropose(h: ReturnType<typeof openHarness>): void {
 }
 
 describe('stage 24 registry and mapping', () => {
-  it('registry contains exactly four tools', () => {
-    assert.deepEqual([...WORKER_TOOLS].sort(), ['change_propose', 'git_read', 'workspace_read', 'workspace_search'].sort())
+  it('registry contains exactly five tools', () => {
+    assert.deepEqual([...WORKER_TOOLS].sort(), ['change_propose', 'git_read', 'terminal_execute', 'workspace_read', 'workspace_search'].sort())
   })
 
   it('change_propose maps to change.propose', () => {
@@ -1213,7 +1213,7 @@ describe('stage 24 bounds, persistence, recovery', () => {
 
   it('change_propose provider schema is strict with no path authority', () => {
     const schemas = workerToolSchemas()
-    assert.equal(schemas.length, 4)
+    assert.equal(schemas.length, 5)
     const propose = schemas.find((s) => s.name === 'change_propose')
     assert.ok(propose !== undefined)
     const text = JSON.stringify(propose.parameters)

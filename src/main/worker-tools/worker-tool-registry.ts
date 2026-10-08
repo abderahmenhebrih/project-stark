@@ -2,24 +2,25 @@ import type { AgentCapability } from '../../shared/capabilities/types'
 import type { WorkerToolName } from '../../shared/worker-tools/types'
 
 /**
- * Static Worker tool registry (Stage 24): exactly four tools —
- * three read-only plus one reviewable-proposal tool — mapped to
- * Stage 22 capabilities. Main-owned — never from
- * renderer, provider, or Brain/Worker output.
+ * Static Worker tool registry (Stage 25): exactly five tools —
+ * three read-only, one reviewable-proposal, one exact-approval
+ * terminal command — mapped to Stage 22 capabilities. Main-owned —
+ * never from renderer, provider, or Brain/Worker output.
  */
 
-export const WORKER_TOOLS: readonly WorkerToolName[] = ['workspace_read', 'workspace_search', 'git_read', 'change_propose']
+export const WORKER_TOOLS: readonly WorkerToolName[] = ['workspace_read', 'workspace_search', 'git_read', 'change_propose', 'terminal_execute']
 
 const TOOL_TO_CAPABILITY: Readonly<Record<WorkerToolName, AgentCapability>> = {
   workspace_read: 'workspace.read',
   workspace_search: 'workspace.search',
   git_read: 'git.read',
-  change_propose: 'change.propose'
+  change_propose: 'change.propose',
+  terminal_execute: 'terminal.execute'
 }
 
 const KNOWN: ReadonlySet<string> = new Set<string>(WORKER_TOOLS)
 
-/** True for exactly the three known tools. */
+/** True for exactly the five known tools. */
 export function isKnownWorkerTool(value: string): value is WorkerToolName {
   return KNOWN.has(value)
 }
@@ -91,6 +92,19 @@ export function workerToolSchemas(): { readonly name: WorkerToolName; readonly d
           }
         }
       }
+    },
+    {
+      name: 'terminal_execute',
+      description: 'Run one bounded non-interactive external command with human approval for the exact program and arguments. Never runs without approval.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['program', 'args'],
+        properties: {
+          program: { type: 'string' },
+          args: { type: 'array', maxItems: 32, items: { type: 'string' } }
+        }
+      }
     }
   ]
 }
@@ -116,6 +130,9 @@ export function approvalSummaryFor(tool: WorkerToolName, args: Record<string, un
       return `Create reviewable change proposal for ${String(count)} files`
     }
     return 'Create reviewable change proposal'
+  }
+  if (tool === 'terminal_execute') {
+    return `Run command: ${String(args['program'] ?? '')}`
   }
   const operation = args['operation']
   if (operation === 'status') {

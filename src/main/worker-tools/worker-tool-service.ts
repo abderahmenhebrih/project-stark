@@ -6,6 +6,7 @@ import type { WorkspaceSearchService } from '../workspace-search/workspace-searc
 import type { GitService } from '../git/git-service'
 import type { ChangeSetService } from '../change-sets/change-set-service'
 import type { ChangeTransactionService } from '../change-transactions/change-transaction-service'
+import type { WorkerCommandService } from './worker-command-service'
 import type { WorkerToolRepository } from './worker-tool-repository'
 import { capabilityForTool, isKnownWorkerTool } from './worker-tool-registry'
 import { InvalidWorkerToolRequestError } from './worker-tool-errors'
@@ -24,6 +25,14 @@ import {
   WORKER_PROPOSAL_USER_DENY_MESSAGE,
   parseChangeProposeArgs
 } from './worker-proposal-validation'
+import {
+  WORKER_TERMINAL_DENY_MESSAGE,
+  WORKER_TERMINAL_INVALID_POLICY_MESSAGE,
+  WORKER_TERMINAL_USER_DENY_MESSAGE,
+  buildTerminalStepSummary,
+  parseTerminalExecuteArgs
+} from './worker-terminal-validation'
+import { hashToolArgs } from './worker-tool-repository'
 import { createWorkerProposal, resolveProposalTargets } from './worker-proposal-service'
 
 const encoder = new TextEncoder()
@@ -87,6 +96,12 @@ export function parseWorkerToolRequest(tool: string, args: unknown): WorkerToolA
     const parsed = parseChangeProposeArgs(args)
     return { tool, changes: [...parsed.changes] }
   }
+  if (tool === 'terminal_execute') {
+    // Strict program + argv only (bare executable name, inert args, no
+    // command string/cwd/env/shell/stdin/timeout extras).
+    const parsed = parseTerminalExecuteArgs(args)
+    return { tool, program: parsed.program, args: [...parsed.args] }
+  }
   if (!hasStrictShape(args, ['operation', 'scope', 'relativePath']) && !hasStrictShape(args, ['operation'])) {
     throw new InvalidWorkerToolRequestError('tool arguments are invalid')
   }
@@ -124,6 +139,8 @@ export interface ToolExecutionDeps {
   /** Stage 24 proposal creation only (pending transactions/sets, never writes). Optional for older harnesses. */
   readonly transactions?: ChangeTransactionService
   readonly changeSets?: ChangeSetService
+  /** Stage 25 bounded command execution (reservation + spawn). Optional for older harnesses. */
+  readonly commands?: WorkerCommandService
 }
 
 export interface ExecuteToolInput {
@@ -159,7 +176,11 @@ export class WorkerReadToolService {
     })
     if (decision.decision === 'deny') {
       const deniedReason =
-        input.tool === 'change_propose' ? WORKER_PROPOSAL_DENY_MESSAGE : 'The workspace policy denies this action.'
+        input.tool === 'change_propose'
+          ? WORKER_PROPOSAL_DENY_MESSAGE
+          : input.tool === 'terminal_execute'
+            ? WORKER_TERMINAL_DENY_MESSAGE
+            : 'The workspace policy denies this action.'
       const result: WorkerToolResult = {
         status: 'denied',
         summary: this.summaryFor(input.tool, input.args),
@@ -171,6 +192,19 @@ export class WorkerReadToolService {
     }
     if (decision.decision === 'requires_approval') {
       throw new InvalidWorkerToolRequestError('approval required')
+    }
+    if (input.tool === 'terminal_execute') {
+      // Defense in depth: terminal persistent Allow is forbidden, so a
+      // gate `allow` for terminal.execute is an invalid policy — never
+      // sufficient for execution. No process spawns here, ever.
+      const result: WorkerToolResult = {
+        status: 'denied',
+        summary: this.summaryFor(input.tool, input.args),
+        payload: '',
+        reason: WORKER_TERMINAL_INVALID_POLICY_MESSAGE
+      }
+      this.persist(input, result)
+      return result
     }
     try {
       const result = await this.executeAllowed(input)
@@ -190,7 +224,9 @@ export class WorkerReadToolService {
 
   /** Executes an already-approved exact action (hash validated by caller). */
   async executeApproved(input: ExecuteToolInput): Promise<WorkerToolResult> {
-    try {
+    if (input.tool === 'terminal_execute') {
+      return await this.executeApprovedTerminal(input)
+    }    try {
       const result = await this.executeAllowed(input)
       this.persist(input, result)
       return result
@@ -211,6 +247,11 @@ export class WorkerReadToolService {
     return WORKER_PROPOSAL_USER_DENY_MESSAGE
   }
 
+  /** Denied-user copy for terminal_execute approval denial (persisted by the runner). */
+  static terminalUserDenyMessage(): string {
+    return WORKER_TERMINAL_USER_DENY_MESSAGE
+  }
+
   summaryFor(tool: WorkerToolName, args: WorkerToolArguments): string {
     if (tool === 'workspace_read') {
       return `Read ${(args as { relativePath: string }).relativePath}`
@@ -228,6 +269,9 @@ export class WorkerReadToolService {
         return `Create reviewable change proposal for ${String(count)} files`
       }
       return 'Create reviewable change proposal'
+    }
+    if (tool === 'terminal_execute') {
+      return `Run command: ${(args as { program?: string }).program ?? ''}`
     }
     const record = args as Record<string, unknown>
     if (record['operation'] === 'status') return 'Read Git status'
@@ -385,5 +429,94 @@ export class WorkerReadToolService {
     }
     const payload = JSON.stringify({ status: 'proposal_created', kind: 'change_set', changeSetId: outcome.changeSetId, files: outcome.files })
     return { status: 'succeeded', summary: `Create reviewable change proposal for ${String(outcome.files.length)} files`, payload }
+  }
+
+  /**
+   * Executes one human-approved terminal action at most once. The caller
+   * must have verified the approval is pending with the exact args hash;
+   * this re-parses the exact persisted args, re-runs the gate (only
+   * `requires_approval` proceeds — `allow` fails closed), reserves the
+   * execution + consumes the approval in ONE transaction BEFORE spawning,
+   * then spawns exactly once and persists the bounded audit event.
+   * Integrity/database failures persist a failed event and throw nothing
+   * spawnable — the run fails safely upstream.
+   */
+  private async executeApprovedTerminal(input: ExecuteToolInput): Promise<WorkerToolResult> {
+    const fallbackSummary = this.summaryFor(input.tool, input.args)
+    const commands = this.deps.commands
+    if (commands === undefined) {
+      const result: WorkerToolResult = {
+        status: 'failed', summary: fallbackSummary, payload: '', reason: 'Terminal commands are unavailable.'
+      }
+      this.persist(input, result)
+      return result
+    }
+    let program: string
+    let args: readonly string[]
+    try {
+      const canonical: unknown = JSON.parse(input.argsJson) as unknown
+      const validated = parseTerminalExecuteArgs(canonical)
+      program = validated.program
+      args = validated.args
+    } catch {
+      const result: WorkerToolResult = {
+        status: 'failed', summary: fallbackSummary, payload: '', reason: 'Terminal command arguments are invalid.'
+      }
+      this.persist(input, result)
+      return result
+    }
+    if (input.approvalId === null) {
+      const result: WorkerToolResult = {
+        status: 'failed', summary: fallbackSummary, payload: '', reason: 'Terminal commands require exact human approval.'
+      }
+      this.persist(input, result)
+      return result
+    }
+    let outcome: Awaited<ReturnType<WorkerCommandService['executeApprovedTerminal']>>
+    try {
+      outcome = await commands.executeApprovedTerminal({
+        workspaceId: input.workspaceId,
+        sessionId: input.sessionId,
+        runId: input.runId,
+        approvalId: input.approvalId,
+        argsJson: input.argsJson,
+        argsHash: hashToolArgs(input.argsJson),
+        now: input.now
+      })
+    } catch (error) {
+      const result: WorkerToolResult = {
+        status: 'failed',
+        summary: fallbackSummary,
+        payload: '',
+        reason: error instanceof Error ? error.message : 'The tool could not complete.'
+      }
+      this.persist(input, result)
+      return result
+    }
+    if (outcome.kind === 'denied') {
+      const result: WorkerToolResult = { status: 'denied', summary: fallbackSummary, payload: '', reason: outcome.reason }
+      this.persist(input, result)
+      return result
+    }
+    const result = outcome.result
+    const payload = JSON.stringify({
+      status: result.status,
+      program,
+      args: [...args],
+      exitCode: result.exitCode,
+      signal: result.signal,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      outputBytes: result.outputBytes,
+      truncated: result.truncated,
+      durationMs: result.durationMs
+    })
+    // Executed outcomes (even spawn failures, timeouts, output caps, or
+    // nonzero exits) are bounded results the Worker may reason about and
+    // continue within budget — never automatic retries.
+    const summary = buildTerminalStepSummary(program, args, result)
+    const toolResult: WorkerToolResult = { status: 'succeeded', summary, payload }
+    this.persist({ ...input, argsJson: input.argsJson }, toolResult)
+    return toolResult
   }
 }

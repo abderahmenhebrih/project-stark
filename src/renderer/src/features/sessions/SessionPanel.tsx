@@ -1422,14 +1422,26 @@ export function SessionPanel({
           <p className="session__status" role="status">
             {pendingApproval.toolName === 'change_propose' ? 'Worker wants to create a reviewable proposal.' : 'STARK Worker needs permission'}
           </p>
+          {pendingApproval.toolName === 'terminal_execute' && (
+            <p className="session__hint" role="note">
+              Capability: Terminal command
+            </p>
+          )}
           <p className="session__hint" role="note">
             {pendingApproval.summary}
           </p>
           <p className="session__hint" role="note">
             {pendingApproval.toolName === 'change_propose'
               ? 'Approval creates a reviewable proposal only. Files will not change until you review and Accept them.'
-              : 'This approval applies only to this exact action.'}
+              : pendingApproval.toolName === 'terminal_execute'
+                ? 'This exact command will run with your user account from the Workspace root. It may modify files, start subprocesses, or access the network.'
+                : 'This approval applies only to this exact action.'}
           </p>
+          {pendingApproval.toolName === 'terminal_execute' && (
+            <p className="session__hint" role="note">
+              This approval applies only to this exact program and argument list.
+            </p>
+          )}
           <div className="session__settings-row">
             <button
               className="explorer__secondary"

@@ -17,6 +17,7 @@ import { migration010Looplink } from './010-looplink'
 import { migration011RecoveryContinuity } from './011-recovery-continuity'
 import { migration012AgentCapabilities } from './012-agent-capabilities'
 import { migration013WorkerTools } from './013-worker-tools'
+import { migration014WorkerCommandExecutions } from './014-worker-command-executions'
 
 function openFresh(): DatabaseSync {
   return new DatabaseSync(':memory:')
@@ -32,24 +33,24 @@ function indexExists(db: DatabaseSync, name: string): boolean {
   return row !== undefined
 }
 
-function seedV12(db: DatabaseSync): void {
-  assert.equal(
-    runMigrations(db, [
-      migration001Initial,
-      migration002Workspaces,
-      migration003ChangeTransactions,
-      migration004CodingSessions,
-      migration005AiProviders,
-      migration006MessageContext,
-      migration007ChangeSets,
-      migration008OrchestrationRuns,
-      migration009Heart,
-      migration010Looplink,
-      migration011RecoveryContinuity,
-      migration012AgentCapabilities
-    ]),
-    12
-  )
+const V13: readonly Migration[] = [
+  migration001Initial,
+  migration002Workspaces,
+  migration003ChangeTransactions,
+  migration004CodingSessions,
+  migration005AiProviders,
+  migration006MessageContext,
+  migration007ChangeSets,
+  migration008OrchestrationRuns,
+  migration009Heart,
+  migration010Looplink,
+  migration011RecoveryContinuity,
+  migration012AgentCapabilities,
+  migration013WorkerTools
+]
+
+function seedV13(db: DatabaseSync): void {
+  assert.equal(runMigrations(db, V13), 13)
   db.exec("INSERT INTO key_value (key, value, updated_at) VALUES ('stark.settings', '{}', 1)")
   db.exec("INSERT INTO workspaces (root_path, display_name, created_at, last_opened_at) VALUES ('w', 'w', 1, 1)")
   db.exec("INSERT INTO change_transactions (workspace_id, status, created_at, updated_at) VALUES (1, 'pending', 1, 1)")
@@ -71,11 +72,15 @@ function seedV12(db: DatabaseSync): void {
   db.exec('INSERT INTO workspace_agent_settings (workspace_id, enabled, created_at, updated_at) VALUES (1, 1, 1, 1)')
   db.exec(
     "INSERT INTO workspace_capability_policies (workspace_id, capability, mode, created_at, updated_at) " +
-      "VALUES (1, 'workspace.read', 'allow', 1, 1)"
+      "VALUES (1, 'terminal.execute', 'ask', 1, 1)"
   )
+  db.exec('INSERT INTO orchestration_runs (workspace_id, session_id, user_message_id, status, created_at, updated_at) VALUES (1, 1, 1, \'running\', 1, 1)')
+  db.exec('INSERT INTO worker_tool_approvals (workspace_id, session_id, orchestration_run_id, tool_name, capability, arguments_json, arguments_hash, summary, status, created_at) VALUES (1, 1, 1, \'terminal_execute\', \'terminal.execute\', \'{}\', \'h\', \'s\', \'pending\', 1)')
+  db.exec('INSERT INTO worker_tool_events (workspace_id, session_id, orchestration_run_id, tool_name, capability, arguments_json, result_summary, result_payload, result_bytes, status, created_at) VALUES (1, 1, 1, \'workspace_read\', \'workspace.read\', \'{}\', \'s\', \'{}\', 2, \'succeeded\', 1)')
+  db.exec('INSERT INTO worker_tool_run_state (orchestration_run_id, tool_call_count, worker_instruction, active_user_message_id, continuity_used, state_json, state_hash, updated_at) VALUES (1, 1, \'i\', 1, 0, \'{}\', \'h\', 1)')
 }
 
-describe('migration 13 (worker tools)', () => {
+describe('migration 14 (worker command executions)', () => {
   it('fresh DB migrates to v14', () => {
     const db = openFresh()
     try {
@@ -86,10 +91,10 @@ describe('migration 13 (worker tools)', () => {
     }
   })
 
-  it('v12 database upgrades to v14', () => {
+  it('v13 database upgrades to v14', () => {
     const db = openFresh()
     try {
-      seedV12(db)
+      seedV13(db)
       assert.equal(runMigrations(db, migrations), 14)
       assert.equal(getUserVersion(db), 14)
     } finally {
@@ -97,10 +102,10 @@ describe('migration 13 (worker tools)', () => {
     }
   })
 
-  it('preserves all v12 data including capabilities and Recovery', () => {
+  it('preserves all v13 data including approvals, events, and run state', () => {
     const db = openFresh()
     try {
-      seedV12(db)
+      seedV13(db)
       assert.equal(runMigrations(db, migrations), 14)
       for (const table of [
         'key_value',
@@ -114,7 +119,11 @@ describe('migration 13 (worker tools)', () => {
         'looplink_handoffs',
         'ai_recovery_settings',
         'workspace_agent_settings',
-        'workspace_capability_policies'
+        'workspace_capability_policies',
+        'orchestration_runs',
+        'worker_tool_approvals',
+        'worker_tool_events',
+        'worker_tool_run_state'
       ]) {
         const count: unknown = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()
         assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }), table)
@@ -124,41 +133,59 @@ describe('migration 13 (worker tools)', () => {
     }
   })
 
-  it('creates approval/event/state tables with the session index', () => {
+  it('creates the executions table with the run index', () => {
     const db = openFresh()
     try {
       runMigrations(db, migrations)
-      assert.ok(tableExists(db, 'worker_tool_approvals'))
-      assert.ok(tableExists(db, 'worker_tool_events'))
-      assert.ok(tableExists(db, 'worker_tool_run_state'))
-      assert.ok(indexExists(db, 'idx_worker_tool_approvals_session_status'))
+      assert.ok(tableExists(db, 'worker_command_executions'))
+      assert.ok(indexExists(db, 'idx_worker_command_run_created'))
     } finally {
       db.close()
     }
   })
 
-  it('enforces workspace/session/run FK cascades', () => {
+  it('enforces the UNIQUE approval reservation', () => {
+    const db = openFresh()
+    try {
+      runMigrations(db, migrations)
+      db.exec('PRAGMA foreign_keys = ON')
+      db.exec("INSERT INTO workspaces (root_path, display_name, created_at, last_opened_at) VALUES ('w', 'w', 1, 1)")
+      db.exec("INSERT INTO coding_sessions (workspace_id, title, created_at, updated_at) VALUES (1, 'a', 1, 1)")
+      db.exec("INSERT INTO coding_messages (session_id, role, content, created_at) VALUES (1, 'user', 'hi', 1)")
+      db.exec('INSERT INTO orchestration_runs (workspace_id, session_id, user_message_id, status, created_at, updated_at) VALUES (1, 1, 1, \'running\', 1, 1)')
+      db.exec('INSERT INTO worker_tool_approvals (workspace_id, session_id, orchestration_run_id, tool_name, capability, arguments_json, arguments_hash, summary, status, created_at) VALUES (1, 1, 1, \'terminal_execute\', \'terminal.execute\', \'{}\', \'h\', \'s\', \'pending\', 1)')
+      db.exec('INSERT INTO worker_command_executions (workspace_id, session_id, orchestration_run_id, approval_id, program, arguments_json, arguments_hash, status, stdout, stderr, output_bytes, truncated, created_at) VALUES (1, 1, 1, 1, \'node\', \'[]\', \'h\', \'completed\', \'\', \'\', 0, 0, 1)')
+      assert.throws(() =>
+        db.exec('INSERT INTO worker_command_executions (workspace_id, session_id, orchestration_run_id, approval_id, program, arguments_json, arguments_hash, status, stdout, stderr, output_bytes, truncated, created_at) VALUES (1, 1, 1, 1, \'node\', \'[]\', \'h\', \'completed\', \'\', \'\', 0, 0, 1)')
+      )
+    } finally {
+      db.close()
+    }
+  })
+
+  it('enforces workspace/session/run/approval FK cascades', () => {
     const db = openFresh()
     try {
       runMigrations(db, migrations)
       db.exec('PRAGMA foreign_keys = ON')
       assert.throws(() =>
-        db.exec('INSERT INTO worker_tool_approvals (workspace_id, session_id, orchestration_run_id, tool_name, capability, arguments_json, arguments_hash, summary, status, created_at) VALUES (999, 1, 1, \'workspace_read\', \'workspace.read\', \'{}\', \'h\', \'s\', \'pending\', 1)')
+        db.exec('INSERT INTO worker_command_executions (workspace_id, session_id, orchestration_run_id, approval_id, program, arguments_json, arguments_hash, status, stdout, stderr, output_bytes, truncated, created_at) VALUES (999, 1, 1, 1, \'node\', \'[]\', \'h\', \'launching\', \'\', \'\', 0, 0, 1)')
       )
       db.exec("INSERT INTO workspaces (root_path, display_name, created_at, last_opened_at) VALUES ('w', 'w', 1, 1)")
       db.exec("INSERT INTO coding_sessions (workspace_id, title, created_at, updated_at) VALUES (1, 'a', 1, 1)")
       db.exec("INSERT INTO coding_messages (session_id, role, content, created_at) VALUES (1, 'user', 'hi', 1)")
       db.exec('INSERT INTO orchestration_runs (workspace_id, session_id, user_message_id, status, created_at, updated_at) VALUES (1, 1, 1, \'running\', 1, 1)')
-      db.exec('INSERT INTO worker_tool_approvals (workspace_id, session_id, orchestration_run_id, tool_name, capability, arguments_json, arguments_hash, summary, status, created_at) VALUES (1, 1, 1, \'workspace_read\', \'workspace.read\', \'{}\', \'h\', \'s\', \'pending\', 1)')
+      db.exec('INSERT INTO worker_tool_approvals (workspace_id, session_id, orchestration_run_id, tool_name, capability, arguments_json, arguments_hash, summary, status, created_at) VALUES (1, 1, 1, \'terminal_execute\', \'terminal.execute\', \'{}\', \'h\', \'s\', \'pending\', 1)')
+      db.exec('INSERT INTO worker_command_executions (workspace_id, session_id, orchestration_run_id, approval_id, program, arguments_json, arguments_hash, status, stdout, stderr, output_bytes, truncated, created_at) VALUES (1, 1, 1, 1, \'node\', \'[]\', \'h\', \'completed\', \'\', \'\', 0, 0, 1)')
       db.exec('DELETE FROM workspaces WHERE id = 1')
-      const approvals: unknown = db.prepare('SELECT COUNT(*) AS n FROM worker_tool_approvals').get()
-      assert.equal(JSON.stringify(approvals), JSON.stringify({ n: 0 }))
+      const remaining: unknown = db.prepare('SELECT COUNT(*) AS n FROM worker_command_executions').get()
+      assert.equal(JSON.stringify(remaining), JSON.stringify({ n: 0 }))
     } finally {
       db.close()
     }
   })
 
-  it('rerunning v13 is idempotent', () => {
+  it('rerunning v14 is idempotent', () => {
     const db = openFresh()
     try {
       runMigrations(db, migrations)
@@ -168,49 +195,31 @@ describe('migration 13 (worker tools)', () => {
     }
   })
 
-  it('a failing v13 migration rolls back with user_version staying v12', () => {
+  it('a failing v14 migration rolls back with user_version staying v13', () => {
     const db = openFresh()
     try {
-      seedV12(db)
-      const failingV13: Migration = {
-        version: 13,
-        name: 'broken-worker-tools',
+      seedV13(db)
+      const failingV14: Migration = {
+        version: 14,
+        name: 'broken-command-executions',
         up(target): void {
-          target.exec('CREATE TABLE worker_tool_approvals (id INTEGER PRIMARY KEY)')
+          target.exec('CREATE TABLE worker_command_executions (id INTEGER PRIMARY KEY)')
           throw new Error('boom after ddl')
         }
       }
-      assert.throws(
-        () =>
-          runMigrations(db, [
-            migration001Initial,
-            migration002Workspaces,
-            migration003ChangeTransactions,
-            migration004CodingSessions,
-            migration005AiProviders,
-            migration006MessageContext,
-            migration007ChangeSets,
-            migration008OrchestrationRuns,
-            migration009Heart,
-            migration010Looplink,
-            migration011RecoveryContinuity,
-            migration012AgentCapabilities,
-            failingV13
-          ]),
-        MigrationError
-      )
-      assert.equal(getUserVersion(db), 12)
-      assert.equal(tableExists(db, 'worker_tool_approvals'), false)
+      assert.throws(() => runMigrations(db, [...V13, failingV14]), MigrationError)
+      assert.equal(getUserVersion(db), 13)
+      assert.equal(tableExists(db, 'worker_command_executions'), false)
     } finally {
       db.close()
     }
   })
 
-  it('migration 13 is registered after migration 12', () => {
+  it('migration 14 is registered after migration 13', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
       [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     )
-    assert.equal(migration013WorkerTools.version, 13)
+    assert.equal(migration014WorkerCommandExecutions.version, 14)
   })
 })

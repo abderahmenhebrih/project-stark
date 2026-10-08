@@ -131,6 +131,7 @@ void app.whenReady().then(() => {
     recoveryStore: starkDatabase.getRecovery(),
     capabilityStore: starkDatabase.getCapabilities(),
     workerToolStore: starkDatabase.getWorkerTools(),
+    workerCommandStore: starkDatabase.getWorkerCommands(),
     codingSessions: starkDatabase.getCodingSessions(),
     aiProviders: starkDatabase.getAiProviders()
   })
@@ -147,6 +148,34 @@ void app.whenReady().then(() => {
   // for manual continuation.
   try {
     starkDatabase.getRecovery().markRunningAsInterrupted(Date.now())
+  } catch {
+    // Best effort: a failed recovery mark must never block startup.
+  }
+  // Crash recovery for Worker commands (Stage 25): leftover launching /
+  // running executions become interrupted with no re-execution and no
+  // PID kills (PIDs are never persisted). Parked runs that were waiting
+  // on those executions fail with safe copy; approvals stay consumed.
+  try {
+    const now = Date.now()
+    const outcome = starkDatabase.getWorkerCommands().markLaunchingAndRunningAsInterrupted(now)
+    for (const runId of outcome.runIds) {
+      try {
+        const run = starkDatabase.getOrchestrationRuns().findRunById(runId)
+        if (run !== undefined && run.status === 'waiting_for_approval') {
+          starkDatabase.getOrchestrationRuns().updateRunState({
+            id: runId,
+            status: 'failed',
+            action: run.action,
+            planSummary: run.planSummary,
+            finalMessageId: run.finalMessageId,
+            errorCategory: 'An approved Worker command was interrupted. Start the Work request again.',
+            now
+          })
+        }
+      } catch {
+        // Best effort per run.
+      }
+    }
   } catch {
     // Best effort: a failed recovery mark must never block startup.
   }

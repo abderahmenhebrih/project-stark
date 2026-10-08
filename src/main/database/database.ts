@@ -9,6 +9,7 @@ import { HeartRepository } from '../heart/heart-repository'
 import { LooplinkRepository } from '../looplink/looplink-repository'
 import { RecoveryRepository } from '../recovery/recovery-repository'
 import { CapabilityRepository } from '../capabilities/capability-repository'
+import { WorkerCommandRepository } from '../worker-tools/worker-command-repository'
 import { WorkerToolRepository } from '../worker-tools/worker-tool-repository'
 import { OrchestrationRepository } from './repositories/orchestration-repository'
 import { AiProviderRepository } from './repositories/ai-provider-repository'
@@ -99,6 +100,7 @@ export class StarkDatabase {
   private recoveryRepo: RecoveryRepository | null = null
   private capabilityRepo: CapabilityRepository | null = null
   private workerToolRepo: WorkerToolRepository | null = null
+  private workerCommandRepo: WorkerCommandRepository | null = null
   private codingSessionRepo: CodingSessionRepository | null = null
   private aiProviderRepo: AiProviderRepository | null = null
   private schemaVersion = 0
@@ -136,6 +138,7 @@ export class StarkDatabase {
       this.recoveryRepo = new RecoveryRepository(db)
       this.capabilityRepo = new CapabilityRepository(db)
       this.workerToolRepo = new WorkerToolRepository(db)
+      this.workerCommandRepo = new WorkerCommandRepository(db)
       this.codingSessionRepo = new CodingSessionRepository(db)
       this.aiProviderRepo = new AiProviderRepository(db)
     } catch (error) {
@@ -167,6 +170,7 @@ export class StarkDatabase {
       this.recoveryRepo = null
       this.capabilityRepo = null
       this.workerToolRepo = null
+      this.workerCommandRepo = null
       this.codingSessionRepo = null
       this.aiProviderRepo = null
       this.schemaVersion = 0
@@ -269,6 +273,14 @@ export class StarkDatabase {
       throw new DatabaseError('database is not initialized')
     }
     return this.workerToolRepo
+  }
+
+  /** Worker command-execution repository access for main-process services. Throws when closed. */
+  getWorkerCommands(): WorkerCommandRepository {
+    if (this.workerCommandRepo === null) {
+      throw new DatabaseError('database is not initialized')
+    }
+    return this.workerCommandRepo
   }
 
   /** Coding-session repository access for main-process services. Throws when closed. */

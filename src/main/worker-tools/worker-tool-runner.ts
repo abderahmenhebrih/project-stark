@@ -51,6 +51,11 @@ import {
   WORKER_PROPOSAL_USER_DENY_MESSAGE
 } from './worker-proposal-validation'
 import {
+  WORKER_TERMINAL_DENY_MESSAGE,
+  WORKER_TERMINAL_USER_DENY_MESSAGE,
+  buildTerminalApprovalSummary
+} from './worker-terminal-validation'
+import {
   MAX_WORKER_TOOL_CALLS,
   MAX_WORKER_TOOL_STATE_BYTES,
   MAX_WORKER_TURNS
@@ -97,12 +102,17 @@ function contextBytes(messages: readonly { readonly content: string }[]): number
 const WORKER_TOOL_INSTRUCTIONS =
   STAGE_18_FIXED_WORKER_INSTRUCTIONS +
   " You may use STARK's read-only tools to inspect the project. " +
-  'You may request exactly one tool per turn (workspace_read, workspace_search, git_read, change_propose) ' +
+  'You may request exactly one tool per turn (workspace_read, workspace_search, git_read, change_propose, terminal_execute) ' +
   'or return final text. Never request more than one tool, never combine a tool request with final text. ' +
   'If change_propose is available, you may create a reviewable code proposal only for files you previously read successfully in this run. ' +
   'Use the readRef returned by workspace_read. ' +
   'A proposal does not modify files. ' +
   'A human must review and Accept every change before disk is modified. ' +
+  'If terminal_execute is available, you may request one bounded external command. ' +
+  'Commands require human approval for the exact executable and arguments. ' +
+  'Do not claim a command ran before its tool result confirms execution. ' +
+  'Do not request interactive commands or long-running watch processes. ' +
+  'Terminal commands may have side effects; use them only when useful to the task. ' +
   'Do not claim a proposal was applied.'
 
 export interface WorkerToolRunnerDeps {
@@ -163,7 +173,7 @@ export class WorkerToolRunner {
 
   /** True when at least one tool is advertised (not hard-deny, master on). */
   toolsAdvertised(workspaceId: number, sessionId: number): boolean {
-    for (const tool of ['workspace_read', 'workspace_search', 'git_read', 'change_propose'] as const) {
+    for (const tool of ['workspace_read', 'workspace_search', 'git_read', 'change_propose', 'terminal_execute'] as const) {
       const capability =
         tool === 'workspace_read'
           ? 'workspace.read'
@@ -171,8 +181,18 @@ export class WorkerToolRunner {
             ? 'workspace.search'
             : tool === 'git_read'
               ? 'git.read'
-              : 'change.propose'
+              : tool === 'change_propose'
+                ? 'change.propose'
+                : 'terminal.execute'
       const decision = this.deps.gate.authorize({ workspaceId, sessionId, actor: 'worker', capability })
+      // terminal_execute is exact-approval only: advertised solely on
+      // requires_approval, never on persistent allow.
+      if (tool === 'terminal_execute') {
+        if (decision.decision === 'requires_approval') {
+          return true
+        }
+        continue
+      }
       if (decision.decision === 'allow' || decision.decision === 'requires_approval') {
         return true
       }
@@ -288,6 +308,14 @@ export class WorkerToolRunner {
     for (const schema of workerToolSchemas()) {
       const capability = capabilityForTool(schema.name)
       const decision = this.deps.gate.authorize({ workspaceId, sessionId, actor: 'worker', capability })
+      // terminal_execute is exact-approval only: never advertised on
+      // persistent allow, even if a tampered policy claims it.
+      if (schema.name === 'terminal_execute') {
+        if (decision.decision === 'requires_approval') {
+          out.push(schema)
+        }
+        continue
+      }
       if (decision.decision === 'allow' || decision.decision === 'requires_approval') {
         out.push(schema)
       }
@@ -418,10 +446,19 @@ export class WorkerToolRunner {
             summary = buildProposalApprovalSummary(resolvedForSummary.resolved)
           }
         }
+        if (parsed.tool === 'terminal_execute') {
+          const command = parsed as { program: string; args: readonly string[] }
+          summary = buildTerminalApprovalSummary({ program: command.program, args: command.args })
+        }
         // Authoritative execution-time gate (snapshot never authority).
         const gateDecision = this.deps.gate.authorize({ workspaceId, sessionId, actor: 'worker', capability: capabilityForTool(parsed.tool) })
         if (gateDecision.decision === 'deny') {
-          const deniedHistoryPayload = parsed.tool === 'change_propose' ? WORKER_PROPOSAL_DENY_MESSAGE : ''
+          const deniedHistoryPayload =
+            parsed.tool === 'change_propose'
+              ? WORKER_PROPOSAL_DENY_MESSAGE
+              : parsed.tool === 'terminal_execute'
+                ? WORKER_TERMINAL_DENY_MESSAGE
+                : ''
           this.deps.tools.appendEvent({
             workspaceId, sessionId, runId, toolName: parsed.tool, capability: capabilityForTool(parsed.tool),
             argsJson, summary, payload: '', bytes: 0, status: 'denied', approvalId: null, now: this.now()
@@ -511,11 +548,14 @@ export class WorkerToolRunner {
         )
         // Stage 24: failed proposal reasons (stale/unknown) stay visible to
         // the Worker as bounded untrusted data; succeeded payloads carry
-        // the normalized proposal result (IDs only, no code).
+        // the normalized proposal result (IDs only, no code). Stage 25:
+        // terminal denial/failure reasons stay visible the same way.
         const historyPayload =
           execResult.status === 'succeeded'
             ? execResult.payload
-            : parsed.tool === 'change_propose' && typeof execResult.reason === 'string' && execResult.reason !== ''
+            : (parsed.tool === 'change_propose' || parsed.tool === 'terminal_execute') &&
+                typeof execResult.reason === 'string' &&
+                execResult.reason !== ''
               ? execResult.reason
               : ''
         history.push({ tool: parsed.tool, argsJson, status: execResult.status, payload: historyPayload, summary: execResult.summary })
@@ -625,6 +665,37 @@ export class WorkerToolRunner {
     }
     const state = JSON.parse(runState.stateJson) as PersistedToolState
     if (approve) {
+      // Stage 25: terminal approvals reserve + consume inside ONE
+      // transaction immediately before spawn (at-most-once). The runner
+      // must NOT pre-transition them — the command service owns the
+      // pending → approved → consumed sequence atomically.
+      if (stored.toolName === 'terminal_execute') {
+        const execResult = await this.deps.executor.executeApproved({
+          workspaceId, sessionId, runId: stored.runId, tool: 'terminal_execute',
+          args: parsedArgs as never, argsJson: stored.argsJson, approvalId, now: this.now()
+        })
+        if (execResult.status === 'denied') {
+          // Policy revoked (or invalid) since the request: no execution
+          // occurred and nothing was reserved, so record the denial
+          // against the still-pending approval and unblock the session.
+          this.deps.tools.transitionApproval(approvalId, 'denied', this.now())
+        } else {
+          // Record the bounded terminal outcome as a run step so run
+          // details show the result after completion (inert text only —
+          // the canonical audit stays in worker_tool_events).
+          this.deps.runs.appendStepWithModel(
+            { runId: stored.runId, ordinal: 50 + state.history.length, kind: 'worker_followup', status: 'completed', instruction: null, output: execResult.summary, now: this.now() },
+            { role: 'worker', providerId: state.workerProviderId, model: state.workerModel, routeKey: state.routeKey, requestedProfile: state.requestedProfile }
+          )
+        }
+        const terminalHistoryPayload =
+          execResult.status === 'succeeded'
+            ? execResult.payload
+            : typeof execResult.reason === 'string' && execResult.reason !== ''
+              ? execResult.reason
+              : ''
+        return await this.continueAfterTool({ workspaceId, sessionId, runId: stored.runId, state, historyAppend: { tool: stored.toolName, argsJson: stored.argsJson, status: execResult.status, payload: terminalHistoryPayload, summary: execResult.summary } })
+      }
       if (!this.deps.tools.transitionApproval(approvalId, 'approved', this.now())) {
         throw new InvalidWorkerToolRequestError('approval is not pending')
       }
@@ -653,7 +724,12 @@ export class WorkerToolRunner {
       workspaceId, sessionId, runId: stored.runId, toolName: stored.toolName, capability: stored.capability,
       argsJson: stored.argsJson, summary: stored.summary, payload: '', bytes: 0, status: 'denied', approvalId, now: this.now()
     })
-    const deniedHistoryPayload = stored.toolName === 'change_propose' ? WORKER_PROPOSAL_USER_DENY_MESSAGE : ''
+    const deniedHistoryPayload =
+      stored.toolName === 'change_propose'
+        ? WORKER_PROPOSAL_USER_DENY_MESSAGE
+        : stored.toolName === 'terminal_execute'
+          ? WORKER_TERMINAL_USER_DENY_MESSAGE
+          : ''
     return await this.continueAfterTool({ workspaceId, sessionId, runId: stored.runId, state, historyAppend: { tool: stored.toolName, argsJson: stored.argsJson, status: 'denied', payload: deniedHistoryPayload, summary: stored.summary } })
   }
 
@@ -731,9 +807,18 @@ export class WorkerToolRunner {
               resumeSummary = buildProposalApprovalSummary(resolvedForSummary.resolved)
             }
           }
+          if (parsed.tool === 'terminal_execute') {
+            const command = parsed as { program: string; args: readonly string[] }
+            resumeSummary = buildTerminalApprovalSummary({ program: command.program, args: command.args })
+          }
           const gateDecision = this.deps.gate.authorize({ workspaceId, sessionId, actor: 'worker', capability: capabilityForTool(parsed.tool) })
           if (gateDecision.decision === 'deny') {
-            const deniedPayload = parsed.tool === 'change_propose' ? WORKER_PROPOSAL_DENY_MESSAGE : ''
+            const deniedPayload =
+              parsed.tool === 'change_propose'
+                ? WORKER_PROPOSAL_DENY_MESSAGE
+                : parsed.tool === 'terminal_execute'
+                  ? WORKER_TERMINAL_DENY_MESSAGE
+                  : ''
             this.deps.tools.appendEvent({
               workspaceId, sessionId, runId, toolName: parsed.tool, capability: capabilityForTool(parsed.tool),
               argsJson, summary: resumeSummary, payload: '', bytes: 0, status: 'denied', approvalId: null, now: this.now()
@@ -794,7 +879,9 @@ export class WorkerToolRunner {
           const resumeHistoryPayload =
             execResult.status === 'succeeded'
               ? execResult.payload
-              : parsed.tool === 'change_propose' && typeof (execResult as { reason?: unknown }).reason === 'string' && ((execResult as { reason?: string }).reason ?? '') !== ''
+              : (parsed.tool === 'change_propose' || parsed.tool === 'terminal_execute') &&
+                  typeof (execResult as { reason?: unknown }).reason === 'string' &&
+                  ((execResult as { reason?: string }).reason ?? '') !== ''
                 ? ((execResult as { reason?: string }).reason as string)
                 : ''
           history.push({ tool: parsed.tool, argsJson, status: execResult.status, payload: resumeHistoryPayload, summary: execResult.summary })

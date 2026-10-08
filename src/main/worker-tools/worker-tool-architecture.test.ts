@@ -12,22 +12,22 @@ function readShared(relative: string): string {
 }
 
 describe('worker tool architecture', () => {
-  it('tool registry contains exactly four tools (Stage 24)', () => {
+  it('tool registry contains exactly five tools (Stage 25)', () => {
     const registry = readMain('worker-tools/worker-tool-registry.ts')
     assert.ok(registry.includes('workspace_read'))
     assert.ok(registry.includes('workspace_search'))
     assert.ok(registry.includes('git_read'))
     assert.ok(registry.includes('change_propose'))
-    for (const forbidden of ['terminal_execute', 'file_write', 'shell']) {
+    assert.ok(registry.includes('terminal_execute'))
+    for (const forbidden of ['file_write', 'shell']) {
       assert.ok(!registry.includes(`'${forbidden}'`), `registry must not contain ${forbidden}`)
     }
   })
 
-  it('change_propose maps to Stage 22 change.propose capability only', () => {
+  it('change_propose and terminal_execute map to their Stage 22 capabilities', () => {
     const registry = readMain('worker-tools/worker-tool-registry.ts')
     assert.ok(registry.includes("'change.propose'") || registry.includes('change.propose'))
-    // No other new tool mapping.
-    assert.ok(!registry.includes('terminal.execute'))
+    assert.ok(registry.includes("'terminal.execute'") || registry.includes('terminal.execute'))
   })
 
   it('Worker loop is explicitly bounded (no while-true, no recursion)', () => {
@@ -110,11 +110,69 @@ describe('worker tool architecture', () => {
     }
   })
 
-  it('Brain remains tool-free (no change_propose schema)', () => {
+  it('terminal_execute schema carries program plus argv only', () => {
+    const registry = readMain('worker-tools/worker-tool-registry.ts')
+    const start = registry.indexOf("name: 'terminal_execute'")
+    assert.ok(start >= 0, 'terminal_execute schema must exist')
+    const end = registry.indexOf('}\n    }\n  ]', start)
+    assert.ok(end > start, 'schema block must end')
+    const slice = registry.slice(start, end)
+    assert.ok(slice.includes('program'), 'schema must carry program')
+    assert.ok(slice.includes('args'), 'schema must carry args')
+    // Quoted property keys only: descriptions may use ordinary words.
+    for (const forbidden of ['"command"', '"cwd"', '"env"', '"shell"', '"stdin"', '"timeout"', '"background"', '"detached"', '"workspaceId"', '"sessionId"']) {
+      assert.ok(!slice.includes(forbidden), `terminal_execute request schema must not contain ${forbidden}`)
+    }
+  })
+
+  it('worker command service has bounded authority only (static)', () => {
+    const service = readMain('worker-tools/worker-command-service.ts')
+    for (const forbidden of [
+      'WorkspaceFileWriteService',
+      'writeTextFile',
+      'acceptTransaction',
+      'rejectTransaction',
+      'rollbackTransaction',
+      'TerminalService',
+      'TerminalManager',
+      'node-pty',
+      'OpenAI',
+      'generateText',
+      'generateStructured',
+      'credential'
+    ]) {
+      assert.ok(!service.includes(forbidden), `command service must not contain ${forbidden}`)
+    }
+    // May depend on the gate, workspace authority, and persistence only.
+    assert.ok(service.includes('CapabilityGate'), 'command service rechecks the gate')
+    assert.ok(service.includes('WorkerCommandRepository'), 'command service persists executions')
+  })
+
+  it('worker command runner uses argv execution only (static)', () => {
+    const service = readMain('worker-tools/worker-command-service.ts')
+    assert.ok(!service.includes('exec('), 'no exec shell helper')
+    assert.ok(!service.includes('execSync'), 'no sync exec helper')
+    assert.ok(!service.includes('shell: true'), 'never a shell')
+    assert.ok(!service.includes('detached: true'), 'never detached')
+    assert.ok(service.includes('shell: false'), 'argv execution is explicit')
+    assert.ok(service.includes('stdio: ['), 'stdio is pinned')
+  })
+
+  it('worker command cleanup targets only the spawned child (static)', () => {
+    const service = readMain('worker-tools/worker-command-service.ts')
+    for (const forbidden of ['taskkill', 'pkill', 'killall', 'image name', 'process-name']) {
+      assert.ok(!service.includes(forbidden), `command service must not contain ${forbidden}`)
+    }
+    assert.ok(service.includes('killOnlyChild'), 'cleanup is scoped to the spawned child')
+  })
+
+  it('Brain remains tool-free (no change_propose or terminal_execute schema)', () => {
     const brain = readMain('ai/ai-brain-service.ts')
     assert.ok(!brain.includes('change_propose'), 'Brain must not name proposal tool')
+    assert.ok(!brain.includes('terminal_execute'), 'Brain must not name terminal tool')
     const shared = readShared('worker-tools/types.ts')
     assert.ok(shared.includes('change_propose'))
+    assert.ok(shared.includes('terminal_execute'))
   })
 
   it('tool domain performs no mutation (static)', () => {
@@ -123,15 +181,23 @@ describe('worker tool architecture', () => {
       'worker-tools/worker-tool-runner.ts',
       'worker-tools/worker-tool-approval-service.ts',
       'worker-tools/worker-tool-repository.ts',
+      'worker-tools/worker-command-repository.ts',
       'worker-tools/worker-proposal-service.ts',
       'worker-tools/worker-read-ref.ts',
-      'worker-tools/worker-proposal-validation.ts'
+      'worker-tools/worker-proposal-validation.ts',
+      'worker-tools/worker-terminal-validation.ts',
+      'worker-tools/worker-executable.ts'
     ]) {
       const source = readMain(file)
       for (const forbidden of ['.rm(', 'mkdir', 'git commit', 'git checkout', 'git push', 'git reset', 'terminal.write', 'spawn(']) {
         assert.ok(!source.includes(forbidden), `${file} must not contain ${forbidden}`)
       }
     }
+    // The Stage 25 command service spawns exactly once per approved action
+    // through its own child handle (covered by the argv-only test above);
+    // it still never touches the human PTY writer.
+    const commands = readMain('worker-tools/worker-command-service.ts')
+    assert.ok(!commands.includes('terminal.write'), 'command service never writes the human terminal')
     // The Git read path reuses the existing safe runner only.
     const service = readMain('worker-tools/worker-tool-service.ts')
     assert.ok(!service.includes('GitProcessRunner'), 'tool service uses the Git service, not the runner directly')
