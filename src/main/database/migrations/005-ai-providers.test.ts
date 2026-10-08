@@ -40,32 +40,32 @@ function seedV4(db: DatabaseSync): void {
 }
 
 describe('migration 5 (AI providers)', () => {
-  it('fresh DB migrates to v5', () => {
+  it('fresh DB migrates through v6 with provider tables', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 5)
-      assert.equal(getUserVersion(db), 5)
+      assert.equal(runMigrations(db, migrations), 6)
+      assert.equal(getUserVersion(db), 6)
     } finally {
       db.close()
     }
   })
 
-  it('v4 database upgrades to v5', () => {
+  it('v4 database upgrades through v6', () => {
     const db = openFresh()
     try {
       seedV4(db)
-      assert.equal(runMigrations(db, migrations), 5)
-      assert.equal(getUserVersion(db), 5)
+      assert.equal(runMigrations(db, migrations), 6)
+      assert.equal(getUserVersion(db), 6)
     } finally {
       db.close()
     }
   })
 
-  it('preserves all v4 tables and rows', () => {
+  it('preserves all v4 tables and rows through v6', () => {
     const db = openFresh()
     try {
       seedV4(db)
-      assert.equal(runMigrations(db, migrations), 5)
+      assert.equal(runMigrations(db, migrations), 6)
       for (const table of ['key_value', 'workspaces', 'change_transactions', 'coding_sessions', 'coding_messages']) {
         const count: unknown = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()
         assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }), table)
@@ -137,12 +137,12 @@ describe('migration 5 (AI providers)', () => {
     }
   })
 
-  it('rerunning v5 is idempotent and keeps provider rows', () => {
+  it('rerunning through v6 is idempotent and keeps provider rows', () => {
     const db = openFresh()
     try {
       runMigrations(db, migrations)
       db.exec("INSERT INTO ai_provider_configs (provider_id, selected_model, created_at, updated_at) VALUES ('openai', 'gpt-x', 1, 1)")
-      assert.equal(runMigrations(db, migrations), 5)
+      assert.equal(runMigrations(db, migrations), 6)
       const row: unknown = db.prepare('SELECT selected_model FROM ai_provider_configs WHERE provider_id = ?').get('openai')
       assert.equal(JSON.stringify(row), JSON.stringify({ selected_model: 'gpt-x' }))
     } finally {
@@ -196,10 +196,10 @@ describe('migration 5 (AI providers)', () => {
     }
   })
 
-  it('migration 5 is registered after migration 4', () => {
+  it('migration 5 remains registered before migration 6', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5]
+      [1, 2, 3, 4, 5, 6]
     )
     assert.equal(migration005AiProviders.version, 5)
   })

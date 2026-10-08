@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type Dispatch, type ReactElement } from 'react'
 import type { WorkspaceEntry } from '../../../../shared/workspace-files/types'
 import {
   acceptChangeTransaction,
@@ -10,11 +10,19 @@ import {
 } from '../../lib/changes-api'
 import { normalizeChangeTransactionError } from '../../lib/change-transaction-error'
 import { getGitDiff } from '../../lib/git-api'
+import {
+  prepareContextExcerpt,
+  prepareContextFile,
+  prepareContextSearchMatch
+} from '../../lib/session-context-api'
+import { normalizeContextError } from '../../lib/session-context-error'
 import { getWorkspaceFilesApi } from '../../lib/stark-api'
+import type { WorkspaceSearchMatch } from '../../../../shared/workspace-search/types'
+import type { SessionContextDraft } from '../../../../shared/context/types'
 import { ChangesPanel } from '../changes/ChangesPanel'
 import { TransactionReview } from '../changes/TransactionReview'
 import { changesReducer, initialChangesState } from '../changes/changes-state'
-import { CodeEditor } from '../editor/CodeEditor'
+import { CodeEditor, type EditorSelection } from '../editor/CodeEditor'
 import { EditorToolbar } from '../editor/EditorToolbar'
 import { buildDocumentUri } from '../editor/editor-document'
 import { classifyEol, isEditableEol, MIXED_EOL_MESSAGE } from '../editor/editor-eol'
@@ -24,6 +32,7 @@ import { GitDiffViewer } from '../git/GitDiffViewer'
 import { GitPanel } from '../git/GitPanel'
 import { gitDiffReducer, initialGitDiffState } from '../git/git-state'
 import { SearchPanel } from '../search/SearchPanel'
+import type { SessionContextDraftAction } from '../sessions/session-context-state'
 import { TerminalPanel } from '../terminal/TerminalPanel'
 import { confirmDiscardUnsavedDraft, setUnsavedDraft } from './editor-guard'
 import {
@@ -42,6 +51,7 @@ interface TreeNodeProps {
   readonly state: ExplorerState
   readonly onToggle: (path: string) => void
   readonly onSelectFile: (path: string) => void
+  readonly onAttachFile: (path: string) => void
 }
 
 function entryGlyph(kind: WorkspaceEntry['kind'], expanded: boolean): string {
@@ -51,7 +61,7 @@ function entryGlyph(kind: WorkspaceEntry['kind'], expanded: boolean): string {
   return ''
 }
 
-function TreeNode({ path, state, onToggle, onSelectFile }: TreeNodeProps): ReactElement | null {
+function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile }: TreeNodeProps): ReactElement | null {
   const entries = state.entries[path]
   const loading = state.loading.includes(path)
   const error = state.errors[path] ?? null
@@ -75,14 +85,25 @@ function TreeNode({ path, state, onToggle, onSelectFile }: TreeNodeProps): React
               <span className="explorer__name">{entry.name}</span>
             </button>
           ) : entry.kind === 'file' ? (
-            <button
-              className="explorer__row explorer__row--file"
-              type="button"
-              onClick={() => onSelectFile(entry.relativePath)}
-            >
-              <span className="explorer__chevron" aria-hidden="true" />
-              <span className="explorer__name">{entry.name}</span>
-            </button>
+            <span className="explorer__file-row">
+              <button
+                className="explorer__row explorer__row--file"
+                type="button"
+                onClick={() => onSelectFile(entry.relativePath)}
+              >
+                <span className="explorer__chevron" aria-hidden="true" />
+                <span className="explorer__name">{entry.name}</span>
+              </button>
+              <button
+                className="explorer__attach"
+                type="button"
+                onClick={() => onAttachFile(entry.relativePath)}
+                aria-label={`Attach ${entry.relativePath} to chat`}
+                title="Attach file to chat"
+              >
+                Attach
+              </button>
+            </span>
           ) : (
             <span className="explorer__row explorer__row--static">
               <span className="explorer__chevron" aria-hidden="true" />
@@ -92,7 +113,7 @@ function TreeNode({ path, state, onToggle, onSelectFile }: TreeNodeProps): React
           )}
           {entry.kind === 'directory' && state.expanded.includes(entry.relativePath) && (
             <div className="explorer__children">
-              <TreeNode path={entry.relativePath} state={state} onToggle={onToggle} onSelectFile={onSelectFile} />
+              <TreeNode path={entry.relativePath} state={state} onToggle={onToggle} onSelectFile={onSelectFile} onAttachFile={onAttachFile} />
             </div>
           )}
         </li>
@@ -117,6 +138,7 @@ function TreeNode({ path, state, onToggle, onSelectFile }: TreeNodeProps): React
 
 interface ExplorerProps {
   readonly workspaceId: number
+  readonly contextDraftsDispatch: Dispatch<SessionContextDraftAction>
 }
 
 function toReadError(error: unknown): string {
@@ -139,12 +161,15 @@ function toReadError(error: unknown): string {
  * read-only awareness (branch/status/diff, explicit Refresh only, no
  * polling); selecting a staged/working row opens its patch in the
  * main pane via a read-only Monaco viewer, and Open file reuses the
- * existing file read path. All filesystem access
+ * existing file read path. Explicit chat context attaches only on
+ * visible actions (preview Attach selection/file, tree Attach, search
+ * Attach) through the validated prepare bridges — never on open,
+ * edit, or save. All filesystem access
  * goes through workspace bridges; stale responses from a previous
  * workspace are ignored, and switching workspaces resets tree,
  * preview, search, editor, change review, and Git diff.
  */
-export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
+export function Explorer({ workspaceId, contextDraftsDispatch }: ExplorerProps): ReactElement {
   const [state, dispatch] = useReducer(explorerReducer, workspaceId, (id) => ({
     ...initialExplorerState(),
     workspaceId: id
@@ -153,6 +178,10 @@ export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
   const [previewLine, setPreviewLine] = useState<number | null>(null)
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [focusRequest, setFocusRequest] = useState<EditorFocus | null>(null)
+  // Latest Monaco cursor selection for the read-only preview. Cleared
+  // on every file change; edit-mode buffers are excluded because line
+  // numbers may no longer match disk (main re-reads at send time).
+  const [editorSelection, setEditorSelection] = useState<EditorSelection | null>(null)
   const [changes, changesDispatch] = useReducer(changesReducer, workspaceId, (id) => ({
     ...initialChangesState(),
     workspaceId: id
@@ -237,6 +266,7 @@ export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
     dispatch({ type: 'file-selected', path })
     setEditor(null)
     setFocusRequest(null)
+    setEditorSelection(null)
     changesDispatch({ type: 'review-closed' })
     gitDiffDispatch({ type: 'diff-closed' })
     const api = getWorkspaceFilesApi()
@@ -319,6 +349,52 @@ export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
     setPreviewLine(line)
     loadPreviewFile(path)
     setFocusRequest(toEditorFocus(line, column))
+  }
+
+  /**
+   * Explicit context attach plumbing. Each action performs exactly one
+   * bounded prepare call; failures surface as safe copy in the Session
+   * panel's Attached context section (the single owner of draft
+   * errors). Nothing attaches implicitly — no open/edit/save hooks.
+   */
+  function handleAttachDraft(promise: Promise<SessionContextDraft>): void {
+    promise.then(
+      (draft) => contextDraftsDispatch({ type: 'draft-added', workspaceId, draft }),
+      (error: unknown) =>
+        contextDraftsDispatch({
+          type: 'draft-failed',
+          workspaceId,
+          message: normalizeContextError(error).message
+        })
+    )
+  }
+
+  function handleAttachPreviewSelection(): void {
+    const preview = state.preview
+    if (preview === null || editorSelection === null || editor !== null) {
+      return
+    }
+    const lineStart = Math.min(editorSelection.startLineNumber, editorSelection.endLineNumber)
+    const lineEnd = Math.max(editorSelection.startLineNumber, editorSelection.endLineNumber)
+    handleAttachDraft(prepareContextExcerpt({ workspaceId, relativePath: preview.path, lineStart, lineEnd }))
+  }
+
+  function handleAttachPreviewFile(): void {
+    const preview = state.preview
+    if (preview === null || editor !== null) {
+      return
+    }
+    handleAttachDraft(prepareContextFile({ workspaceId, relativePath: preview.path }))
+  }
+
+  function handleAttachTreeFile(path: string): void {
+    handleAttachDraft(prepareContextFile({ workspaceId, relativePath: path }))
+  }
+
+  function handleAttachSearchResult(match: WorkspaceSearchMatch): void {
+    handleAttachDraft(
+      prepareContextSearchMatch({ workspaceId, relativePath: match.relativePath, line: match.line })
+    )
   }
 
   function handleEdit(): void {
@@ -536,9 +612,14 @@ export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
         </div>
         <div className="workbench__sidebar-body">
           {tab === 'explorer' ? (
-            <TreeNode path="" state={state} onToggle={handleToggle} onSelectFile={handleSelectFile} />
+            <TreeNode path="" state={state} onToggle={handleToggle} onSelectFile={handleSelectFile} onAttachFile={handleAttachTreeFile} />
           ) : tab === 'search' ? (
-            <SearchPanel key={workspaceId} workspaceId={workspaceId} onSelectResult={handleSelectSearchResult} />
+            <SearchPanel
+              key={workspaceId}
+              workspaceId={workspaceId}
+              onSelectResult={handleSelectSearchResult}
+              onAttachResult={handleAttachSearchResult}
+            />
           ) : tab === 'git' ? (
             <GitPanel
               key={workspaceId}
@@ -676,9 +757,23 @@ export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
               status={readOnlyStatus}
               actions={
                 state.preview.revision !== null && previewEditable && editor === null ? (
-                  <button className="explorer__primary" type="button" onClick={handleEdit}>
-                    Edit
-                  </button>
+                  <>
+                    <button className="explorer__primary" type="button" onClick={handleEdit}>
+                      Edit
+                    </button>
+                    <button
+                      className="explorer__secondary"
+                      type="button"
+                      onClick={handleAttachPreviewSelection}
+                      disabled={editorSelection === null}
+                      title={editorSelection === null ? 'Select text in the preview first' : 'Attach the selected lines to chat'}
+                    >
+                      Attach selection
+                    </button>
+                    <button className="explorer__secondary" type="button" onClick={handleAttachPreviewFile}>
+                      Attach file
+                    </button>
+                  </>
                 ) : null
               }
             />
@@ -697,6 +792,7 @@ export function Explorer({ workspaceId }: ExplorerProps): ReactElement {
                   eol={previewEol === 'crlf' ? 'CRLF' : 'LF'}
                   readOnly
                   focusRequest={focusRequest}
+                  onSelectionChange={setEditorSelection}
                   ariaLabel="File preview"
                 />
               </div>

@@ -139,6 +139,7 @@ void app.whenReady().then(() => {
     terminalManager,
     gitService: services.gitService,
     codingSessionService: services.codingSessionService,
+    sessionContextService: services.sessionContextService,
     aiProviderService: services.aiProviderService,
     aiCompletionService: services.aiCompletionService
   })

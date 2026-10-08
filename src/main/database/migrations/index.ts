@@ -6,6 +6,7 @@ import { migration002Workspaces } from './002-workspaces'
 import { migration003ChangeTransactions } from './003-change-transactions'
 import { migration004CodingSessions } from './004-coding-sessions'
 import { migration005AiProviders } from './005-ai-providers'
+import { migration006MessageContext } from './006-message-context'
 
 /**
  * Ordered migration registry. Append-only: add new migrations to the end
@@ -16,7 +17,8 @@ export const migrations: readonly Migration[] = [
   migration002Workspaces,
   migration003ChangeTransactions,
   migration004CodingSessions,
-  migration005AiProviders
+  migration005AiProviders,
+  migration006MessageContext
 ]
 
 /**

@@ -7,6 +7,7 @@ import './SearchPanel.css'
 interface SearchPanelProps {
   readonly workspaceId: number
   readonly onSelectResult: (relativePath: string, line: number, column: number) => void
+  readonly onAttachResult?: (match: WorkspaceSearchMatch) => void
 }
 
 function toErrorMessage(error: unknown): string {
@@ -22,7 +23,7 @@ function toErrorMessage(error: unknown): string {
  * key={workspaceId} so switching workspaces clears input, options, and
  * results without cascading effects.
  */
-export function SearchPanel({ workspaceId, onSelectResult }: SearchPanelProps): ReactElement {
+export function SearchPanel({ workspaceId, onSelectResult, onAttachResult }: SearchPanelProps): ReactElement {
   const [state, dispatch] = useReducer(searchPanelReducer, workspaceId, (id) => ({
     ...initialSearchState(),
     workspaceId: id
@@ -131,7 +132,7 @@ export function SearchPanel({ workspaceId, onSelectResult }: SearchPanelProps): 
       {state.matches.length > 0 && (
         <ul className="search__results">
           {state.matches.map((match, index) => (
-            <li key={`${match.relativePath}:${match.line}:${match.column}:${String(index)}`}>
+            <li key={`${match.relativePath}:${match.line}:${match.column}:${String(index)}`} className="search__result-row">
               <button className="search__result" type="button" onClick={() => handleSelect(match)}>
                 <span className="search__result-path">{match.relativePath}</span>
                 <span className="search__result-location">
@@ -139,6 +140,17 @@ export function SearchPanel({ workspaceId, onSelectResult }: SearchPanelProps): 
                 </span>
                 <span className="search__result-preview">{match.preview}</span>
               </button>
+              {onAttachResult !== undefined && (
+                <button
+                  className="search__attach"
+                  type="button"
+                  onClick={() => onAttachResult(match)}
+                  aria-label={`Attach match in ${match.relativePath} line ${match.line} to chat`}
+                  title="Attach excerpt to chat"
+                >
+                  Attach
+                </button>
+              )}
             </li>
           ))}
         </ul>

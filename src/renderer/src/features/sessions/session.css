@@ -243,6 +243,100 @@
   color: var(--stark-text-dim);
 }
 
+/* Explicit attached context: visible chips above the composer. */
+.session__context {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--stark-space-xs);
+  padding: var(--stark-space-sm);
+  border-top: 1px solid var(--stark-border);
+  background: var(--stark-surface);
+  max-height: 40%;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.session__context-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--stark-space-xs);
+}
+
+.session__context-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stark-space-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session__note-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stark-space-xs);
+}
+
+.session__sent-context {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stark-space-xs);
+  margin-top: var(--stark-space-xs);
+}
+
+.context-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--stark-space-xs) var(--stark-space-sm);
+  background: var(--stark-bg);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+  min-width: 0;
+}
+
+.context-card__row {
+  display: flex;
+  align-items: center;
+  gap: var(--stark-space-xs);
+  min-width: 0;
+}
+
+.context-card__label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--stark-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-card__detail {
+  margin: 0;
+  font-size: 11px;
+  color: var(--stark-text-dim);
+}
+
+.context-card__preview {
+  margin: var(--stark-space-xs) 0 0;
+  padding: var(--stark-space-xs) var(--stark-space-sm);
+  font-family: var(--stark-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--stark-text);
+  background: var(--stark-surface);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
 .session__settings {
   flex: 0 0 auto;
   display: flex;

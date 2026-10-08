@@ -5,6 +5,7 @@ import type {
   SendUserMessageResult
 } from '../../shared/sessions/types'
 import type { CodingSessionService } from '../sessions/coding-session-service'
+import { SessionContextError, toPublicContextError } from '../session-context/errors'
 import { toPublicSessionError } from '../sessions/errors'
 import type { IpcBinding } from './binding'
 
@@ -43,6 +44,10 @@ export function createSessionBindings(service: CodingSessionService): readonly I
       channel: IPC_CHANNELS.sessionsSendUserMessage,
       invoke: (payload): Promise<SendUserMessageResult> =>
         service.sendUserMessage(payload).catch((error: unknown) => {
+          // Context attachment failures carry their own safe copy.
+          if (error instanceof SessionContextError) {
+            throw toPublicContextError('send', error)
+          }
           throw toPublicSessionError('send', error)
         })
     }

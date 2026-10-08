@@ -6,6 +6,7 @@ import type { AiCompletionService } from '../ai/ai-completion-service'
 import type { AiProviderService } from '../ai/ai-provider-service'
 import type { GitService } from '../git/git-service'
 import type { CodingSessionService } from '../sessions/coding-session-service'
+import type { SessionContextService } from '../session-context/session-context-service'
 import type { SettingsService } from '../settings/settings-service'
 import type { ProfileService } from '../profile/profile-service'
 import type { TerminalManager } from '../terminal/terminal-manager'
@@ -22,6 +23,7 @@ import { createGitBindings } from './git'
 import { createProfileBindings } from './profile'
 import { createProviderBindings } from './providers'
 import { createSessionBindings } from './sessions'
+import { createSessionContextBindings } from './session-context'
 import { createSettingsBindings } from './settings'
 import { createTerminalBindings } from './terminal'
 import { isTrustedIpcSender } from './trust'
@@ -68,6 +70,7 @@ export interface IpcDependencies {
   readonly terminalManager: TerminalManager
   readonly gitService: GitService
   readonly codingSessionService: CodingSessionService
+  readonly sessionContextService: SessionContextService
   readonly aiProviderService: AiProviderService
   readonly aiCompletionService: AiCompletionService
 }
@@ -88,6 +91,7 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
     ...createTerminalBindings(deps.terminalService, deps.terminalManager),
     ...createGitBindings(deps.gitService),
     ...createSessionBindings(deps.codingSessionService),
+    ...createSessionContextBindings(deps.sessionContextService),
     ...createProviderBindings(deps.aiProviderService),
     ...createAiBindings(deps.aiCompletionService)
   ]

@@ -112,6 +112,7 @@ describe('workspace-files IPC bindings', () => {
         terminalManager,
         gitService: services.gitService,
         codingSessionService: services.codingSessionService,
+        sessionContextService: services.sessionContextService,
         aiProviderService: services.aiProviderService,
         aiCompletionService: services.aiCompletionService
       }).map((binding) => binding.channel)

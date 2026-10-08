@@ -7,15 +7,15 @@ continuously across AI models and sessions — without manually switching
 models, copying prompts, or losing coding context. It targets both
 nontechnical users and developers on Windows, macOS, and Linux.
 
-> **Current stage: AI provider foundation (Stage 14).** This repository contains
+> **Current stage: explicit bounded project context (Stage 15).** This repository contains
 > the Electron + React + TypeScript application with local SQLite
 > persistence and the Settings, local-profile, Workspace, Explorer,
 > Search, single-file Editing, Change Transaction, Monaco Editor,
 > human-only Terminal, read-only Git, persistent local coding-session,
-> and OpenAI provider domains. The provider can only read bounded
-> Session text and append one assistant reply — no tools, no project
-> context, no agents. Brain/Heart orchestration, model routing,
-> authentication, Supabase sync, and the duo-agent workflow are
+> OpenAI provider, and explicit project-context domains. The provider
+> receives only user-attached context plus session text — no tools,
+> no agents, no automatic ingestion. Brain/Heart orchestration, model
+> routing, authentication, Supabase sync, and the duo-agent workflow are
 > **not implemented yet**. Nothing below claims otherwise.
 
 ## Stack
@@ -432,10 +432,11 @@ and no assistant reply is fabricated.
 
 STARK talks to exactly one language-model provider — OpenAI — through
 a provider-neutral architecture (explicit `ProviderRegistry`, one
-registered adapter) so future adapters slot in without changing
-Session/UI/storage foundations. The provider can only read bounded
-Session conversation text and append one real assistant reply. No
-Brain/Heart, no agents, no tools, no project context, no routing.
+  registered adapter) so future adapters slot in without changing
+  Session/UI/storage foundations. The provider reads bounded Session
+  conversation text plus the trailing message's explicit user-attached
+  context, and appends one real assistant reply. No
+  Brain/Heart, no agents, no tools, no automatic ingestion, no routing.
 
 - Official `openai` SDK (main process only), Responses API with
   `store: false`, up to 4096 output tokens, non-streaming. No
@@ -478,7 +479,8 @@ Brain/Heart, no agents, no tools, no project context, no routing.
   ownership, requires a configured credential + model, requires the
   trailing message to be the user's (else "no new message"), enforces
   one in-flight generation per session, sends at most the newest 40
-  messages / 256 KiB (oldest dropped first) plus one fixed
+  messages / 256 KiB (oldest dropped first) plus the trailing
+  message's explicit context block plus one fixed
   main-owned instruction disclaiming file/terminal/Git/web/tool
   access. Assistant text is validated to the 64 KiB message
   discipline and appended atomically with the session timestamp (no
@@ -495,7 +497,50 @@ Brain/Heart, no agents, no tools, no project context, no routing.
   until the real reply (plain text, same inert surface) lands.
 - Logging: production logs never include prompts, history,
   responses, keys, headers, or provider bodies — only provider id,
-  operation, safe category, and duration. Schema is **v5**.
+  operation, safe category, and duration. Schema is **v6** (context
+  rows added; provider tables unchanged).
+
+## Explicit bounded project context
+
+STARK sends the AI only what the user explicitly attaches — never
+whole-project scans, indexes, embeddings, watchers, summaries, open
+files, search lists, terminal output, or Git diffs by default. Every
+attachment is a visible removable chip with inspectable content
+before send, and history shows exactly which items traveled.
+
+- Sources (all explicit buttons): open-file text selection ("Attach
+  selection", read-only preview only), whole open file ("Attach
+  file"), one search-result excerpt ("Attach" per result, ±3-line
+  window), any Explorer text file ("Attach" per row), and manual
+  notes ("Add note"). Nothing attaches on open, edit, save, review,
+  search, or result click.
+- Model: `message_context_items(message_id → coding_messages
+  CASCADE, kind CHECK, label, relative_path?, line_start/end?,
+  content, content_bytes, created_at)` with a per-message index.
+  Schema is **v6** (`006-message-context.ts`, append-only).
+- Bounds (centralized, UTF-8 measured): 20 items/message, 32 KiB per
+  item, 200 KiB total, 16 KiB manual notes, 120-codepoint labels. No
+  silent truncation — over-limit attachments fail with safe UI copy.
+  Stage 6 text rules reused (binary/oversized rejected); symlinks and
+  traversal rejected by the existing path authority.
+- Security: renderer sends only workspaceId + relativePath + line
+  range; main resolves through the trusted path flow, reads via the
+  Stage 6 text reader, and builds drafts. At send, file items are
+  re-read from disk (fresh snapshot wins; vanished files fail the
+  send), so renderer content is preview-only and never trusted. Only
+  manual-note text originates from the renderer (message-grade
+  validation). No absolute paths, no invented file contents, no
+  hidden provider-side injection.
+- Provider payload: deterministic `[CONTEXT n]` blocks (Type, Path +
+  Lines or Label, Content) ahead of the user message — only the
+  trailing message's sent items, never anything else. Persisted rows
+  (not request envelopes) back the history view.
+- Atomicity: message + context rows + session touch land in one
+  SQLite transaction. Assistant messages carry no context.
+- UI: "Attached context" section above the composer (empty-state
+  copy included), per-item Preview/Remove buttons, note form, and
+  read-only history chips under their message — all real buttons and
+  plain-text `<pre>` previews, keyboard/touch accessible.
 
 ## Current status
 
@@ -515,5 +560,6 @@ Brain/Heart, no agents, no tools, no project context, no routing.
 - [x] Human terminal: xterm.js bottom panel + node-pty PTY, one session per window, Workspace-root cwd, explicit Start/Kill, no agent access, no persistence (schema v3)
 - [x] Read-only Git: system-git status/branch/upstream awareness + staged/working diff viewer, Workspace-root equality gate, no polling, no mutation, no network (schema v3 → v4 keeps Git table-free)
 - [x] Persistent coding sessions: workspace-scoped SQLite sessions + append-only user messages, explicit New session, deterministic first-message titles, 50-session / 100-message paging, 64 KiB limit, local-only with no AI provider yet (schema v4 → v5 keeps session tables)
-- [x] AI provider foundation: OpenAI-only adapter (Responses API, store:false, 4096 tokens, no tools/context), safeStorage-encrypted key persistence with fail-closed platforms, one selected model, explicit discovery/test, real assistant replies in Sessions with Retry (schema v5)
+- [x] AI provider foundation: OpenAI-only adapter (Responses API, store:false, 4096 tokens, explicit context only), safeStorage-encrypted key persistence with fail-closed platforms, one selected model, explicit discovery/test, real assistant replies in Sessions with Retry (schema v5 → v6 keeps provider tables)
+- [x] Explicit bounded project context: user-attached excerpts/whole-file/search-match/notes with visible removable chips, main-side re-resolution, 20-item/32 KiB/200 KiB bounds, deterministic provider blocks, persisted per-message history (schema v6)
 - [ ] Agent orchestration, model routing, auth, Supabase — later stages

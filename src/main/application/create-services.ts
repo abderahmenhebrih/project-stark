@@ -13,6 +13,7 @@ import { ElectronSafeStorageCredentialProtector, type CredentialProtector } from
 import { OpenAiProviderAdapter, createOpenAiClient, type OpenAiClientFactory } from '../ai/openai-adapter'
 import { ProviderRegistry } from '../ai/provider-adapter'
 import { CodingSessionService } from '../sessions/coding-session-service'
+import { SessionContextService } from '../session-context/session-context-service'
 import { SettingsService } from '../settings/settings-service'
 import { WorkspaceFileWriteService } from '../workspace-files/workspace-file-write-service'
 import { WorkspaceFilesService } from '../workspace-files/workspace-files-service'
@@ -39,6 +40,7 @@ export interface ApplicationServices {
   readonly terminalService: TerminalService
   readonly gitService: GitService
   readonly codingSessionService: CodingSessionService
+  readonly sessionContextService: SessionContextService
   readonly aiProviderService: AiProviderService
   readonly aiCompletionService: AiCompletionService
 }
@@ -78,11 +80,13 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
   }
   const protector = providers?.credentialProtector ?? new ElectronSafeStorageCredentialProtector()
   const aiProviderService = new AiProviderService(deps.aiProviders, protector, registry)
+  const workspaceFilesService = new WorkspaceFilesService(deps.workspaces)
+  const sessionContextService = new SessionContextService(deps.workspaces, workspaceFilesService)
   return {
     settingsService: new SettingsService(deps.keyValue),
     profileService: new ProfileService(deps.keyValue),
     workspaceService: new WorkspaceService(deps.workspaces),
-    workspaceFilesService: new WorkspaceFilesService(deps.workspaces),
+    workspaceFilesService,
     workspaceFileWriteService: fileWriteService,
     workspaceSearchService: new WorkspaceSearchService(deps.workspaces),
     changeTransactionService: new ChangeTransactionService(
@@ -92,7 +96,10 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
     ),
     terminalService: new TerminalService(deps.workspaces),
     gitService: new GitService(deps.workspaces, new GitProcessRunner()),
-    codingSessionService: new CodingSessionService(deps.workspaces, deps.codingSessions),
+    codingSessionService: new CodingSessionService(deps.workspaces, deps.codingSessions, {
+      contextService: sessionContextService
+    }),
+    sessionContextService,
     aiProviderService,
     aiCompletionService: new AiCompletionService(
       deps.workspaces,

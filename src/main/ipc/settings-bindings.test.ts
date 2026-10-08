@@ -22,6 +22,7 @@ import type { CredentialProtector } from '../ai/credential-protector'
 import { OpenAiProviderAdapter } from '../ai/openai-adapter'
 import { ProviderRegistry } from '../ai/provider-adapter'
 import { CodingSessionService } from '../sessions/coding-session-service'
+import { SessionContextService } from '../session-context/session-context-service'
 import { TerminalManager } from '../terminal/terminal-manager'
 import { TerminalService } from '../terminal/terminal-service'
 import { createIpcBindings } from './index'
@@ -39,6 +40,7 @@ function openService(): {
   terminal: TerminalService
   git: GitService
   sessions: CodingSessionService
+  sessionContext: SessionContextService
   aiProviders: AiProviderService
   aiCompletion: AiCompletionService
 } {
@@ -50,6 +52,7 @@ function openService(): {
   const codingSessions = new CodingSessionRepository(db)
   const aiProviderRows = new AiProviderRepository(db)
   const fileWrites = new WorkspaceFileWriteService(workspaces)
+  const filesService = new WorkspaceFilesService(workspaces)
   // Surface-only construction: the registry factory throws if any test
   // ever touches the network, and the protector is never invoked here.
   const registry = new ProviderRegistry()
@@ -64,13 +67,14 @@ function openService(): {
     service: new SettingsService(repository),
     profile: new ProfileService(repository),
     workspace: new WorkspaceService(workspaces),
-    files: new WorkspaceFilesService(workspaces),
+    files: filesService,
     fileWrites,
     search: new WorkspaceSearchService(workspaces),
     changes: new ChangeTransactionService(workspaces, changeTransactions, fileWrites),
     terminal: new TerminalService(workspaces),
     git: new GitService(workspaces, new GitProcessRunner()),
     sessions: new CodingSessionService(workspaces, codingSessions),
+    sessionContext: new SessionContextService(workspaces, filesService),
     aiProviders,
     aiCompletion: new AiCompletionService(workspaces, codingSessions, aiProviderRows, aiProviders, registry)
   }
@@ -109,6 +113,10 @@ const EXPECTED_ALL_CHANNELS = [
   'stark:providers:save-credential',
   'stark:providers:set-model',
   'stark:providers:test-connection',
+  'stark:session-context:prepare-excerpt',
+  'stark:session-context:prepare-file',
+  'stark:session-context:prepare-note',
+  'stark:session-context:prepare-search-match',
   'stark:sessions:create',
   'stark:sessions:list',
   'stark:sessions:list-messages',
@@ -148,7 +156,7 @@ describe('settings IPC bindings', () => {
   })
 
   it('the full IPC surface contains no arbitrary channels', () => {
-    const { db, service, profile, workspace, files, fileWrites, search, changes, terminal, git, sessions, aiProviders, aiCompletion } = openService()
+    const { db, service, profile, workspace, files, fileWrites, search, changes, terminal, git, sessions, sessionContext, aiProviders, aiCompletion } = openService()
     try {
       const terminalManager = new TerminalManager(
         {
@@ -170,6 +178,7 @@ describe('settings IPC bindings', () => {
         terminalManager,
         gitService: git,
         codingSessionService: sessions,
+        sessionContextService: sessionContext,
         aiProviderService: aiProviders,
         aiCompletionService: aiCompletion
       }).map((binding) => binding.channel)

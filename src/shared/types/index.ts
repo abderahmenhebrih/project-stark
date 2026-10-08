@@ -18,6 +18,7 @@ export interface AppInfo {
 
 import type { ProfileApi } from '../profile/types'
 import type { SessionsApi } from '../sessions/types'
+import type { SessionContextApi } from '../context/types'
 import type { ProvidersApi } from '../providers/types'
 import type { AiApi } from '../ai/types'
 import type { SettingsApi } from '../settings/types'
@@ -42,6 +43,7 @@ export interface StarkApi {
   terminal: TerminalApi
   git: GitApi
   sessions: SessionsApi
+  sessionContext: SessionContextApi
   providers: ProvidersApi
   ai: AiApi
 }

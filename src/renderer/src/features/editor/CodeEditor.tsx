@@ -21,7 +21,17 @@ export interface CodeEditorProps {
   readonly focusRequest: EditorFocus | null
   /** Fired with model.getValue() on every local edit. */
   readonly onContentChange?: (value: string) => void
+  /** Fired with the cursor selection on change (Stage 15 excerpt attach). */
+  readonly onSelectionChange?: (selection: EditorSelection | null) => void
   readonly ariaLabel: string
+}
+
+/** Minimal cursor-selection snapshot (1-based, Monaco convention). */
+export interface EditorSelection {
+  readonly startLineNumber: number
+  readonly startColumn: number
+  readonly endLineNumber: number
+  readonly endColumn: number
 }
 
 interface EditorInstance {
@@ -62,11 +72,13 @@ export function CodeEditor({
   readOnly,
   focusRequest,
   onContentChange,
+  onSelectionChange,
   ariaLabel
 }: CodeEditorProps): ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const instanceRef = useRef<EditorInstance | null>(null)
   const changeRef = useRef(onContentChange)
+  const selectionRef = useRef(onSelectionChange)
   const focusRequestRef = useRef(focusRequest)
   const [failed, setFailed] = useState(false)
   // Mount-once document props: the parent remounts this component via
@@ -77,6 +89,7 @@ export function CodeEditor({
 
   useEffect(() => {
     changeRef.current = onContentChange
+    selectionRef.current = onSelectionChange
     focusRequestRef.current = focusRequest
   })
 
@@ -125,6 +138,19 @@ export function CodeEditor({
           })
           model.onDidChangeContent(() => {
             changeRef.current?.(model.getValue())
+          })
+          editor.onDidChangeCursorSelection((event) => {
+            const selection = event.selection
+            if (selection.isEmpty()) {
+              selectionRef.current?.(null)
+              return
+            }
+            selectionRef.current?.({
+              startLineNumber: selection.startLineNumber,
+              startColumn: selection.startColumn,
+              endLineNumber: selection.endLineNumber,
+              endColumn: selection.endColumn
+            })
           })
           const ready: EditorInstance = { monaco, editor, model }
           instance = ready

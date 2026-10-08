@@ -3,10 +3,12 @@ import {
   useReducer,
   useRef,
   useState,
+  type Dispatch,
   type KeyboardEvent,
   type ReactElement
 } from 'react'
 import type { CodingMessage } from '../../../../shared/sessions/types'
+import type { SessionContextDraft } from '../../../../shared/context/types'
 import type { ProviderConnectionStatus } from '../../../../shared/providers/types'
 import {
   createCodingSession,
@@ -21,6 +23,17 @@ import {
   normalizeSessionError
 } from '../../lib/session-error'
 import {
+  CONTEXT_ITEM_TOO_LARGE_MESSAGE,
+  CONTEXT_PREPARE_MESSAGE,
+  CONTEXT_RANGE_MESSAGE,
+  CONTEXT_TOO_MANY_MESSAGE,
+  CONTEXT_TOTAL_TOO_LARGE_MESSAGE,
+  CONTEXT_UNAVAILABLE_MESSAGE,
+  CONTEXT_UNSUPPORTED_MESSAGE,
+  normalizeContextError
+} from '../../lib/session-context-error'
+import { prepareContextNote } from '../../lib/session-context-api'
+import {
   clearProviderCredential,
   generateAssistantResponse,
   getProviderState,
@@ -34,13 +47,18 @@ import {
   normalizeProviderError
 } from '../../lib/provider-error'
 import { isComposerEmpty, shouldSubmitComposerKey } from './composer-keys'
+import { ContextCard } from './ContextCard'
 import { initialProviderPanelState, providerPanelReducer } from './provider-state'
 import { initialSessionPanelState, sessionPanelReducer } from './session-state'
+import type { SessionContextDraftAction } from './session-context-state'
 import './session.css'
 
 interface SessionPanelProps {
   readonly workspaceId: number
   readonly onCollapse: () => void
+  readonly contextDrafts: readonly SessionContextDraft[]
+  readonly contextDraftsDispatch: Dispatch<SessionContextDraftAction>
+  readonly contextDraftError: string | null
 }
 
 const OPENAI_PROVIDER_ID = 'openai' as const
@@ -58,6 +76,26 @@ function toErrorMessage(error: unknown, fallback: string): string {
 
 function toProviderErrorMessage(error: unknown, fallback: string): string {
   return normalizeProviderError(error, fallback).message
+}
+
+function toSendErrorMessage(error: unknown): string {
+  // Context attachment failures carry their own safe copy; anything
+  // else falls back to the session send boundary.
+  if (error instanceof Error && error.message !== '') {
+    const known = [
+      CONTEXT_ITEM_TOO_LARGE_MESSAGE,
+      CONTEXT_TOTAL_TOO_LARGE_MESSAGE,
+      CONTEXT_TOO_MANY_MESSAGE,
+      CONTEXT_UNSUPPORTED_MESSAGE,
+      CONTEXT_UNAVAILABLE_MESSAGE,
+      CONTEXT_RANGE_MESSAGE,
+      CONTEXT_PREPARE_MESSAGE
+    ]
+    if (known.some((message) => error.message.includes(message))) {
+      return normalizeContextError(error, SESSION_SAVE_MESSAGE).message
+    }
+  }
+  return toErrorMessage(error, SESSION_SAVE_MESSAGE)
 }
 
 function roleLabel(role: CodingMessage['role']): string {
@@ -103,7 +141,13 @@ function connectionStatusLabel(status: ProviderConnectionStatus): string {
  * clear sessions, selection, messages, composer, pagination, provider
  * view state, and generation state. No polling, no timers.
  */
-export function SessionPanel({ workspaceId, onCollapse }: SessionPanelProps): ReactElement {
+export function SessionPanel({
+  workspaceId,
+  onCollapse,
+  contextDrafts,
+  contextDraftsDispatch,
+  contextDraftError
+}: SessionPanelProps): ReactElement {
   const [state, dispatch] = useReducer(sessionPanelReducer, workspaceId, (id) => ({
     ...initialSessionPanelState(),
     workspaceId: id
@@ -113,6 +157,8 @@ export function SessionPanel({ workspaceId, onCollapse }: SessionPanelProps): Re
     workspaceId: id
   }))
   const [composer, setComposer] = useState('')
+  const [noteOpen, setNoteOpen] = useState(false)
+  const [noteText, setNoteText] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [revealKey, setRevealKey] = useState(false)
@@ -359,15 +405,23 @@ export function SessionPanel({ workspaceId, onCollapse }: SessionPanelProps): Re
       return
     }
     const generateAfterSend = aiReady
+    const attached = [...contextDrafts]
     dispatch({ type: 'send-started', workspaceId, sessionId })
     try {
-      const result = await sendSessionUserMessage({ workspaceId, sessionId, content })
+      const result = await sendSessionUserMessage(
+        attached.length === 0
+          ? { workspaceId, sessionId, content }
+          : { workspaceId, sessionId, content, context: attached }
+      )
       stickToBottomRef.current = true
       dispatch({ type: 'send-succeeded', workspaceId, session: result.session, message: result.message })
       // Clear only the sent text: keystrokes typed during the send are
       // newer composer state and must be preserved. The reducer drops
       // the result entirely if the selection moved on meanwhile.
       setComposer((current) => (current === content ? '' : current))
+      // Drafts are renderer-local: sending consumes exactly the
+      // attached snapshot, so they clear on success only.
+      contextDraftsDispatch({ type: 'drafts-cleared', workspaceId })
       if (generateAfterSend) {
         await runGeneration(sessionId)
       }
@@ -376,7 +430,30 @@ export function SessionPanel({ workspaceId, onCollapse }: SessionPanelProps): Re
         type: 'send-failed',
         workspaceId,
         sessionId,
-        message: toErrorMessage(error, SESSION_SAVE_MESSAGE)
+        message: toSendErrorMessage(error)
+      })
+    }
+  }
+
+  function handleRemoveDraft(draftId: string): void {
+    contextDraftsDispatch({ type: 'draft-removed', workspaceId, draftId })
+  }
+
+  async function handleAddNote(): Promise<void> {
+    if (isComposerEmpty(noteText)) {
+      return
+    }
+    const content = noteText
+    try {
+      const draft = await prepareContextNote({ workspaceId, content })
+      contextDraftsDispatch({ type: 'draft-added', workspaceId, draft })
+      setNoteText('')
+      setNoteOpen(false)
+    } catch (error: unknown) {
+      contextDraftsDispatch({
+        type: 'draft-failed',
+        workspaceId,
+        message: normalizeContextError(error).message
       })
     }
   }
@@ -766,6 +843,19 @@ export function SessionPanel({ workspaceId, onCollapse }: SessionPanelProps): Re
                   >
                     <span className="session__role">{roleLabel(message.role)}</span>
                     <p className="session__content">{message.content}</p>
+                    {(message.context ?? []).length > 0 && (
+                      <div className="session__sent-context" aria-label={`Context sent with message ${message.id}`}>
+                        {(message.context ?? []).map((item) => (
+                          <ContextCard
+                            key={item.id}
+                            label={item.label}
+                            detail={item.kind}
+                            content={item.content}
+                            removable={false}
+                          />
+                        ))}
+                      </div>
+                    )}
                     <span className="session__time">{formatTime(message.createdAt)}</span>
                   </li>
                 ))}
@@ -790,6 +880,77 @@ export function SessionPanel({ workspaceId, onCollapse }: SessionPanelProps): Re
               <button className="explorer__secondary" type="button" onClick={handleRetry}>
                 Retry response
               </button>
+            )}
+          </div>
+          <div className="session__context" aria-label="Attached context">
+            <div className="session__context-header">
+              <p className="session__eyebrow">Attached context</p>
+              <button
+                className="explorer__secondary"
+                type="button"
+                onClick={() => setNoteOpen((open) => !open)}
+                aria-expanded={noteOpen}
+              >
+                Add note
+              </button>
+            </div>
+            {contextDraftError !== null && (
+              <p className="session__error" role="alert">
+                {contextDraftError}
+              </p>
+            )}
+            {contextDrafts.length === 0 ? (
+              <p className="session__empty-text">No context attached. Only what you attach here is sent to the AI.</p>
+            ) : (
+              <ul className="session__context-list">
+                {contextDrafts.map((draft) => (
+                  <li key={draft.draftId}>
+                    <ContextCard
+                      label={draft.label}
+                      detail={draft.kind}
+                      content={draft.content}
+                      removable
+                      onRemove={() => handleRemoveDraft(draft.draftId)}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
+            {noteOpen && (
+              <div className="session__note-form">
+                <label className="session__eyebrow" htmlFor="session-note-input">
+                  Manual note
+                </label>
+                <textarea
+                  id="session-note-input"
+                  className="session__input"
+                  value={noteText}
+                  onChange={(event) => setNoteText(event.target.value)}
+                  placeholder="Type a short note or snippet…"
+                  aria-label="Manual context note"
+                  rows={3}
+                />
+                <div className="session__composer-row">
+                  <button
+                    className="explorer__primary"
+                    type="button"
+                    onClick={() => void handleAddNote()}
+                    disabled={isComposerEmpty(noteText)}
+                  >
+                    Attach note
+                  </button>
+                  <button
+                    className="explorer__secondary"
+                    type="button"
+                    onClick={() => {
+                      setNoteOpen(false)
+                      setNoteText('')
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
             )}
           </div>
           <div className="session__composer">

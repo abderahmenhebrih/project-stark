@@ -33,6 +33,14 @@ import type {
 } from '../shared/terminal/types'
 import type { GitApi, GitDiffRequest, GitDiffResult, GitWorkspaceState } from '../shared/git/types'
 import type {
+  PrepareFileExcerptRequest,
+  PrepareManualNoteRequest,
+  PrepareSearchMatchRequest,
+  PrepareWholeFileRequest,
+  SessionContextApi,
+  SessionContextDraft
+} from '../shared/context/types'
+import type {
   CodingMessagePage,
   CodingSession,
   ListSessionMessagesRequest,
@@ -164,6 +172,19 @@ function createAiApi(): AiApi {
   }
 }
 
+function createSessionContextApi(): SessionContextApi {
+  return {
+    prepareExcerpt: (request: PrepareFileExcerptRequest): Promise<SessionContextDraft> =>
+      ipcRenderer.invoke(IPC_CHANNELS.sessionContextPrepareExcerpt, request) as Promise<SessionContextDraft>,
+    prepareFile: (request: PrepareWholeFileRequest): Promise<SessionContextDraft> =>
+      ipcRenderer.invoke(IPC_CHANNELS.sessionContextPrepareFile, request) as Promise<SessionContextDraft>,
+    prepareSearchMatch: (request: PrepareSearchMatchRequest): Promise<SessionContextDraft> =>
+      ipcRenderer.invoke(IPC_CHANNELS.sessionContextPrepareSearchMatch, request) as Promise<SessionContextDraft>,
+    prepareNote: (request: PrepareManualNoteRequest): Promise<SessionContextDraft> =>
+      ipcRenderer.invoke(IPC_CHANNELS.sessionContextPrepareNote, request) as Promise<SessionContextDraft>
+  }
+}
+
 const starkApi: StarkApi = {
   getAppInfo: (): Promise<AppInfo> =>
     ipcRenderer.invoke(IPC_CHANNELS.getAppInfo) as Promise<AppInfo>,
@@ -224,6 +245,7 @@ const starkApi: StarkApi = {
   terminal: createTerminalApi(),
   git: createGitApi(),
   sessions: createSessionsApi(),
+  sessionContext: createSessionContextApi(),
   providers: createProvidersApi(),
   ai: createAiApi()
 }

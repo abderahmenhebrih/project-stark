@@ -15,6 +15,7 @@ import {
 } from './errors'
 import { MAX_AI_CONTEXT_BYTES, MAX_AI_CONTEXT_MESSAGES, MAX_ASSISTANT_OUTPUT_TOKENS, STAGE_14_FIXED_INSTRUCTIONS } from './limits'
 import type { ProviderRegistry } from './provider-adapter'
+import { formatProviderContext } from '../session-context/session-context-service'
 import { InvalidSessionMessageError, SessionMessageTooLargeError, SessionNotFoundError, SessionWorkspaceMismatchError, SessionWorkspaceUnavailableError } from '../sessions/errors'
 import { validateUserMessageContent } from '../sessions/message-validation'
 
@@ -50,12 +51,14 @@ export interface AiCompletionServiceOptions {
 }
 
 /**
- * AI completion service (Stage 14): turns the trailing user message
- * of a workspace-owned session into one persisted assistant message
- * from the single configured provider. No files, no terminal, no Git,
- * no tools, no project context — only bounded local session text plus
- * the fixed main-owned instruction. Exactly one generation runs per
- * session; the user message is never deleted or resent on failure.
+ * AI completion service (Stage 14, extended in Stage 15): turns the
+ * trailing user message of a workspace-owned session into one
+ * persisted assistant message from the single configured provider.
+ * No files, no terminal, no Git, no tools — only bounded local
+ * session text, the trailing message's explicit user-attached
+ * context, and the fixed main-owned instruction. Exactly one
+ * generation runs per session; the user message is never deleted or
+ * resent on failure.
  */
 export class AiCompletionService {
   private readonly now: () => number
@@ -111,6 +114,17 @@ export class AiCompletionService {
     this.inFlight.add(sessionId)
     try {
       const context = this.loadContext(sessionId)
+      // Only the trailing message's explicit attachments travel with
+      // the request — older history arrives as plain message text.
+      const attachments = this.sessions.listContextForMessage(latest.id)
+      const trailing = context[context.length - 1]
+      if (trailing === undefined) {
+        throw new NothingToAnswerError()
+      }
+      const providerMessages =
+        attachments.length === 0
+          ? context
+          : [...context.slice(0, -1), { role: 'user' as const, content: formatProviderContext(attachments) }, trailing]
       const apiKey = await this.providerService.decryptCredentialForUse(providerId)
       let text: string
       try {
@@ -118,7 +132,7 @@ export class AiCompletionService {
           apiKey,
           model,
           instructions: STAGE_14_FIXED_INSTRUCTIONS,
-          messages: context,
+          messages: providerMessages,
           maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
         })
         text = result.text
@@ -155,7 +169,8 @@ export class AiCompletionService {
           sessionId: message.sessionId,
           role: message.role,
           content: message.content,
-          createdAt: message.createdAt
+          createdAt: message.createdAt,
+          context: []
         } satisfies CodingMessage
       }
     } finally {

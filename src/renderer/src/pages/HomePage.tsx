@@ -1,9 +1,13 @@
 import type { ReactElement } from 'react'
-import { useState } from 'react'
+import { useEffect, useReducer, useState } from 'react'
 import { APP_TAGLINE } from '../../../shared/constants'
 import { useApp } from '../app/app-context'
 import { Explorer } from '../features/explorer/Explorer'
 import { SessionPanel } from '../features/sessions/SessionPanel'
+import {
+  initialSessionContextDraftState,
+  sessionContextDraftReducer
+} from '../features/sessions/session-context-state'
 import { SystemStatus } from '../features/system-status/SystemStatus'
 import { WorkspaceSection } from '../features/workspace/WorkspaceSection'
 import './HomePage.css'
@@ -26,6 +30,15 @@ export function HomePage(): ReactElement {
   const activeId = active?.id ?? null
   const [sessionOpen, setSessionOpen] = useState(true)
   const [sessionWorkspace, setSessionWorkspace] = useState(activeId)
+  // Explicit context drafts live here so both the Explorer attach
+  // actions (left/center) and the Session composer (right) share one
+  // workspace-scoped list. Drafts never leave this boundary except
+  // through the validated prepare/send bridges.
+  const [contextDrafts, contextDraftsDispatch] = useReducer(
+    sessionContextDraftReducer,
+    activeId,
+    (id) => ({ ...initialSessionContextDraftState(), workspaceId: id })
+  )
 
   // A new workspace starts with the Session panel open; the panel
   // itself remounts per workspace (key={active.id}) so no session,
@@ -34,6 +47,12 @@ export function HomePage(): ReactElement {
     setSessionWorkspace(activeId)
     setSessionOpen(true)
   }
+
+  useEffect(() => {
+    if (activeId !== null) {
+      contextDraftsDispatch({ type: 'workspace-changed', workspaceId: activeId })
+    }
+  }, [activeId])
 
   if (active === null) {
     return (
@@ -59,13 +78,20 @@ export function HomePage(): ReactElement {
         </div>
       </div>
       <div className="workbench-main">
-        <Explorer key={active.id} workspaceId={active.id} />
+        <Explorer
+          key={active.id}
+          workspaceId={active.id}
+          contextDraftsDispatch={contextDraftsDispatch}
+        />
         {sessionOpen ? (
           <aside className="workbench__session" aria-label="Session panel">
             <SessionPanel
               key={active.id}
               workspaceId={active.id}
               onCollapse={() => setSessionOpen(false)}
+              contextDrafts={contextDrafts.drafts}
+              contextDraftsDispatch={contextDraftsDispatch}
+              contextDraftError={contextDrafts.error}
             />
           </aside>
         ) : (

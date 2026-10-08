@@ -8,7 +8,10 @@
  * Stage 13 stores user messages only; the schema already permits
  * assistant rows so later provider/Brain stages can append replies.
  * Messages are append-only: no edit, delete, regenerate, or branch.
+ * Stage 15 adds explicit user-attached project context per message.
  */
+
+import type { SessionContextDraft, SessionContextItem } from '../context/types'
 
 /** A persisted coding session belonging to exactly one workspace. */
 export interface CodingSession {
@@ -29,6 +32,11 @@ export interface CodingMessage {
   readonly role: CodingMessageRole
   readonly content: string
   readonly createdAt: number
+  /**
+   * Context items actually sent with this message (Stage 15).
+   * Always populated by list/send paths; empty when none.
+   */
+  readonly context?: readonly SessionContextItem[]
 }
 
 /** Session creation carries the workspace reference only. */
@@ -60,20 +68,25 @@ export interface CodingMessagePage {
 /**
  * Renderer → main user-message request. The renderer never chooses
  * role, timestamps, or IDs — main forces `role: 'user'`.
+ * Optional `context` carries draft descriptors; file-based items are
+ * re-resolved from disk by main, so submitted content is not trusted.
  */
 export interface SendUserMessageRequest {
   readonly workspaceId: number
   readonly sessionId: number
   readonly content: string
+  readonly context?: readonly SessionContextDraft[]
 }
 
 /**
  * Send response: the persisted message plus the updated session, so
  * the UI can refresh title/ordering atomically from one round trip.
+ * Includes the persisted context items actually stored.
  */
 export interface SendUserMessageResult {
   readonly session: CodingSession
   readonly message: CodingMessage
+  readonly context?: readonly SessionContextItem[]
 }
 
 /** Sessions slice of the preload bridge (`window.stark.sessions`). */
