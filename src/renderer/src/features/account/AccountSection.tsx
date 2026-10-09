@@ -140,10 +140,10 @@ export function AccountSection(): ReactElement {
         <h2>STARK Account</h2>
         <p>Optional. Your projects and local STARK data remain on this device.</p>
         {state.actionError !== null ? <p role="alert">{state.actionError}</p> : null}
-        <button type="button" disabled={state.acting} onClick={() => void handleStart('google')}>
+        <button className="stark-btn stark-btn--primary" type="button" disabled={state.acting} onClick={() => void handleStart('google')}>
           Continue with Google
         </button>
-        <button type="button" disabled={state.acting} onClick={() => void handleStart('github')}>
+        <button className="stark-btn stark-btn--secondary" type="button" disabled={state.acting} onClick={() => void handleStart('github')}>
           Continue with GitHub
         </button>
       </section>
@@ -157,7 +157,7 @@ export function AccountSection(): ReactElement {
         <p role="status">Finish signing in in your browser.</p>
         <p>Provider: {accountProviderLabel(status.provider)}</p>
         {state.actionError !== null ? <p role="alert">{state.actionError}</p> : null}
-        <button type="button" disabled={state.acting} onClick={() => void handleCancel()}>
+        <button className="stark-btn stark-btn--ghost" type="button" disabled={state.acting} onClick={() => void handleCancel()}>
           Cancel
         </button>
       </section>
@@ -177,7 +177,7 @@ export function AccountSection(): ReactElement {
         </p>
         <p>Your Workspace files and coding history remain local. Stage 29 does not sync project data to the cloud.</p>
         {state.actionError !== null ? <p role="alert">{state.actionError}</p> : null}
-        <button type="button" disabled={state.acting} onClick={() => void handleSignOut()}>
+        <button className="stark-btn stark-btn--secondary" type="button" disabled={state.acting} onClick={() => void handleSignOut()}>
           Sign out
         </button>
       </section>
@@ -195,7 +195,7 @@ export function AccountSection(): ReactElement {
       <p>Your Workspace files and coding history remain local. Stage 29 does not sync project data to the cloud.</p>
       {state.notice !== null ? <p role="status">{state.notice}</p> : null}
       {state.actionError !== null ? <p role="alert">{state.actionError}</p> : null}
-      <button type="button" disabled={state.acting} onClick={() => void handleSignOut()}>
+      <button className="stark-btn stark-btn--secondary" type="button" disabled={state.acting} onClick={() => void handleSignOut()}>
         Sign out
       </button>
     </section>

@@ -4,6 +4,7 @@ import { APP_TAGLINE } from '../../../shared/constants'
 import { useApp } from '../app/app-context'
 import { Explorer } from '../features/explorer/Explorer'
 import { ProfileSection } from '../features/profile/ProfileSection'
+import { StarkMark } from '../components/StarkMark'
 import { SessionPanel } from '../features/sessions/SessionPanel'
 import {
   initialSessionContextDraftState,
@@ -81,9 +82,19 @@ export function HomePage(): ReactElement {
   return (
     <div className="workbench-root">
       <div className="workbench-top">
-        <p className="workbench-greeting">
-          STARK · {displayName} · {active.displayName}
-        </p>
+        <div className="workbench-top__brand">
+          <StarkMark size="bar" />
+          <span className="workbench-top__wordmark">STARK</span>
+        </div>
+        <span className="workbench-top__divider" aria-hidden="true" />
+        <div className="workbench-top__crumb">
+          <span className="workbench-top__name" title={active.displayName}>
+            {active.displayName}
+          </span>
+          <span className="workbench-top__path" title={active.rootPath}>
+            {active.rootPath}
+          </span>
+        </div>
         <div className="workbench-workspace">
           <WorkspaceSection />
         </div>
@@ -121,8 +132,13 @@ export function HomePage(): ReactElement {
           </button>
         )}
       </div>
-      <div className="workbench-status">
+      <div className="workbench-status" role="contentinfo" aria-label="Status bar">
+        <span className="workbench-status__workspace" title={active.displayName}>
+          {active.displayName}
+        </span>
+        <span className="workbench-status__divider" aria-hidden="true" />
         <ProfileSection current={profile} onChanged={() => void refreshProfile()} />
+        <span className="workbench-status__spacer" aria-hidden="true" />
         <SystemStatus />
       </div>
     </div>

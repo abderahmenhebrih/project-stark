@@ -47,7 +47,7 @@ export function ProfileSection({ current, onChanged }: ProfileSectionProps): Rea
           STARK calls you <strong>{state.current?.displayName ?? '…'}</strong>
         </p>
         {state.notice !== null ? <p role="status">{state.notice}</p> : null}
-        <button type="button" onClick={() => dispatch({ type: 'edit-started' })}>
+        <button className="stark-btn stark-btn--secondary" type="button" onClick={() => dispatch({ type: 'edit-started' })}>
           Edit name
         </button>
       </section>
@@ -68,10 +68,10 @@ export function ProfileSection({ current, onChanged }: ProfileSectionProps): Rea
         onChange={(event) => dispatch({ type: 'draft-changed', draft: event.target.value })}
       />
       {state.saveError !== null ? <p role="alert">{state.saveError}</p> : null}
-      <button type="button" disabled={state.saving} onClick={() => void handleSave()}>
+      <button className="stark-btn stark-btn--primary" type="button" disabled={state.saving} onClick={() => void handleSave()}>
         {state.saving ? 'Saving…' : 'Save name'}
       </button>
-      <button type="button" disabled={state.saving} onClick={() => dispatch({ type: 'edit-cancelled' })}>
+      <button className="stark-btn stark-btn--ghost" type="button" disabled={state.saving} onClick={() => dispatch({ type: 'edit-cancelled' })}>
         Cancel
       </button>
     </section>

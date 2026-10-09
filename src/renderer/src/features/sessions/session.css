@@ -3,8 +3,8 @@
    never grows and never pushes Monaco off screen. */
 
 .workbench__session {
-  flex: 0 0 360px;
-  width: 360px;
+  flex: 0 0 384px;
+  width: 384px;
   min-height: 0;
   min-width: 0;
   display: flex;
@@ -50,26 +50,31 @@
 .session__header {
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--stark-space-xs);
+  row-gap: 6px;
   padding: var(--stark-space-sm);
   border-bottom: 1px solid var(--stark-border);
   min-width: 0;
+  overflow: hidden;
 }
 
 .session__eyebrow {
   margin: 0;
+  font-family: var(--stark-font-sans);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--stark-text-dim);
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .session__title {
   margin: 0;
-  flex: 1;
+  flex: 1 1 120px;
   min-width: 0;
   font-size: 13px;
   font-weight: 600;
@@ -77,6 +82,30 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.session__header .explorer__secondary {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 3px 8px;
+  font-size: 11px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Looplink stays a recognizable text action on its own quiet row. */
+.session__header .session__looplink {
+  flex: 1 1 100%;
+  background: transparent;
+  color: var(--stark-text-dim);
+  font-weight: 600;
+}
+
+.session__header .session__looplink:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+  color: var(--stark-lime);
 }
 
 .session__notice {
@@ -87,16 +116,15 @@
   line-height: 1.5;
   color: var(--stark-text-dim);
   background: var(--stark-elevated);
-  border-bottom: 1px solid var(--stark-border);
 }
 
 .session__history {
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   gap: var(--stark-space-xs);
   align-items: center;
-  padding: var(--stark-space-xs) var(--stark-space-sm);
-  border-bottom: 1px solid var(--stark-border);
+  padding: 6px var(--stark-space-sm);
   min-width: 0;
 }
 
@@ -135,15 +163,20 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: var(--stark-space-sm);
-  border: 1px solid var(--stark-border);
-  border-radius: var(--stark-radius-sm);
-  background: var(--stark-bg);
+  padding: var(--stark-space-sm) var(--stark-space-md);
+  border: none;
+  border-radius: var(--stark-radius-md);
+  background: var(--stark-elevated);
   min-width: 0;
 }
 
 .session__message--assistant {
-  background: var(--stark-elevated);
+  background: var(--stark-surface);
+  border-left: 2px solid var(--stark-magenta);
+}
+
+.session__message--assistant .session__role {
+  color: var(--stark-magenta);
 }
 
 .session__role {
@@ -176,6 +209,30 @@
   text-align: center;
 }
 
+/* Recovery / approval / runtime cards: one subtle elevated surface. */
+.session__recovery {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--stark-space-xs);
+  min-width: 0;
+  margin: var(--stark-space-xs) var(--stark-space-sm);
+  padding: var(--stark-space-sm);
+  background: var(--stark-elevated);
+  border: 1px solid var(--stark-border);
+  border-left: 2px solid var(--stark-accent);
+  border-radius: var(--stark-radius-md);
+}
+
+.session__recovery .session__status {
+  text-align: left;
+  color: var(--stark-text);
+}
+
+.session__recovery .session__settings-row {
+  margin-top: 2px;
+}
+
 .session__error {
   margin: 0;
   font-size: 13px;
@@ -199,40 +256,101 @@
   color: var(--stark-text-dim);
 }
 
+/* Composer dock: one substantial rounded surface holding the mode
+   selector, the input, and the send action. Resting state is quiet
+   neutral; focus takes the active mode accent. */
 .session__composer {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: var(--stark-space-xs);
+  min-width: 0;
+  margin: var(--stark-space-sm);
   padding: var(--stark-space-sm);
-  border-top: 1px solid var(--stark-border);
-  background: var(--stark-surface);
+  border: 1px solid var(--stark-border);
+  border-radius: 12px;
+  background: var(--stark-elevated);
+}
+
+.session__composer:focus-within {
+  border-color: var(--stark-lime);
+}
+
+.session__composer--work:focus-within {
+  border-color: var(--stark-magenta);
+}
+
+.session__composer--propose:focus-within {
+  border-color: var(--stark-text-dim);
 }
 
 .session__input {
   width: 100%;
   min-height: 64px;
   max-height: 200px;
-  padding: var(--stark-space-sm);
+  padding: 2px;
   font: inherit;
+  font-family: var(--stark-font-sans);
   font-size: 13px;
   line-height: 1.5;
   color: var(--stark-text);
-  background: var(--stark-bg);
-  border: 1px solid var(--stark-border);
-  border-radius: var(--stark-radius-sm);
+  background: transparent;
+  border: none;
+  border-radius: 0;
   resize: vertical;
 }
 
 .session__input:focus-visible {
-  outline: 2px solid var(--stark-accent);
-  outline-offset: 1px;
+  outline: none;
+}
+
+/* Mode selector: compact segmented controls integrated in the dock. */
+.session__composer .session__mode {
+  min-height: 26px;
+  padding: 3px 10px;
+  font-size: 11px;
+}
+
+.session__composer .session__mode[aria-pressed="true"] {
+  color: var(--stark-lime);
+  background: var(--stark-lime-dim);
+  border-color: var(--stark-lime);
+}
+
+.session__composer .session__mode--work[aria-pressed="true"] {
+  color: var(--stark-magenta);
+  background: var(--stark-magenta-dim);
+  border-color: var(--stark-magenta);
+}
+
+.session__composer .session__mode--propose[aria-pressed="true"] {
+  color: var(--stark-text);
+  background: var(--stark-bg);
+  border-color: var(--stark-text-dim);
+}
+
+.session__send {
+  min-height: 34px;
+  padding: 8px 18px;
+  font-size: 13px;
+  background: var(--stark-lime);
+  color: var(--stark-lime-text);
+  border: 1px solid transparent;
+}
+
+.session__send:disabled {
+  background: var(--stark-elevated);
+  color: var(--stark-text-dim);
+  border-color: var(--stark-border);
+  opacity: 1;
 }
 
 .session__composer-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--stark-space-xs);
+  min-width: 0;
 }
 
 .session__hint {
@@ -292,7 +410,7 @@
   gap: 2px;
   padding: var(--stark-space-xs) var(--stark-space-sm);
   background: var(--stark-bg);
-  border: 1px solid var(--stark-border);
+  border: none;
   border-radius: var(--stark-radius-sm);
   min-width: 0;
 }
@@ -329,7 +447,7 @@
   line-height: 1.5;
   color: var(--stark-text);
   background: var(--stark-surface);
-  border: 1px solid var(--stark-border);
+  border: none;
   border-radius: var(--stark-radius-sm);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -350,6 +468,7 @@
 
 .session__settings-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--stark-space-xs);
   min-width: 0;
@@ -385,9 +504,16 @@
   align-items: flex-start;
 }
 
-@media (max-width: 1200px) {
+@media (max-width: 1500px) {
   .workbench__session {
-    flex-basis: 340px;
-    width: 340px;
+    flex-basis: 352px;
+    width: 352px;
+  }
+}
+
+@media (max-width: 1280px) {
+  .workbench__session {
+    flex-basis: 328px;
+    width: 328px;
   }
 }

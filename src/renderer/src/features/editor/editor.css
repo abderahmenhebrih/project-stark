@@ -92,7 +92,50 @@
 
 .editor-toolbar__actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--stark-space-xs);
   flex-shrink: 0;
+  min-width: 0;
+}
+
+/* Branded editor empty state: two-color mark, title, one helper line. */
+.editor-empty {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--stark-space-sm);
+  padding: var(--stark-space-2xl) var(--stark-space-lg);
+  text-align: center;
+  min-width: 0;
+  max-width: 420px;
+}
+
+.editor-empty .stark-mark--hero {
+  margin-bottom: var(--stark-space-xs);
+}
+
+.editor-empty__brand {
+  margin: 0;
+  font-family: var(--stark-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.35em;
+  text-indent: 0.35em;
+  color: var(--stark-text);
+}
+
+.editor-empty__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--stark-text);
+}
+
+.editor-empty__hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--stark-text-dim);
 }

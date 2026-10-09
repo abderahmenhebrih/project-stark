@@ -1,11 +1,11 @@
 .status-indicator {
   display: inline-flex;
   align-items: center;
-  gap: var(--stark-space-sm);
-  padding: var(--stark-space-sm) var(--stark-space-md);
-  border: 1px solid var(--stark-border);
-  border-radius: var(--stark-radius-pill);
-  background: var(--stark-elevated);
+  gap: 6px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
 }
 
 .status-indicator__dot {
@@ -31,10 +31,10 @@
 
 .status-indicator__label {
   font-family: var(--stark-font-mono);
-  font-size: 12px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--stark-text);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--stark-text-dim);
+  white-space: nowrap;
 }
 
 @keyframes status-pulse {

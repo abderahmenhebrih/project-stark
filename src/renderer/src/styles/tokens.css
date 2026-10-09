@@ -2,9 +2,13 @@
  * STARK design tokens.
  *
  * Single source of truth for the visual foundation:
- * obsidian background, neon lime accent, restrained technical feel.
- * Every component stylesheet must reference these variables —
- * no hard-coded palette values in component CSS.
+ * obsidian base with the two official STARK brand colors —
+ * electric neon lime (primary) and neon magenta (AI/agent accent).
+ * The repo green (#3ddc84) is a semantic success color only and must
+ * never stand in as brand identity. Restrained weighting: ~85-90%
+ * neutral, ~7-10% lime, ~2-5% magenta. Every component stylesheet
+ * must reference these variables — no hard-coded palette values in
+ * component CSS.
  */
 :root {
   /* Surfaces */
@@ -19,10 +23,18 @@
   /* Lines */
   --stark-border: #232b25;
 
-  /* Accent */
+  /* Primary brand accent: electric neon lime */
+  --stark-lime: #c8ff00;
+  --stark-lime-dim: rgba(200, 255, 0, 0.12);
+  --stark-lime-text: #0a0c0a;
   --stark-accent: #c8ff00;
   --stark-accent-dim: rgba(200, 255, 0, 0.12);
   --stark-accent-text: #0a0c0a;
+
+  /* Secondary brand accent: neon magenta (AI/Brain/assistant identity) */
+  --stark-magenta: #ff2ea6;
+  --stark-magenta-dim: rgba(255, 46, 166, 0.12);
+  --stark-magenta-text: #0a0c0a;
 
   /* Semantic */
   --stark-success: #3ddc84;

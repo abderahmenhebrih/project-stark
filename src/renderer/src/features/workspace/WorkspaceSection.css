@@ -86,10 +86,10 @@
 
 .workspace__name {
   margin: 0;
-  font-family: var(--stark-font-mono);
+  font-family: var(--stark-font-sans);
   font-size: 16px;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.02em;
   color: var(--stark-text);
 }
 
@@ -190,7 +190,6 @@
 }
 
 .workspace__recent-item:hover:not(:disabled) {
-  border-color: var(--stark-border);
   background: var(--stark-surface);
 }
 
@@ -209,5 +208,8 @@
   font-family: var(--stark-font-mono);
   font-size: 11px;
   color: var(--stark-text-dim);
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }

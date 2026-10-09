@@ -90,6 +90,52 @@ no migration 019 was created.
 
 ---
 
+## STAGE31-D05 — frontend shell visually broken/disorganized (fixed)
+
+- Acceptance checks: human visual inspection during Stage 31 (layout
+  defects, no functional failure).
+- Priority: P1 (visual, release-candidate quality).
+- Symptom: session header toolbar clipped controls
+  ("Continue with Loo…"); weak workbench hierarchy; unfinished editor
+  empty state; detached full-width profile strip; no IDE status bar;
+  browser-default buttons on profile/account; per-tab boxes instead of
+  a segmented system; single-accent token system. Follow-up visual
+  pass 2 corrected the second brand accent (mint green #3ddc84 is
+  semantic-only, NOT brand) to official neon magenta #ff2ea6, added a
+  vertical activity rail (tabs truncated to Ex…/Se…/Ch…), rebuilt the
+  top bar as one compact row, reworked the composer into one rounded
+  surface with per-mode selection, fixed Send prominence, corrected
+  typography (sans UI / mono code-paths-meta), removed border boxes,
+  and removed the duplicate version footer.
+- Root cause: incremental per-stage panel CSS with no unifying shell
+  pass; only one brand accent tokenized; several controls unclassed.
+- Files changed (renderer only; zero main-process/IPC/schema
+  changes): `tokens.css` (official lime + magenta tokens; mint stays
+  semantic-only), `global.css` (unified button system, surface
+  secondaries), `MainLayout` (emblem slot, duplicate footer removed),
+  `HomePage` (one-row top bar with breadcrumb, IDE status bar, compact
+  profile), `Explorer` (vertical activity rail with icon + full
+  labels, branded empty state), `session.css` (wrapping toolbar,
+  message hierarchy with magenta AI edge, composer dock, per-mode
+  selection), `TerminalPanel.css` (editor-blended), `editor.css`
+  (empty state), `WorkspaceSection.css` (sans name), `ProfileSection`/
+  `AccountSection` (button classes), new `StarkMark` asset-slot
+  component (official-asset-ready, faithful CSS stand-in only),
+  `session-layout.test.ts` (width-range assertion),
+  `workbench-polish.test.ts` rewritten for pass 2 (15 regression
+  tests), tsconfig include entry.
+- Regression test: `workbench-polish` suite — 17/17 green
+  (overflow, lime/magenta tokens, emblem slot, top bar, rail,
+  filenames, scrollbars, composer, conversation, buttons, typography,
+  compact profile, single status bar, empty state, regions/
+  functionality, no-HTML/no-IPC, schema v18);
+  full gate green (282 suites / 1841 tests / 0 failures).
+- Retest result: PASS (automated). Human visual sign-off pending —
+  STOPPED for human inspection per instruction; Stage 31 manual
+  acceptance remains paused.
+
+---
+
 ## Investigated and ruled NOT defects (no change made)
 
 - **Terminal program charset** (`npm; rm -rf` accepted by

@@ -1,0 +1,40 @@
+.stark-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.stark-mark__asset {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* Temporary faithful stand-in: lime block carrying the magenta core. */
+.stark-mark__fallback {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 25%;
+  background: var(--stark-lime);
+}
+
+.stark-mark--bar {
+  width: 12px;
+  height: 12px;
+}
+
+.stark-mark--bar .stark-mark__fallback {
+  box-shadow: inset -4px -4px 0 0 var(--stark-magenta);
+}
+
+.stark-mark--hero {
+  width: 28px;
+  height: 28px;
+}
+
+.stark-mark--hero .stark-mark__fallback {
+  box-shadow: inset -9px -9px 0 0 var(--stark-magenta);
+}

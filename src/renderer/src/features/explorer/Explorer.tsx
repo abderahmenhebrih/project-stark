@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type Dispatch, type ReactElement } from 'react'
 import type { WorkspaceEntry } from '../../../../shared/workspace-files/types'
+import { APP_NAME } from '../../../../shared/constants'
 import {
   acceptChangeTransaction,
   createFileChange,
@@ -21,6 +22,7 @@ import { getWorkspaceFilesApi } from '../../lib/stark-api'
 import type { WorkspaceSearchMatch } from '../../../../shared/workspace-search/types'
 import type { SessionContextDraft } from '../../../../shared/context/types'
 import { ChangesPanel } from '../changes/ChangesPanel'
+import { StarkMark } from '../../components/StarkMark'
 import { ChangeSetPanel } from '../changes/ChangeSetPanel'
 import { ChangeSetReview } from '../changes/ChangeSetReview'
 import { changeSetPanelReducer, initialChangeSetPanelState } from '../changes/change-set-state'
@@ -675,42 +677,50 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
   return (
     <section className="workbench" aria-label="Explorer">
       <aside className="workbench__sidebar" aria-label="Sidebar">
-        <div className="workbench__tabs" role="tablist" aria-label="Explorer views">
+        <div className="workbench__tabs" role="tablist" aria-label="Explorer views" aria-orientation="vertical">
           <button
             className={tab === 'explorer' ? 'explorer__tab explorer__tab--active' : 'explorer__tab'}
             type="button"
             role="tab"
             aria-selected={tab === 'explorer'}
+            title="Explorer"
             onClick={() => setTab('explorer')}
           >
-            Explorer
+            <span className="explorer__tab-icon" aria-hidden="true">▤</span>
+            <span className="explorer__tab-label">Explorer</span>
           </button>
           <button
             className={tab === 'search' ? 'explorer__tab explorer__tab--active' : 'explorer__tab'}
             type="button"
             role="tab"
             aria-selected={tab === 'search'}
+            title="Search"
             onClick={() => setTab('search')}
           >
-            Search
+            <span className="explorer__tab-icon" aria-hidden="true">⌕</span>
+            <span className="explorer__tab-label">Search</span>
           </button>
           <button
             className={tab === 'changes' ? 'explorer__tab explorer__tab--active' : 'explorer__tab'}
             type="button"
             role="tab"
             aria-selected={tab === 'changes'}
+            title="Changes"
             onClick={() => setTab('changes')}
           >
-            Changes
+            <span className="explorer__tab-icon" aria-hidden="true">⇄</span>
+            <span className="explorer__tab-label">Changes</span>
           </button>
           <button
             className={tab === 'git' ? 'explorer__tab explorer__tab--active' : 'explorer__tab'}
             type="button"
             role="tab"
             aria-selected={tab === 'git'}
+            title="Git"
             onClick={() => setTab('git')}
           >
-            Git
+            <span className="explorer__tab-icon" aria-hidden="true">⎇</span>
+            <span className="explorer__tab-label">Git</span>
           </button>
         </div>
         <div className="workbench__sidebar-body">
@@ -827,7 +837,12 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
             {changeSets.setDetailError}
           </p>
         ) : state.preview === null ? (
-          <p className="explorer__status explorer__status--centered">Select a file to open</p>
+          <div className="editor-empty" role="status" aria-label="No file selected">
+            <StarkMark size="hero" />
+            <p className="editor-empty__brand">{APP_NAME}</p>
+            <p className="editor-empty__title">Select a file to open</p>
+            <p className="editor-empty__hint">Open a file from the Explorer · attach context · ask STARK on the right</p>
+          </div>
         ) : state.preview.loading ? (
           <p className="explorer__status explorer__status--centered" role="status">
             Loading…

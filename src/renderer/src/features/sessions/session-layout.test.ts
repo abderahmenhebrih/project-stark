@@ -38,7 +38,10 @@ describe('stage 13 session layout', () => {
   it('session panel has a bounded desktop width with collapse', () => {
     const css = readRenderer('features/sessions/session.css')
     assert.ok(css.includes('.workbench__session'), 'session pane CSS must exist')
-    assert.ok(css.includes('360px'), 'session pane defaults to a desktop width inside 340–420px')
+    const widthMatch = css.match(/\.workbench__session\s*\{[^}]*flex:\s*0 0 (\d+)px/)
+    assert.ok(widthMatch !== null, 'session pane must declare a fixed desktop width')
+    const width = Number(widthMatch[1])
+    assert.ok(width >= 320 && width <= 420, `session pane defaults to a desktop width inside 320–420px (found ${String(width)}px)`)
     assert.ok(css.includes('flex: 0 0'), 'session pane must not grow or shrink the center')
     assert.ok(css.includes('workbench__session-toggle'), 'a visible collapse toggle must exist')
     const home = readRenderer('pages/HomePage.tsx')

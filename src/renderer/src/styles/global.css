@@ -30,6 +30,163 @@ body {
   outline-offset: 2px;
 }
 
+/**
+ * STARK unified button system (visual polish only).
+ *
+ * One metric set for every control: 30px minimum height (touch-safe),
+ * shared padding/radius/typography, visible hover + focus, honest
+ * disabled, pressed-active feedback. Existing domain classes
+ * (explorer__/terminal__/workspace__/onboarding__) keep their names
+ * and colors; they inherit these metrics through the group below.
+ * `.stark-btn` covers controls that previously had no class at all
+ * (profile/account), so nothing renders browser-default.
+ */
+.stark-btn,
+.explorer__primary,
+.explorer__secondary,
+.terminal__primary,
+.terminal__secondary,
+.workspace__secondary,
+.onboarding__continue,
+.boot__retry {
+  min-height: 30px;
+  padding: 6px 12px;
+  font-family: var(--stark-font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+
+.stark-btn--primary,
+.explorer__primary,
+.terminal__primary,
+.onboarding__continue,
+.boot__retry {
+  color: var(--stark-accent-text);
+  background: var(--stark-accent);
+  border: 1px solid transparent;
+}
+
+.stark-btn--primary:hover:not(:disabled),
+.explorer__primary:hover:not(:disabled),
+.terminal__primary:hover:not(:disabled),
+.onboarding__continue:hover:not(:disabled),
+.boot__retry:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.stark-btn--secondary,
+.explorer__secondary,
+.terminal__secondary,
+.workspace__secondary {
+  color: var(--stark-text);
+  background: var(--stark-elevated);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.stark-btn--secondary:hover:not(:disabled),
+.explorer__secondary:hover:not(:disabled),
+.terminal__secondary:hover:not(:disabled),
+.workspace__secondary:hover:not(:disabled) {
+  border-color: var(--stark-accent);
+  color: var(--stark-accent);
+  background: var(--stark-accent-dim);
+}
+
+.stark-btn--danger {
+  color: var(--stark-danger);
+  background: transparent;
+  border: 1px solid var(--stark-danger);
+  white-space: nowrap;
+}
+
+.stark-btn--danger:hover:not(:disabled) {
+  background: var(--stark-danger);
+  color: var(--stark-accent-text);
+}
+
+.stark-btn--ghost {
+  color: var(--stark-text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.stark-btn--ghost:hover:not(:disabled) {
+  color: var(--stark-text);
+  border-color: var(--stark-border);
+}
+
+.stark-btn:active:not(:disabled),
+.explorer__primary:active:not(:disabled),
+.explorer__secondary:active:not(:disabled),
+.terminal__primary:active:not(:disabled),
+.terminal__secondary:active:not(:disabled),
+.workspace__secondary:active:not(:disabled),
+.onboarding__continue:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.stark-btn:disabled,
+.explorer__primary:disabled,
+.explorer__secondary:disabled,
+.terminal__primary:disabled,
+.terminal__secondary:disabled,
+.workspace__secondary:disabled,
+.onboarding__continue:disabled,
+.boot__retry:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Selected toggle state (mode selectors, capability modes): lime-dim
+   fill with a lime edge — touch-visible without hover. */
+.explorer__secondary[aria-pressed="true"],
+.terminal__secondary[aria-pressed="true"] {
+  color: var(--stark-accent);
+  background: var(--stark-accent-dim);
+  border-color: var(--stark-accent);
+}
+
+/* Restrained dark workbench scrollbars: thin, neutral track, muted
+   thumb with a brighter hover. Never the bright native OS scrollbar. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2c352e transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #2c352e;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #3d4a40;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

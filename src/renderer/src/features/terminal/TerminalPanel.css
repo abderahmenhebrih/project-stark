@@ -5,17 +5,20 @@
   min-height: 0;
   min-width: 0;
   border-top: 1px solid var(--stark-border);
-  background: var(--stark-surface);
+  background: transparent;
 }
 
 .terminal__bar {
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--stark-space-sm);
-  min-height: 36px;
+  row-gap: 6px;
+  min-height: 40px;
   padding: var(--stark-space-xs) var(--stark-space-md);
+  background: var(--stark-surface);
 }
 
 .terminal__identity {
@@ -91,11 +94,12 @@
 
 .terminal__viewport {
   flex: 0 0 auto;
-  height: 220px;
+  height: 200px;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
   padding: 0 var(--stark-space-md) var(--stark-space-md);
+  background: var(--stark-bg);
 }
 
 .terminal__xterm {

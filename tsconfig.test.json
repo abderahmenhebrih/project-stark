@@ -107,6 +107,7 @@
     "src/renderer/src/components/error-boundary-state.test.ts",
     "src/renderer/src/features/profile/profile-state.ts",
     "src/renderer/src/features/profile/profile-state.test.ts",
+    "src/renderer/src/features/workbench/workbench-polish.test.ts",
     "src/renderer/src/lib/double-submit-guards.test.ts"
   ]
 }

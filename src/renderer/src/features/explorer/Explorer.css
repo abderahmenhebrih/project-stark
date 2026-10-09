@@ -10,23 +10,35 @@
 }
 
 .workbench__sidebar {
-  flex: 0 0 300px;
-  width: 300px;
+  flex: 0 0 320px;
+  width: 320px;
   min-height: 0;
   min-width: 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   overflow: hidden;
   background: var(--stark-surface);
   border-right: 1px solid var(--stark-border);
 }
 
+/* Vertical activity rail: icon + full label, never truncated. */
 .workbench__tabs {
-  flex: 0 0 auto;
+  flex: 0 0 56px;
+  width: 56px;
+  min-height: 0;
   display: flex;
-  gap: var(--stark-space-xs);
-  padding: var(--stark-space-sm);
-  border-bottom: 1px solid var(--stark-border);
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--stark-space-sm) var(--stark-space-xs);
+  border-right: 1px solid var(--stark-border);
+  background: var(--stark-bg);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+.workbench__tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .workbench__sidebar-body {
@@ -82,22 +94,64 @@
 }
 
 .explorer__tab {
-  padding: var(--stark-space-xs) var(--stark-space-sm);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  flex: 0 0 auto;
+  min-width: 0;
+  width: 100%;
+  min-height: 46px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 6px 2px;
+  font-family: var(--stark-font-sans);
   color: var(--stark-text-dim);
   background: transparent;
-  border: 1px solid var(--stark-border);
+  border: 1px solid transparent;
   border-radius: var(--stark-radius-sm);
   cursor: pointer;
+  touch-action: manipulation;
+}
+
+.explorer__tab-icon {
+  font-size: 15px;
+  line-height: 1;
+  color: inherit;
+}
+
+.explorer__tab-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.explorer__tab:hover:not(.explorer__tab--active) {
+  color: var(--stark-text);
+  background: var(--stark-elevated);
 }
 
 .explorer__tab--active {
-  color: var(--stark-accent-text);
-  background: var(--stark-accent);
+  color: var(--stark-lime);
+  background: var(--stark-lime-dim);
   border-color: transparent;
+  position: relative;
+}
+
+.explorer__tab--active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--stark-lime);
+}
+
+.explorer__tab--active .explorer__tab-icon {
+  color: inherit;
 }
 
 .explorer__tab:focus-visible {
@@ -131,10 +185,10 @@
   font-size: 13px;
   text-align: left;
   cursor: pointer;
+  overflow: hidden;
 }
 
 button.explorer__row:hover {
-  border-color: var(--stark-border);
   background: var(--stark-elevated);
 }
 
@@ -157,20 +211,23 @@ button.explorer__row:hover {
 
 .explorer__attach {
   flex: 0 0 auto;
-  padding: 2px var(--stark-space-sm);
-  font-size: 11px;
+  min-height: 22px;
+  padding: 1px 6px;
+  font-size: 10px;
   font-weight: 700;
+  letter-spacing: 0.02em;
   color: var(--stark-text-dim);
   background: transparent;
-  border: 1px solid var(--stark-border);
+  border: 1px solid transparent;
   border-radius: var(--stark-radius-sm);
   cursor: pointer;
   white-space: nowrap;
+  touch-action: manipulation;
 }
 
 button.explorer__attach:hover {
-  color: var(--stark-text);
-  border-color: var(--stark-text-dim);
+  color: var(--stark-accent);
+  background: var(--stark-accent-dim);
 }
 
 .explorer__attach:focus-visible {
@@ -187,7 +244,13 @@ button.explorer__attach:hover {
 }
 
 .explorer__name {
-  overflow-wrap: anywhere;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--stark-font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .explorer__badge {
@@ -258,9 +321,23 @@ button.explorer__attach:hover {
   white-space: nowrap;
 }
 
+@media (max-width: 1500px) {
+  .workbench__sidebar {
+    flex-basis: 304px;
+    width: 304px;
+  }
+}
+
+@media (max-width: 1280px) {
+  .workbench__sidebar {
+    flex-basis: 288px;
+    width: 288px;
+  }
+}
+
 @media (max-width: 900px) {
   .workbench__sidebar {
-    flex-basis: 240px;
-    width: 240px;
+    flex-basis: 272px;
+    width: 272px;
   }
 }

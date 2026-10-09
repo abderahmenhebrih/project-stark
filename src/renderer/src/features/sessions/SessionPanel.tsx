@@ -1564,13 +1564,13 @@ export function SessionPanel({
           aria-expanded={settingsOpen}
           aria-label="Toggle AI settings"
         >
-          AI Settings
+          Settings
         </button>
         <button className="explorer__secondary" type="button" onClick={onCollapse} aria-label="Hide session panel">
           Hide
         </button>
         <button
-          className="explorer__secondary"
+          className="explorer__secondary session__looplink"
           type="button"
           onClick={() => void handleContinueWithLooplink()}
           disabled={state.selectedSessionId === null || looplink.acting || state.sending}
@@ -2960,7 +2960,7 @@ export function SessionPanel({
               </div>
             )}
           </div>
-          <div className="session__composer">
+          <div className={`session__composer session__composer--${proposal.mode}`}>
             {state.sendError !== null && (
               <p className="session__error" role="alert">
                 {state.sendError}
@@ -2973,7 +2973,7 @@ export function SessionPanel({
             )}
             <div className="session__composer-row" role="group" aria-label="Composer mode">
               <button
-                className="explorer__secondary"
+                className="explorer__secondary session__mode session__mode--ask"
                 type="button"
                 onClick={() => handleProposalMode('ask')}
                 aria-pressed={proposal.mode === 'ask'}
@@ -2982,7 +2982,7 @@ export function SessionPanel({
                 Ask
               </button>
               <button
-                className="explorer__secondary"
+                className="explorer__secondary session__mode session__mode--work"
                 type="button"
                 onClick={() => handleProposalMode('work')}
                 aria-pressed={proposal.mode === 'work'}
@@ -2991,7 +2991,7 @@ export function SessionPanel({
                 Work
               </button>
               <button
-                className="explorer__secondary"
+                className="explorer__secondary session__mode session__mode--propose"
                 type="button"
                 onClick={() => handleProposalMode('propose')}
                 aria-pressed={proposal.mode === 'propose'}
@@ -3079,7 +3079,7 @@ export function SessionPanel({
                       : 'Stored locally. No AI reply yet.'}
               </p>
               <button
-                className="explorer__primary"
+                className="explorer__primary session__send"
                 type="button"
                 onClick={() => void handleSend()}
                 disabled={sendDisabled}

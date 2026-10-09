@@ -20,6 +20,9 @@
 }
 
 .shell__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--stark-space-sm);
   font-family: var(--stark-font-mono);
   font-weight: 700;
   font-size: 13px;
@@ -27,17 +30,8 @@
   color: var(--stark-text);
 }
 
-.shell__stage {
-  font-family: var(--stark-font-mono);
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--stark-text-dim);
-  border: 1px solid var(--stark-border);
-  border-radius: var(--stark-radius-pill);
-  padding: 2px var(--stark-space-sm);
-  background: var(--stark-elevated);
-  white-space: nowrap;
+.shell__brand .stark-mark {
+  margin-right: 2px;
 }
 
 .shell__main {
@@ -47,22 +41,4 @@
   display: flex;
   overflow: hidden;
   padding: 0;
-}
-
-.shell__footer {
-  flex: 0 0 auto;
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  min-height: 28px;
-  padding: 2px var(--stark-space-md);
-  border-top: 1px solid var(--stark-border);
-  background: var(--stark-surface);
-}
-
-.shell__footer-version {
-  font-family: var(--stark-font-mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  color: var(--stark-text-dim);
 }
