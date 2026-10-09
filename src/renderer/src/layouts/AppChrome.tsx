@@ -26,11 +26,14 @@ interface AppChromeProps {
   readonly onNewSession: () => void
   readonly onSelectSession: (sessionId: number) => void
   readonly onContinueLooplink: () => void
+  /** Guarded workspace-root switch (same flow as “Open another folder”). */
+  readonly onSwitchWorkspace: () => void
 }
 
 /**
- * Single compact desktop chrome row (40–44px): workspace-tools menu,
- * compact STARK identity, de-emphasized workspace name, then the
+ * Single desktop chrome row (60–64px): workspace-tools menu,
+ * STARK identity, clickable workspace name (secondary-brand accent,
+ * same guarded switch flow as “Open another folder”), then the
  * active session tab as the visual centerpiece with a New-session
  * action and a History/Looplink overflow. Flexible empty space
  * follows before the icon-only utilities (search, terminal,
@@ -56,7 +59,8 @@ export function AppChrome({
   looplinkDisabled,
   onNewSession,
   onSelectSession,
-  onContinueLooplink
+  onContinueLooplink,
+  onSwitchWorkspace
 }: AppChromeProps): ReactElement {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
@@ -95,16 +99,22 @@ export function AppChrome({
         aria-label={sidebarOpen ? 'Hide workspace tools' : 'Show workspace tools'}
         title={sidebarOpen ? 'Hide workspace tools' : 'Show workspace tools'}
       >
-        <StarkIcon name="menu" size={17} />
+        <StarkIcon name="menu" size={22} />
       </button>
       <span className="app-chrome__brand" aria-label="STARK">
         <StarkMark size="bar" />
         <img className="app-chrome__wordmark" src={STARK_WORDMARK_URL} alt="STARK" />
       </span>
       <span className="app-chrome__divider" aria-hidden="true" />
-      <span className="app-chrome__identity" title={workspacePath}>
+      <button
+        className="app-chrome__identity"
+        type="button"
+        onClick={onSwitchWorkspace}
+        title={`${workspacePath} — switch project`}
+        aria-label={`Switch project (current: ${workspaceName})`}
+      >
         <span className="app-chrome__workspace">{workspaceName}</span>
-      </span>
+      </button>
       <span className="app-chrome__divider" aria-hidden="true" />
       <div className="app-chrome__tabs" role="tablist" aria-label="Active session">
         <div
@@ -126,7 +136,7 @@ export function AppChrome({
         aria-label="New session"
         title="New session"
       >
-        <StarkIcon name="plus" size={15} />
+        <StarkIcon name="plus" size={19} />
       </button>
       <div className="app-chrome__popover" ref={menuRef}>
         <button
@@ -137,7 +147,7 @@ export function AppChrome({
           aria-label="Session options"
           title="Session options"
         >
-          <StarkIcon name="more" size={17} />
+          <StarkIcon name="more" size={22} />
         </button>
         {menuOpen && (
           <div className="app-chrome__menu" role="menu" aria-label="Session options">
@@ -193,7 +203,7 @@ export function AppChrome({
           aria-label="Search workspace"
           title="Search workspace"
         >
-          <StarkIcon name="search" size={17} />
+          <StarkIcon name="search" size={22} />
         </button>
         <button
           className="app-chrome__control"
@@ -203,7 +213,7 @@ export function AppChrome({
           aria-label={terminalOpen ? 'Hide terminal' : 'Show terminal'}
           title={terminalOpen ? 'Hide terminal' : 'Show terminal'}
         >
-          <StarkIcon name="terminal" size={17} />
+          <StarkIcon name="terminal" size={22} />
         </button>
         <button
           className="app-chrome__control"
@@ -212,7 +222,7 @@ export function AppChrome({
           aria-label="Open settings"
           title="Settings"
         >
-          <StarkIcon name="settings" size={17} />
+          <StarkIcon name="settings" size={22} />
         </button>
         <button
           className="app-chrome__account"

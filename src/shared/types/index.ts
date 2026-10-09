@@ -34,6 +34,7 @@ import type { OrchestrationApi } from '../orchestration/types'
 import type { SettingsApi } from '../settings/types'
 import type { TerminalApi } from '../terminal/types'
 import type { GitApi } from '../git/types'
+import type { ExtensionsApi } from '../extension-registry/types'
 import type { WorkspaceApi } from '../workspace/types'
 
 /**
@@ -66,6 +67,7 @@ export interface StarkApi {
   runtimes: ProjectRuntimesApi
   usage: UsageApi
   account: CloudAccountApi
+  extensions: ExtensionsApi
 }
 
 /** Lifecycle status shown by the development shell. */

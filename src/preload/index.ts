@@ -115,6 +115,11 @@ import type {
   StartSignInRequest,
   StartSignInResult
 } from '../shared/cloud-account/types'
+import type {
+  ExtensionSearchRequest,
+  ExtensionSearchResult,
+  ExtensionsApi
+} from '../shared/extension-registry/types'
 import { isCloudAccountStatus } from '../shared/cloud-account/types'
 import type { AppInfo, StarkApi } from '../shared/types'
 
@@ -371,8 +376,16 @@ function createSessionContextApi(): SessionContextApi {
   }
 }
 
-function createAccountApi(): CloudAccountApi {
+function createExtensionsApi(): ExtensionsApi {
   return {
+    search: (request: ExtensionSearchRequest): Promise<ExtensionSearchResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsSearch, request) as Promise<ExtensionSearchResult>,
+    listFeatured: (): Promise<ExtensionSearchResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsListFeatured) as Promise<ExtensionSearchResult>
+  }
+}
+
+function createAccountApi(): CloudAccountApi {  return {
     getStatus: (): Promise<CloudAccountStatus> =>
       ipcRenderer.invoke(IPC_CHANNELS.accountGetStatus, {}) as Promise<CloudAccountStatus>,
     startSignIn: (request: StartSignInRequest): Promise<StartSignInResult> =>
@@ -467,7 +480,8 @@ const starkApi: StarkApi = {
   workerTools: createWorkerToolsApi(),
   runtimes: createRuntimesApi(),
   usage: createUsageApi(),
-  account: createAccountApi()
+  account: createAccountApi(),
+  extensions: createExtensionsApi()
 }
 
 contextBridge.exposeInMainWorld('stark', starkApi)

@@ -379,6 +379,7 @@ void app.whenReady().then(() => {
     workspaceFilesService: services.workspaceFilesService,
     workspaceFileWriteService: services.workspaceFileWriteService,
     workspaceSearchService: services.workspaceSearchService,
+    extensionRegistryService: services.extensionRegistryService,
     changeTransactionService: services.changeTransactionService,
     terminalService: services.terminalService,
     terminalManager,

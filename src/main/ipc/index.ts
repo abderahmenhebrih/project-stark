@@ -31,6 +31,7 @@ import type { WorkspaceService } from '../workspace/workspace-service'
 import type { WorkspaceFileWriteService } from '../workspace-files/workspace-file-write-service'
 import type { WorkspaceFilesService } from '../workspace-files/workspace-files-service'
 import type { WorkspaceSearchService } from '../workspace-search/workspace-search-service'
+import type { ExtensionRegistryService } from '../extension-registry/extension-registry-service'
 import { getAppInfo } from '../services/app-info'
 import type { IpcBinding } from './binding'
 import { createAiBindings } from './ai'
@@ -55,6 +56,7 @@ import { isTrustedIpcSender } from './trust'
 import { createWorkspaceBindings, electronDirectoryPicker } from './workspace'
 import { createWorkspaceFilesBindings } from './workspace-files'
 import { createWorkspaceSearchBindings } from './workspace-search'
+import { createExtensionsBindings } from './extensions'
 import { createAccountBindings } from './account'
 
 /**
@@ -91,6 +93,8 @@ export interface IpcDependencies {
   readonly workspaceFilesService: WorkspaceFilesService
   readonly workspaceFileWriteService: WorkspaceFileWriteService
   readonly workspaceSearchService: WorkspaceSearchService
+  /** Extension catalog (display only). Optional in older harnesses; absent means no catalog channels. */
+  readonly extensionRegistryService?: ExtensionRegistryService
   readonly changeTransactionService: ChangeTransactionService
   readonly terminalService: TerminalService
   readonly terminalManager: TerminalManager
@@ -183,6 +187,9 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
   }
   if (deps.usageService !== undefined) {
     bindings.push(...createUsageBindings(deps.usageService, deps.heartService))
+  }
+  if (deps.extensionRegistryService !== undefined) {
+    bindings.push(...createExtensionsBindings(deps.extensionRegistryService))
   }
   if (deps.cloudAccountService !== undefined) {
     bindings.push(...createAccountBindings(deps.cloudAccountService))

@@ -51,6 +51,7 @@ import { openSystemBrowserOnce } from '../cloud-account/browser-opener'
 import { SupabaseAuthAdapter, loadSupabasePublicConfig } from '../cloud-account/supabase-auth-adapter'
 import type { BrowserOpener, CloudAuthAdapter } from '../cloud-account/cloud-account-types'
 import { SessionContextService } from '../session-context/session-context-service'
+import { ExtensionRegistryService } from '../extension-registry/extension-registry-service'
 import { SettingsService } from '../settings/settings-service'
 import { WorkspaceFileWriteService } from '../workspace-files/workspace-file-write-service'
 import { WorkspaceFilesService } from '../workspace-files/workspace-files-service'
@@ -115,6 +116,8 @@ export interface ApplicationServices {
   /** Stage 28 local usage awareness. Absent in older harnesses without a usage repository. */
   readonly usageStore?: AiUsageRepository
   readonly usageService?: AiUsageService
+  /** Extension catalog (display only). Stateless network service, always present. */
+  readonly extensionRegistryService: ExtensionRegistryService
   /** Stage 29 optional cloud account. Absent in older harnesses without cloud tables. */
   readonly cloudAccountStore?: CloudAccountRepository
   readonly cloudAccountService?: CloudAccountService
@@ -227,6 +230,7 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
   const usage = usageService === undefined || usageTracker === undefined ? undefined : { tracker: usageTracker, service: usageService }
   const workspaceFilesService = new WorkspaceFilesService(deps.workspaces)
   const workspaceSearchService = new WorkspaceSearchService(deps.workspaces)
+  const extensionRegistryService = new ExtensionRegistryService()
   const sessionContextService = new SessionContextService(deps.workspaces, workspaceFilesService)
   // Shared per-session AI lock: normal generation and code proposals
   // for the same session exclude each other.
@@ -472,6 +476,7 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
     workspaceFilesService,
     workspaceFileWriteService: fileWriteService,
     workspaceSearchService,
+    extensionRegistryService,
     changeTransactionService,
     terminalService: new TerminalService(deps.workspaces),
     gitService,

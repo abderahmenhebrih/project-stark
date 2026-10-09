@@ -17,6 +17,7 @@ export type StarkIconName =
   | 'chevron-right'
   | 'send'
   | 'refresh'
+  | 'extensions'
 
 interface StarkIconProps {
   readonly name: StarkIconName
@@ -122,6 +123,14 @@ const PATHS: Record<StarkIconName, ReactElement> = {
     <>
       <path d="M13 8a5 5 0 1 1-1.5-3.6" />
       <path d="M13 2.5v3h-3" />
+    </>
+  ),
+  extensions: (
+    <>
+      <rect x="2.5" y="2.5" width="5" height="5" rx="1" />
+      <rect x="8.5" y="2.5" width="5" height="5" rx="1" />
+      <rect x="2.5" y="8.5" width="5" height="5" rx="1" />
+      <path d="M8.5 10.5v-2h5v5h-5v-1" />
     </>
   )
 }

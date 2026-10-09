@@ -142,6 +142,9 @@ export function HomePage(): ReactElement {
   const handleContinueLooplink = useCallback(() => {
     sessionActionsRef.current?.continueLooplink()
   }, [])
+  const handleSwitchWorkspace = useCallback(() => {
+    void workspace.chooseWorkspace()
+  }, [workspace])
 
   // A new workspace resets shell + review state; panels remount per
   // workspace (key={active.id}) so no session, message, composer, or
@@ -207,11 +210,14 @@ export function HomePage(): ReactElement {
         onNewSession={handleNewSession}
         onSelectSession={handleSelectSession}
         onContinueLooplink={handleContinueLooplink}
+        onSwitchWorkspace={handleSwitchWorkspace}
       />
       <div className="stage-workarea">
         <Explorer
           key={active.id}
           workspaceId={active.id}
+          workspaceName={active.displayName}
+          workspaceRootPath={active.rootPath}
           contextDrafts={contextDrafts.drafts}
           contextDraftError={contextDrafts.error}
           contextDraftsDispatch={contextDraftsDispatch}

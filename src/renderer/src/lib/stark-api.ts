@@ -8,6 +8,7 @@ import type {
   WorkspaceTextFileWriteResult
 } from '../../../shared/workspace-files/types'
 import type { WorkspaceSearchRequest, WorkspaceSearchResult } from '../../../shared/workspace-search/types'
+import type { ExtensionSearchRequest, ExtensionSearchResult } from '../../../shared/extension-registry/types'
 
 /**
  * Typed accessor for the preload bridge.
@@ -83,4 +84,27 @@ export function searchWorkspace(request: WorkspaceSearchRequest): Promise<Worksp
     return Promise.reject(new Error('Workspace search is unavailable.'))
   }
   return api(request)
+}
+
+/**
+ * Typed extension-catalog callers.
+ *
+ * The panel never touches the registry directly: these helpers reach
+ * the main-owned service through the fixed preload bridge (fixed
+ * Open VSX origin, bounded requests). Unavailable outside Electron.
+ */
+export function searchExtensionCatalog(request: ExtensionSearchRequest): Promise<ExtensionSearchResult> {
+  const api = getStarkApi()?.extensions.search
+  if (api === undefined) {
+    return Promise.reject(new Error('Extension catalog is unavailable.'))
+  }
+  return api(request)
+}
+
+export function listFeaturedExtensions(): Promise<ExtensionSearchResult> {
+  const api = getStarkApi()?.extensions.listFeatured
+  if (api === undefined) {
+    return Promise.reject(new Error('Extension catalog is unavailable.'))
+  }
+  return api()
 }

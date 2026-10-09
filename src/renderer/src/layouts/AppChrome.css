@@ -2,11 +2,11 @@
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: var(--stark-space-sm);
+  gap: var(--stark-space-md);
   min-width: 0;
-  min-height: 40px;
-  max-height: 44px;
-  padding: 0 var(--stark-space-sm);
+  min-height: 60px;
+  max-height: 64px;
+  padding: 0 var(--stark-space-md);
   background: var(--stark-surface);
   border-bottom: 1px solid var(--stark-border);
   overflow: hidden;
@@ -16,15 +16,20 @@
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-height: 0;
+}
+
+.app-chrome__brand .stark-mark--bar {
+  width: 26px;
+  height: 26px;
 }
 
 .app-chrome__wordmark {
   display: block;
-  height: 20px;
+  height: 26px;
   width: auto;
-  max-width: 110px;
+  max-width: 140px;
   object-fit: contain;
 }
 
@@ -32,24 +37,37 @@
   flex: 0 0 auto;
   width: 1px;
   align-self: stretch;
-  margin: 8px 0;
+  margin: 14px 0;
   background: var(--stark-border);
 }
 
 .app-chrome__identity {
   flex: 0 1 auto;
   min-width: 0;
-  display: flex;
-  align-items: baseline;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
   overflow: hidden;
   white-space: nowrap;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.app-chrome__identity:hover {
+  background: var(--stark-magenta-dim);
 }
 
 .app-chrome__workspace {
   font-family: var(--stark-font-sans);
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--stark-text-dim);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--stark-magenta);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -68,23 +86,23 @@
 .app-chrome__tab {
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 32px;
-  max-height: 34px;
+  min-height: 44px;
+  max-height: 48px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 12px;
+  gap: 10px;
+  padding: 6px 14px;
   background: var(--stark-elevated);
   border: 1px solid var(--stark-border);
-  border-radius: 8px;
+  border-radius: 10px;
   overflow: hidden;
   white-space: nowrap;
 }
 
 .app-chrome__tab-dot {
   flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--stark-magenta);
 }
@@ -93,7 +111,7 @@
   flex: 1 1 auto;
   min-width: 0;
   font-family: var(--stark-font-sans);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--stark-text);
   overflow: hidden;
@@ -103,12 +121,12 @@
 
 .app-chrome__newtab {
   flex: 0 0 auto;
-  min-width: 30px;
-  min-height: 30px;
+  min-width: 40px;
+  min-height: 40px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 7px;
+  padding: 6px 9px;
   line-height: 1;
   color: var(--stark-text-dim);
   background: transparent;
@@ -249,12 +267,12 @@
 }
 
 .app-chrome__control {
-  min-width: 30px;
-  min-height: 30px;
+  min-width: 40px;
+  min-height: 40px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 7px;
+  padding: 6px 9px;
   line-height: 1;
   color: var(--stark-text-dim);
   background: transparent;
@@ -271,6 +289,7 @@
 
 .app-chrome__control:focus-visible,
 .app-chrome__newtab:focus-visible,
+.app-chrome__identity:focus-visible,
 .app-chrome__history-item:focus-visible,
 .app-chrome__menu-item:focus-visible,
 .app-chrome__account:focus-visible {
@@ -284,14 +303,14 @@
 }
 
 .app-chrome__account {
-  min-width: 30px;
-  min-height: 30px;
+  min-width: 40px;
+  min-height: 40px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 7px;
+  padding: 6px 9px;
   font-family: var(--stark-font-sans);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--stark-text);
   background: var(--stark-elevated);

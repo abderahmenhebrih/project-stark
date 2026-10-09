@@ -42,6 +42,7 @@ import { GitDiffViewer } from '../git/GitDiffViewer'
 import { GitPanel } from '../git/GitPanel'
 import { gitDiffReducer, initialGitDiffState } from '../git/git-state'
 import { SearchPanel } from '../search/SearchPanel'
+import { ExtensionsPanel } from '../extensions/ExtensionsPanel'
 import type { SessionContextDraftAction } from '../sessions/session-context-state'
 import { TerminalPanel } from '../terminal/TerminalPanel'
 import { confirmDiscardUnsavedDraft, setUnsavedDraft } from './editor-guard'
@@ -113,6 +114,7 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile }: TreeNod
                 onClick={() => onSelectFile(entry.relativePath)}
                 aria-current={state.selectedPath === entry.relativePath}
               >
+                <span className="explorer__chevron explorer__chevron--spacer" aria-hidden="true" />
                 <span className="explorer__file-icon" aria-hidden="true">
                   <img src={FILE_ICON_URLS[getFileIconKind(entry.name)]} alt="" draggable={false} />
                 </span>
@@ -215,6 +217,8 @@ function toReadError(error: unknown): string {
 
 interface ExplorerProps {
   readonly workspaceId: number
+  readonly workspaceName: string
+  readonly workspaceRootPath: string
   readonly contextDrafts: readonly SessionContextDraft[]
   readonly contextDraftError: string | null
   readonly contextDraftsDispatch: Dispatch<SessionContextDraftAction>
@@ -270,6 +274,8 @@ interface ExplorerProps {
  */
 export function Explorer({
   workspaceId,
+  workspaceName,
+  workspaceRootPath,
   contextDrafts,
   contextDraftError,
   contextDraftsDispatch,
@@ -298,6 +304,9 @@ export function Explorer({
   // on every file change; edit-mode buffers are excluded because line
   // numbers may no longer match disk (main re-reads at send time).
   const [editorSelection, setEditorSelection] = useState<EditorSelection | null>(null)
+  // VS Code-style root row: collapsing hides the whole tree below it.
+  // Workspace switching stays on the AppChrome project button.
+  const [rootCollapsed, setRootCollapsed] = useState(false)
   const [changes, changesDispatch] = useReducer(changesReducer, workspaceId, (id) => ({
     ...initialChangesState(),
     workspaceId: id
@@ -1115,7 +1124,27 @@ export function Explorer({
       <WorkspaceToolsDrawer open={sidebarOpen} activity={activity} onActivityChange={onActivityChange} onClose={onCloseSidebar}>
         <div className="workbench__sidebar-body">
           {activity === 'explorer' ? (
-            <TreeNode path="" state={state} onToggle={handleToggle} onSelectFile={handleSelectFile} onAttachFile={handleAttachTreeFile} />
+            <>
+              <button
+                className="explorer__root"
+                type="button"
+                aria-expanded={!rootCollapsed}
+                aria-label={`Project root ${workspaceName}`}
+                title={workspaceRootPath}
+                onClick={() => setRootCollapsed((collapsed) => !collapsed)}
+              >
+                <span className="explorer__chevron" aria-hidden="true">
+                  <StarkIcon name={rootCollapsed ? 'chevron-right' : 'chevron-down'} size={13} />
+                </span>
+                <span className="explorer__folder-icon" aria-hidden="true">
+                  <img src={rootCollapsed ? FOLDER_ICON_URL : FOLDER_OPEN_ICON_URL} alt="" draggable={false} />
+                </span>
+                <span className="explorer__root-name">{workspaceName}</span>
+              </button>
+              {!rootCollapsed && (
+                <TreeNode path="" state={state} onToggle={handleToggle} onSelectFile={handleSelectFile} onAttachFile={handleAttachTreeFile} />
+              )}
+            </>
           ) : activity === 'search' ? (
             <SearchPanel
               key={workspaceId}
@@ -1130,6 +1159,8 @@ export function Explorer({
               onSelectDiff={handleSelectGitDiff}
               onOpenFile={handleOpenGitFile}
             />
+          ) : activity === 'extensions' ? (
+            <ExtensionsPanel />
           ) : (
             <>
               <ChangeSetPanel

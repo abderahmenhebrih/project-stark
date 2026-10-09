@@ -6,6 +6,9 @@
  *
  * Production serves only packaged files, so the policy trusts 'self'
  * (plus data: images/fonts and the inline <style> block in index.html).
+ * Extension-catalog artwork loads from the fixed Open VSX registry
+ * origin only — the main process allowlists icon URLs to that same
+ * origin, so img-src names it explicitly and nothing else remote.
  * Development additionally trusts the Vite dev-server origin for
  * scripts, HMR websockets, and styles — nothing broader.
  */
@@ -14,7 +17,7 @@ const PROD_CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
+  "img-src 'self' data: https://open-vsx.org",
   "font-src 'self' data:",
   "object-src 'none'",
   "base-uri 'self'",

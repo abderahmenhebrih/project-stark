@@ -166,7 +166,9 @@ const EXPECTED_PRODUCTION_CHANNELS: readonly string[] = [
   IPC_CHANNELS.accountGetStatus,
   IPC_CHANNELS.accountStartSignIn,
   IPC_CHANNELS.accountCancelSignIn,
-  IPC_CHANNELS.accountSignOut
+  IPC_CHANNELS.accountSignOut,
+  IPC_CHANNELS.extensionsSearch,
+  IPC_CHANNELS.extensionsListFeatured
 ]
 
 describe('authoritative production IPC surface', () => {
@@ -209,6 +211,7 @@ describe('authoritative production IPC surface', () => {
         projectRuntimeService: services.projectRuntimeService,
         usageService: services.usageService,
         cloudAccountService: services.cloudAccountService,
+        extensionRegistryService: services.extensionRegistryService,
         workspaces: new WorkspaceRepository(db),
         codingSessions: new CodingSessionRepository(db)
       }).map((binding) => binding.channel)

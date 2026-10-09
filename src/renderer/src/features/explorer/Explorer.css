@@ -235,57 +235,153 @@
 .workspace-tools-drawer__head {
   position: relative;
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 38px;
   min-width: 0;
-  padding: 12px 44px 10px 12px;
+  padding: 0 44px 0 12px;
   border-bottom: 1px solid var(--stark-border);
 }
 
-/* The workspace section renders borderless inside the drawer: the
-   drawer itself is the single surface. */
-.workspace-tools-drawer__head .workspace--compact {
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  padding: 0;
-  gap: 10px;
-}
-
-.workspace-tools-drawer__head .workspace__current--compact {
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-start;
-  gap: 10px;
-}
-
-.workspace-tools-drawer__head .workspace__identity {
+.workspace-tools-drawer__title {
+  flex: 1 1 auto;
   min-width: 0;
-}
-
-.workspace-tools-drawer__head .workspace__name {
-  font-size: 17px;
+  margin: 0;
+  font-family: var(--stark-font-sans);
+  font-size: 12px;
   font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--stark-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.workspace-tools-drawer__head .workspace__path {
-  font-size: 11px;
+.drawer-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.drawer-menu__toggle {
+  min-width: 28px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--stark-text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.drawer-menu__toggle:hover {
+  color: var(--stark-text);
+  background: var(--stark-elevated);
+}
+
+.drawer-menu__toggle:focus-visible,
+.drawer-menu__item:focus-visible {
+  outline: 2px solid var(--stark-accent);
+  outline-offset: 2px;
+}
+
+.drawer-menu__list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 200px;
+  max-width: 260px;
+  padding: 4px;
+  background: var(--stark-elevated);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.drawer-menu__label {
+  margin: 0;
+  padding: 4px 8px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--stark-text-dim);
+  white-space: nowrap;
+}
+
+.drawer-menu__divider {
+  flex: 0 0 auto;
+  height: 1px;
+  margin: 2px 4px;
+  background: var(--stark-border);
+}
+
+.drawer-menu__item {
+  width: 100%;
+  padding: var(--stark-space-xs) var(--stark-space-sm);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--stark-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.workspace-tools-drawer__head .workspace__recent--collapsible {
-  gap: 4px;
+.drawer-menu__item:hover:not(:disabled) {
+  background: var(--stark-surface);
 }
 
-.workspace-tools-drawer__head .workspace__recent-item {
+.drawer-menu__item:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* VS Code-style project root row: first tree row, collapses the tree. */
+.explorer__root {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--stark-space-sm);
+  min-height: 30px;
+  padding: 3px var(--stark-space-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--stark-radius-sm);
+  color: var(--stark-text);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+button.explorer__root:hover {
+  background: var(--stark-elevated);
+}
+
+.explorer__root:focus-visible {
+  outline: 2px solid var(--stark-accent);
+  outline-offset: 2px;
+}
+
+.explorer__root-name {
+  flex: 1 1 auto;
   min-width: 0;
-}
-
-.workspace-tools-drawer__head .workspace__recent-name {
-  max-width: 100%;
+  font-family: var(--stark-font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -293,7 +389,7 @@
 
 .workspace-tools-drawer__close {
   position: absolute;
-  top: 8px;
+  top: 5px;
   right: 8px;
   min-width: 28px;
   min-height: 28px;
@@ -560,15 +656,18 @@ button.explorer__row:hover {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 20px;
+  width: 22px;
+  height: 22px;
   line-height: 1;
 }
 
 .explorer__folder-icon img,
 .explorer__file-icon img {
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 
 .explorer__attach {
@@ -600,8 +699,14 @@ button.explorer__attach:hover {
 .explorer__chevron {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   flex-shrink: 0;
+  width: 13px;
   color: var(--stark-text-dim);
+}
+
+.explorer__chevron--spacer {
+  visibility: hidden;
 }
 
 .explorer__name {

@@ -1,6 +1,6 @@
 import type { ReactElement, ReactNode } from 'react'
 import { useEffect, useRef } from 'react'
-import { WorkspaceSection } from '../features/workspace/WorkspaceSection'
+import { DrawerWorkspaceMenu } from '../features/workspace/DrawerWorkspaceMenu'
 import { ActivityRail, type ActivityKind } from '../features/explorer/ActivityRail'
 import { StarkIcon } from '../components/icons/StarkIcon'
 
@@ -12,13 +12,23 @@ interface WorkspaceToolsDrawerProps {
   readonly children: ReactNode
 }
 
+const ACTIVITY_TITLES: Record<ActivityKind, string> = {
+  explorer: 'Explorer',
+  search: 'Search',
+  changes: 'Changes',
+  git: 'Git',
+  extensions: 'Extensions'
+}
+
 /**
  * Workspace tools drawer: an overlay floating above the workspace
- * work area (never a permanent layout column). Hosts the compact
- * workspace header, the activity selector, and the contextual tool
- * content owned by the Explorer (tree / search / changes / git).
- * Closes via the close button or Escape; Escape handling lives on
- * the drawer so editor and composer shortcuts are unaffected.
+ * work area (never a permanent layout column). A compact VS Code-style
+ * title row names the active activity with a workspace-actions
+ * overflow and close; the activity selector and the contextual tool
+ * content owned by the Explorer (tree / search / changes / git /
+ * extensions) sit side by side below. Closes via the close button or
+ * Escape; Escape handling lives on the drawer so editor and composer
+ * shortcuts are unaffected.
  */
 export function WorkspaceToolsDrawer({
   open,
@@ -54,7 +64,8 @@ export function WorkspaceToolsDrawer({
       onKeyDown={handleKeyDown}
     >
       <div className="workspace-tools-drawer__head">
-        <WorkspaceSection onClosePanel={onClose} />
+        <p className="workspace-tools-drawer__title">{ACTIVITY_TITLES[activity]}</p>
+        <DrawerWorkspaceMenu />
         <button
           className="workspace-tools-drawer__close"
           type="button"

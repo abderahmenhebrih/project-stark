@@ -34,6 +34,9 @@ export function getFileIconKind(fileName: string): FileIconKind {
   if (lower === '.gitignore' || lower === '.gitattributes') {
     return 'git'
   }
+  if (lower === 'dockerfile' || lower.startsWith('dockerfile.')) {
+    return 'config'
+  }
   if (base.startsWith('.') && base.indexOf('.', 1) === -1) {
     return 'config'
   }
@@ -45,6 +48,8 @@ export function getFileIconKind(fileName: string): FileIconKind {
   switch (extension) {
     case 'md':
     case 'markdown':
+    case 'mdx':
+    case 'mdown':
       return 'markdown'
     case 'js':
     case 'mjs':
