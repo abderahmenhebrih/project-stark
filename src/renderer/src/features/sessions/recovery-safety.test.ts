@@ -15,8 +15,9 @@ describe('recovery renderer safety', () => {
   })
 
   it('recovery settings have explicit save with no autosave or polling', () => {
+    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    assert.ok(settings.includes('Save Recovery'))
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('Save Recovery'))
     assert.ok(!panel.includes('setInterval'))
     assert.ok(!panel.includes('setTimeout'))
     const state = readRenderer('features/sessions/recovery-state.ts')
@@ -25,19 +26,19 @@ describe('recovery renderer safety', () => {
   })
 
   it('no fake percentages or countdowns in recovery UI', () => {
-    const panel = readRenderer('features/sessions/SessionPanel.tsx')
+    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
     // No progress percentages near recovery copy.
-    const recoveryIndex = panel.indexOf('Continuity Recovery')
+    const recoveryIndex = settings.indexOf('Continuity Recovery')
     assert.ok(recoveryIndex >= 0)
-    const slice = panel.slice(Math.max(0, recoveryIndex - 2000), recoveryIndex + 8000)
+    const slice = settings.slice(Math.max(0, recoveryIndex - 2000), recoveryIndex + 8000)
     assert.ok(!slice.includes('%'))
     assert.ok(!slice.toLowerCase().includes('countdown'))
   })
 
   it('no credentials or raw provider bodies in recovery UI', () => {
-    const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    const recoveryIndex = panel.indexOf('Continuity Recovery')
-    const slice = panel.slice(recoveryIndex, recoveryIndex + 8000)
+    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    const recoveryIndex = settings.indexOf('Continuity Recovery')
+    const slice = settings.slice(recoveryIndex, recoveryIndex + 8000)
     assert.ok(!slice.toLowerCase().includes('api key') || slice.includes('Brain Recovery'))
     assert.ok(!slice.includes('Authorization'))
     const api = readRenderer('lib/recovery-api.ts')
@@ -45,10 +46,10 @@ describe('recovery renderer safety', () => {
   })
 
   it('recovery copy matches spec (handoff + auto-once)', () => {
-    const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('Create a Looplink recovery session after a recoverable provider failure'))
-    assert.ok(panel.includes('Create one Looplink recovery session and make one attempt'))
-    assert.ok(panel.includes('STARK will not retry'))
+    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    assert.ok(settings.includes('Create a Looplink recovery session after a recoverable provider failure'))
+    assert.ok(settings.includes('Create one Looplink recovery session and make one attempt'))
+    assert.ok(settings.includes('STARK will not retry'))
   })
 
   it('no proposal recovery UI exists', () => {

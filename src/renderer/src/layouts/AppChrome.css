@@ -5,7 +5,8 @@
   gap: var(--stark-space-sm);
   min-width: 0;
   min-height: 40px;
-  padding: 0 var(--stark-space-md);
+  max-height: 44px;
+  padding: 0 var(--stark-space-sm);
   background: var(--stark-surface);
   border-bottom: 1px solid var(--stark-border);
   overflow: hidden;
@@ -35,7 +36,7 @@
 }
 
 .app-chrome__identity {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   display: flex;
   align-items: baseline;
@@ -50,10 +51,42 @@
   color: var(--stark-text);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-chrome__search {
+  flex: 0 1 320px;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  margin-inline: auto;
+  padding: 4px 12px;
+  font-family: var(--stark-font-sans);
+  font-size: 12px;
+  color: var(--stark-text-dim);
+  background: var(--stark-bg);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.app-chrome__search:hover {
+  color: var(--stark-text);
+  border-color: var(--stark-text-dim);
+}
+
+.app-chrome__search-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .app-chrome__spacer {
-  flex: 0 0 var(--stark-space-sm);
+  flex: 1 1 auto;
+  min-width: var(--stark-space-sm);
 }
 
 .app-chrome__controls {
@@ -69,8 +102,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 8px;
-  font-size: 14px;
+  padding: 4px 7px;
   line-height: 1;
   color: var(--stark-text-dim);
   background: transparent;
@@ -85,7 +117,47 @@
   background: var(--stark-elevated);
 }
 
+.app-chrome__control:focus-visible,
+.app-chrome__search:focus-visible,
+.app-chrome__account:focus-visible {
+  outline: 2px solid var(--stark-lime);
+  outline-offset: 2px;
+}
+
 .app-chrome__control[aria-pressed="true"] {
   color: var(--stark-lime);
   background: var(--stark-lime-dim);
+}
+
+.app-chrome__account {
+  min-width: 30px;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 7px;
+  font-family: var(--stark-font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--stark-text);
+  background: var(--stark-elevated);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.app-chrome__account:hover {
+  border-color: var(--stark-magenta);
+  color: var(--stark-magenta);
+}
+
+@media (max-width: 1099px) {
+  .app-chrome__search-text {
+    display: none;
+  }
+
+  .app-chrome__search {
+    flex-basis: auto;
+  }
 }

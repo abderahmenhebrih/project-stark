@@ -9,7 +9,6 @@ import {
 } from 'react'
 import type { CodingMessage } from '../../../../shared/sessions/types'
 import type { SessionContextDraft } from '../../../../shared/context/types'
-import type { ProviderConnectionStatus } from '../../../../shared/providers/types'
 import {
   createCodingSession,
   listCodingSessions,
@@ -33,7 +32,6 @@ import {
   CONTEXT_UNSUPPORTED_MESSAGE,
   normalizeContextError
 } from '../../lib/session-context-error'
-import { prepareContextNote } from '../../lib/session-context-api'
 import {
   clearProviderCredential,
   generateAssistantResponseRaw,
@@ -53,6 +51,10 @@ import {
 } from '../../lib/provider-error'
 import { isComposerEmpty, shouldSubmitComposerKey } from './composer-keys'
 import { ContextCard } from './ContextCard'
+import { SessionHeaderBar } from './SessionHeaderBar'
+import { StarkSettingsSurface, type SettingsSection } from './StarkSettingsSurface'
+import { StarkIcon } from '../../components/icons/StarkIcon'
+import { StarkMark } from '../../components/StarkMark'
 import { initialProviderPanelState, providerPanelReducer } from './provider-state'
 import { initialSessionPanelState, sessionPanelReducer } from './session-state'
 import type { SessionContextDraftAction } from './session-context-state'
@@ -88,14 +90,12 @@ import type { ProjectRuntimeSummary } from '../../../../shared/project-runtime/t
 import { PREVIEW_TRUNCATION_NOTICE, initialRuntimePanelState, runtimePanelReducer, runtimeStatusLabel } from './runtime-state'
 import type { WorkerToolApproval } from '../../../../shared/worker-tools/types'
 import { getUsageConfig, getUsageSummary, saveUsageConfig } from '../../lib/usage-api'
-import { USAGE_ROUTE_KEYS, formatUsageThreshold, initialUsagePanelState, usagePanelReducer, usageRouteLabel } from './usage-state'
+import { USAGE_ROUTE_KEYS, initialUsagePanelState, usagePanelReducer } from './usage-state'
 import { getWorkspaceCapabilityConfig, saveWorkspaceCapabilityConfig } from '../../lib/capabilities-api'
 import {
   CAPABILITY_ORDER,
-  capabilityLabel,
   initialCapabilityPanelState,
-  capabilityPanelReducer,
-  legalModesFor
+  capabilityPanelReducer
 } from './capabilities-state'
 import { createSessionContinuation, dismissSessionLooplink, getSessionLooplink } from '../../lib/looplink-api'
 import { initialLooplinkPanelState, looplinkPanelReducer } from './looplink-state'
@@ -113,6 +113,14 @@ interface SessionPanelProps {
   readonly contextDraftError: string | null
   readonly onReviewTransaction: (transactionId: number) => void
   readonly onReviewChangeSet: (changeSetId: number) => void
+  /** Dedicated settings surface visibility (owned by the shell so AppChrome can reach it). */
+  readonly settingsOpen: boolean
+  readonly settingsSection: SettingsSection
+  readonly onSettingsSectionChange: (section: SettingsSection) => void
+  readonly onCloseSettings: () => void
+  readonly onOpenSettings: () => void
+  /** Reveal the secondary Context tab (owned by the Explorer). */
+  readonly onOpenContext: () => void
 }
 
 const OPENAI_PROVIDER_ID = 'openai' as const
@@ -167,21 +175,6 @@ function formatTime(createdAt: number): string {
   }
 }
 
-function connectionStatusLabel(status: ProviderConnectionStatus): string {
-  switch (status) {
-    case 'connected':
-      return 'Connected.'
-    case 'invalid-credential':
-      return 'The saved API key was rejected. Check the key and try again.'
-    case 'rate-limited':
-      return 'The AI provider is rate-limiting requests. Try again shortly.'
-    case 'network-error':
-      return 'The AI provider could not be reached. Check your connection.'
-    case 'timeout':
-      return 'The AI provider request timed out. Try again.'
-  }
-}
-
 /**
  * Persistent STARK Session panel (Stage 14: local sessions + real AI).
  *
@@ -204,7 +197,13 @@ export function SessionPanel({
   contextDraftsDispatch,
   contextDraftError,
   onReviewTransaction,
-  onReviewChangeSet
+  onReviewChangeSet,
+  settingsOpen,
+  settingsSection,
+  onSettingsSectionChange,
+  onCloseSettings,
+  onOpenSettings,
+  onOpenContext
 }: SessionPanelProps): ReactElement {
   const [state, dispatch] = useReducer(sessionPanelReducer, workspaceId, (id) => ({
     ...initialSessionPanelState(),
@@ -250,10 +249,6 @@ export function SessionPanel({
   const [approvalActing, setApprovalActing] = useState(false)
   const [approvalError, setApprovalError] = useState<string | null>(null)
   const [composer, setComposer] = useState('')
-  const [contextOpen, setContextOpen] = useState(true)
-  const [noteOpen, setNoteOpen] = useState(false)
-  const [noteText, setNoteText] = useState('')
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [revealKey, setRevealKey] = useState(false)
   const [modelDraft, setModelDraft] = useState<string | null>(null)
@@ -1356,25 +1351,6 @@ export function SessionPanel({
     contextDraftsDispatch({ type: 'draft-removed', workspaceId, draftId })
   }
 
-  async function handleAddNote(): Promise<void> {
-    if (isComposerEmpty(noteText)) {
-      return
-    }
-    const content = noteText
-    try {
-      const draft = await prepareContextNote({ workspaceId, content })
-      contextDraftsDispatch({ type: 'draft-added', workspaceId, draft })
-      setNoteText('')
-      setNoteOpen(false)
-    } catch (error: unknown) {
-      contextDraftsDispatch({
-        type: 'draft-failed',
-        workspaceId,
-        message: normalizeContextError(error).message
-      })
-    }
-  }
-
   function handleRetry(): void {
     if (state.selectedSessionId === null || state.generating) {
       return
@@ -1550,1124 +1526,62 @@ export function SessionPanel({
 
   return (
     <section className="session" aria-label="STARK Session">
-      <div className="session__header">
-        <p className="session__eyebrow">Session</p>
-        <p className="session__title">{selectedSession?.title ?? 'No session'}</p>
-        <button className="explorer__primary session__new" type="button" onClick={() => void handleNew()} disabled={state.loadingSessions}>
-          New
-        </button>
-        <details className="session__menu">
-          <summary
-            className="explorer__secondary session__menu-toggle"
-            aria-label="Session options"
-            title="Session options"
-          >
-            ···
-          </summary>
-          <div className="session__menu-body">
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => setSettingsOpen((open) => !open)}
-              aria-expanded={settingsOpen}
-              aria-label="Toggle AI settings"
-            >
-              Settings
-            </button>
-            {state.sessions.length > 0 && (
-              <label className="session__menu-history" htmlFor="session-history-select">
-                <span className="session__eyebrow">History</span>
-                <select
-                  id="session-history-select"
-                  className="session__select"
-                  value={state.selectedSessionId ?? ''}
-                  onChange={(event) => handleSelect(Number(event.target.value))}
-                  aria-label="Recent sessions"
-                >
-                  {state.sessions.map((entry) => (
-                    <option key={entry.id} value={entry.id}>
-                      {entry.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-          </div>
-        </details>
-        <button
-          className="explorer__secondary session__looplink"
-          type="button"
-          onClick={() => void handleContinueWithLooplink()}
-          disabled={state.selectedSessionId === null || looplink.acting || state.sending}
-          aria-label="Continue with Looplink"
-          title="Snapshot this session into a new continuation session"
-        >
-          {looplink.acting ? 'Preparing…' : 'Continue with Looplink'}
-        </button>
-      </div>
+      <SessionHeaderBar
+        title={selectedSession?.title ?? 'New session'}
+        sessions={state.sessions}
+        selectedSessionId={state.selectedSessionId}
+        sessionsLoading={state.loadingSessions}
+        onNew={() => void handleNew()}
+        onSelect={handleSelect}
+        onOpenSettings={onOpenSettings}
+        onContinueLooplink={() => void handleContinueWithLooplink()}
+        looplinkActing={looplink.acting}
+        sendBusy={state.sending}
+      />
       {looplink.actionError !== null && (
         <p className="session__error" role="alert">
           {looplink.actionError}
         </p>
       )}
-      {recovery.event !== null && (
-        <div className="session__recovery" aria-label="Recovery handoff">
-          <p className="session__status" role="status">
-            {recoverySourceCopy(recovery.event.status)}
-          </p>
-          <p className="session__hint" role="note">
-            {recoveryTargetCopy(recovery.event)}
-          </p>
-          {recovery.event.routes.length > 0 && (
-            <ul className="session__list" aria-label="Recovery routes">
-              {recovery.event.routes.map((route) => (
-                <li key={route.role} className="session__message">
-                  <span className="session__role">{route.role}</span>
-                  <p className="session__content">
-                    {route.providerId} / {route.model}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          )}
-          <div className="session__settings-row">
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => handleSelect(recovery.event?.targetSessionId ?? 0)}
-              disabled={(recovery.event?.targetSessionId ?? 0) === 0}
-              aria-label="Open recovery session"
-            >
-              Open recovery session
-            </button>
-            {recovery.event.status === 'handoff_ready' && (
-              <button
-                className="explorer__secondary"
-                type="button"
-                onClick={() => void handleDismissRecovery()}
-                aria-label="Dismiss recovery"
-              >
-                Dismiss
-              </button>
-            )}
-          </div>
-          {recovery.eventError !== null && (
-            <p className="session__error" role="alert">
-              {recovery.eventError}
-            </p>
-          )}
-        </div>
-      )}
-      {pendingApproval !== null && (
-        <div className="session__recovery" aria-label="Worker approval">
-          <p className="session__status" role="status">
-            {pendingApproval.toolName === 'change_propose' ? 'Worker wants to create a reviewable proposal.' : 'STARK Worker needs permission'}
-          </p>
-          {pendingApproval.toolName === 'terminal_execute' && (
-            <p className="session__hint" role="note">
-              Capability: Terminal command
-            </p>
-          )}
-          {pendingApproval.toolName === 'runtime_start' && (
-            <p className="session__hint" role="note">
-              Capability: Project runtime
-            </p>
-          )}
-          {pendingApproval.toolName === 'runtime_observe' && (
-            <p className="session__hint" role="note">
-              Capability: Runtime observation
-            </p>
-          )}
-          {pendingApproval.toolName === 'preview_inspect' && (
-            <p className="session__hint" role="note">
-              Capability: Live Preview inspection
-            </p>
-          )}
-          {pendingApproval.toolName === 'runtime_observe' && (
-            <p className="session__hint" role="note">
-              Action: Observe managed runtime
-            </p>
-          )}
-          {pendingApproval.toolName === 'preview_inspect' && (
-            <p className="session__hint" role="note">
-              Action: Inspect rendered Live Preview
-            </p>
-          )}
-          <p className="session__hint" role="note">
-            {pendingApproval.summary}
-          </p>
-          <p className="session__hint" role="note">
-            {pendingApproval.toolName === 'change_propose'
-              ? 'Approval creates a reviewable proposal only. Files will not change until you review and Accept them.'
-              : pendingApproval.toolName === 'terminal_execute'
-                ? 'This exact command will run with your user account from the Workspace root. It may modify files, start subprocesses, or access the network.'
-                : pendingApproval.toolName === 'runtime_start'
-                  ? 'This exact command will run with your user account from the Workspace root and may modify files, start subprocesses, or access the network.'
-                  : pendingApproval.toolName === 'runtime_observe'
-                    ? 'This approval allows STARK Worker to read the current managed runtime state and bounded logs once. This approval does not allow STARK Worker to stop, restart, or modify the runtime.'
-                    : pendingApproval.toolName === 'preview_inspect'
-                      ? 'STARK Worker may inspect bounded rendered content from this local Preview once. STARK does not click, type, submit forms, or modify the DOM. If needed, STARK may load this approved local Preview path in an isolated inspection window.'
-                      : 'This approval applies only to this exact action.'}
-          </p>
-          {pendingApproval.toolName === 'runtime_start' && (
-            <>
-              <p className="session__hint" role="note">
-                This runtime may remain active for up to 30 minutes.
-              </p>
-              <p className="session__hint" role="note">
-                This approval applies only to this exact program, arguments, and preview port.
-              </p>
-            </>
-          )}
-          {pendingApproval.toolName === 'terminal_execute' && (
-            <p className="session__hint" role="note">
-              This approval applies only to this exact program and argument list.
-            </p>
-          )}
-          <div className="session__settings-row">
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => void handleApprovalDecision(false)}
-              disabled={approvalActing}
-              aria-label="Deny approval"
-            >
-              Deny
-            </button>
-            <button
-              className="explorer__primary"
-              type="button"
-              onClick={() => void handleApprovalDecision(true)}
-              disabled={approvalActing}
-              aria-label="Approve approval"
-            >
-              {approvalActing ? 'Resolving…' : 'Approve'}
-            </button>
-          </div>
-          {approvalError !== null && (
-            <p className="session__error" role="alert">
-              {approvalError}
-            </p>
-          )}
-        </div>
-      )}
-      {(runtime.active !== null || runtime.history.length > 0) && (
-        <div className="session__recovery" aria-label="Project runtime">
-          <p className="session__status" role="status">
-            Project runtime{runtime.active !== null ? ` · ${runtimeStatusLabel(runtime.active.status)}` : ''}
-          </p>
-          {runtime.active !== null && (
-            <>
-              <p className="session__hint" role="note">
-                Command: {runtime.active.program}{runtime.active.args.length > 0 ? ` ${runtime.active.args.join(' ')}` : ''}
-              </p>
-              <p className="session__hint" role="note">
-                Preview: {runtime.active.previewUrl}
-              </p>
-              <p className="session__hint" role="note">
-                Started: {formatTime(runtime.active.startedAt ?? runtime.active.createdAt)} · Maximum runtime: 30 minutes.
-              </p>
-              <div className="session__settings-row">
-                <button
-                  className="explorer__secondary"
-                  type="button"
-                  onClick={() => void handleOpenPreview(runtime.active?.id ?? 0)}
-                  disabled={runtime.acting || runtime.active.status !== 'running'}
-                  aria-label="Open preview"
-                >
-                  Open Preview
-                </button>
-                <button
-                  className="explorer__secondary"
-                  type="button"
-                  onClick={() => void handleReloadPreview(runtime.active?.id ?? 0)}
-                  disabled={runtime.acting || runtime.active.status !== 'running'}
-                  aria-label="Reload preview"
-                >
-                  Reload Preview
-                </button>
-                <button
-                  className="explorer__secondary"
-                  type="button"
-                  onClick={() => void handleStopRuntime(runtime.active?.id ?? 0)}
-                  disabled={runtime.acting || (runtime.active.status !== 'running' && runtime.active.status !== 'starting')}
-                  aria-label="Stop runtime"
-                >
-                  Stop Runtime
-                </button>
-              </div>
-              {(runtime.active.stdoutTail !== '' || runtime.active.stderrTail !== '') && (
-                <>
-                  <p className="session__eyebrow">Runtime output</p>
-                  {runtime.active.stdoutTail !== '' && (
-                    <pre className="session__hint" aria-label="Runtime stdout">{runtime.active.stdoutTail}</pre>
-                  )}
-                  {runtime.active.stderrTail !== '' && (
-                    <pre className="session__hint" aria-label="Runtime stderr">{runtime.active.stderrTail}</pre>
-                  )}
-                  {runtime.active.logsTruncated && (
-                    <p className="session__hint" role="note">
-                      Older runtime output was omitted.
-                    </p>
-                  )}
-                </>
-              )}
-              <details aria-label="Worker observation details">
-                <summary className="session__eyebrow">Worker observation details</summary>
-                <p className="session__hint" role="note">
-                  Runtime observation: Observed runtime state and bounded logs appear in Work run details as inert text.
-                </p>
-                <p className="session__hint" role="note">
-                  Live Preview inspection: Page title, loopback URL, rendered text, and bounded element list appear in Work run details as inert text. No input values are shown.
-                </p>
-                <p className="session__hint" role="note">
-                  {PREVIEW_TRUNCATION_NOTICE}
-                </p>
-              </details>
-            </>
-          )}
-          {runtime.history.length > 0 && (
-            <>
-              <p className="session__eyebrow">Recent runtimes</p>
-              <ul className="session__context-list">
-                {runtime.history.map((entry: ProjectRuntimeSummary) => (
-                  <li key={entry.id}>
-                    <span className="session__hint">
-                      {entry.program} · port {entry.previewPort} · {runtimeStatusLabel(entry.status)}
-                      {entry.stopReason !== null ? ` · ${entry.stopReason}` : ''}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-          {runtime.error !== null && (
-            <p className="session__error" role="alert">
-              {runtime.error}
-            </p>
-          )}
-        </div>
-      )}
       <p className="session__notice" role="status">
         {aiReady ? `OpenAI · ${provider.selectedModel ?? ''}` : 'Local session — AI provider not connected yet.'}
       </p>
       {settingsOpen && (
-        <div className="session__settings" aria-label="AI settings">
-          <div className="session__settings-row">
-            <span className="session__eyebrow">Provider</span>
-            <span className="session__provider-name">{provider.displayName}</span>
-          </div>
-          {!provider.secureStorageAvailable && (
-            <p className="session__error" role="alert">
-              Secure credential storage is not available on this system.
-            </p>
-          )}
-          <label className="session__eyebrow" htmlFor="session-api-key">
-            API key
-          </label>
-          <div className="session__settings-row">
-            <input
-              id="session-api-key"
-              className="session__field"
-              type={revealKey ? 'text' : 'password'}
-              value={apiKeyInput}
-              onChange={(event) => setApiKeyInput(event.target.value)}
-              placeholder="Paste OpenAI API key…"
-              autoComplete="off"
-              spellCheck={false}
-              aria-label="OpenAI API key"
-            />
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => setRevealKey((reveal) => !reveal)}
-              aria-label={revealKey ? 'Hide typed key' : 'Reveal typed key'}
-            >
-              {revealKey ? 'Hide' : 'Show'}
-            </button>
-          </div>
-          <div className="session__settings-row">
-            <button
-              className="explorer__primary"
-              type="button"
-              onClick={() => void handleSaveKey()}
-              disabled={apiKeyInput.trim() === '' || !provider.secureStorageAvailable}
-            >
-              Save key
-            </button>
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => void handleRemoveKey()}
-              disabled={!provider.configured}
-            >
-              Remove key
-            </button>
-            <span className="session__hint">{provider.configured ? 'Configured' : 'Not configured'}</span>
-          </div>
-          {provider.error !== null && (
-            <p className="session__error" role="alert">
-              {provider.error}
-            </p>
-          )}
-          <div className="session__settings-row">
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => void handleTestConnection()}
-              disabled={!provider.configured || provider.connectionPhase === 'testing'}
-            >
-              {provider.connectionPhase === 'testing' ? 'Testing…' : 'Test connection'}
-            </button>
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => void handleRefreshModels()}
-              disabled={!provider.configured || provider.loadingModels}
-            >
-              {provider.loadingModels ? 'Loading…' : 'Refresh models'}
-            </button>
-          </div>
-          {provider.connectionPhase === 'done' && provider.connectionStatus !== null && (
-            <p className="session__status" role="status">
-              Connection: {connectionStatusLabel(provider.connectionStatus)}
-            </p>
-          )}
-          {provider.connectionPhase === 'error' && provider.connectionError !== null && (
-            <p className="session__error" role="alert">
-              {provider.connectionError}
-            </p>
-          )}
-          <label className="session__eyebrow" htmlFor="session-model-select">
-            Model
-          </label>
-          <div className="session__settings-row">
-            <select
-              id="session-model-select"
-              className="session__select"
-              value={modelValue}
-              onChange={(event) => setModelDraft(event.target.value)}
-              disabled={!provider.configured || (provider.models.length === 0 && provider.selectedModel === null)}
-              aria-label="Available models"
-            >
-              {modelValue === '' && <option value="">Select a model…</option>}
-              {selectedModelMissing && selectedModel !== null ? (
-                <option key={selectedModel} value={selectedModel}>
-                  {selectedModel}
-                </option>
-              ) : null}
-              {provider.models.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.id}
-                </option>
-              ))}
-            </select>
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => void handleUseModel()}
-              disabled={modelDraft === null || modelDraft === provider.selectedModel}
-            >
-              Use model
-            </button>
-          </div>
-          {provider.modelsError !== null && (
-            <p className="session__error" role="alert">
-              {provider.modelsError}
-            </p>
-          )}
-          <div className="session__settings-row">
-            <span className="session__eyebrow">Heart routing</span>
-            <span className="session__hint">
-              {heart.config === null ? 'Not configured' : heart.config.workerMode === 'fixed' ? 'Fixed' : 'Auto-Swap'}
-            </span>
-          </div>
-          <p className="session__eyebrow">Brain model</p>
-          <div className="session__settings-row">
-            <select
-              className="session__select"
-              value={heart.draft.brain.providerId}
-              onChange={(event) =>
-                heartDispatch({
-                  type: 'draft-edited',
-                  workspaceId,
-                  field: { scope: 'brain' },
-                  providerId: event.target.value,
-                  model: heart.draft.brain.model
-                })
-              }
-              aria-label="Brain provider"
-            >
-              <option value="openai">openai</option>
-            </select>
-            <input
-              className="session__field"
-              value={heart.draft.brain.model}
-              onChange={(event) =>
-                heartDispatch({
-                  type: 'draft-edited',
-                  workspaceId,
-                  field: { scope: 'brain' },
-                  providerId: heart.draft.brain.providerId,
-                  model: event.target.value
-                })
-              }
-              placeholder="Brain model…"
-              aria-label="Brain model"
-              list="heart-model-options"
-            />
-          </div>
-          <div className="session__composer-row" role="group" aria-label="Worker routing mode">
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => heartDispatch({ type: 'mode-selected', workspaceId, mode: 'fixed' })}
-              aria-pressed={heart.draft.workerMode === 'fixed'}
-            >
-              Fixed
-            </button>
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => heartDispatch({ type: 'mode-selected', workspaceId, mode: 'auto_swap' })}
-              aria-pressed={heart.draft.workerMode === 'auto_swap'}
-            >
-              Auto-Swap
-            </button>
-          </div>
-          <p className="session__hint" role="note">
-            Auto-Swap lets STARK Brain request a task profile. Heart maps that profile to one of your configured
-            models. It does not retry failed models automatically.
-          </p>
-          {heart.draft.workerMode === 'fixed' ? (
-            <>
-              <p className="session__eyebrow">Worker model (Fixed)</p>
-              <div className="session__settings-row">
-                <select
-                  className="session__select"
-                  value={heart.draft.workerFixed.providerId}
-                  onChange={(event) =>
-                    heartDispatch({
-                      type: 'draft-edited',
-                      workspaceId,
-                      field: { scope: 'workerFixed' },
-                      providerId: event.target.value,
-                      model: heart.draft.workerFixed.model
-                    })
-                  }
-                  aria-label="Fixed worker provider"
-                >
-                  <option value="openai">openai</option>
-                </select>
-                <input
-                  className="session__field"
-                  value={heart.draft.workerFixed.model}
-                  onChange={(event) =>
-                    heartDispatch({
-                      type: 'draft-edited',
-                      workspaceId,
-                      field: { scope: 'workerFixed' },
-                      providerId: heart.draft.workerFixed.providerId,
-                      model: event.target.value
-                    })
-                  }
-                  placeholder="Worker model…"
-                  aria-label="Fixed worker model"
-                  list="heart-model-options"
-                />
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="session__eyebrow">Default Worker model</p>
-              <div className="session__settings-row">
-                <select
-                  className="session__select"
-                  value={heart.draft.workerDefault.providerId}
-                  onChange={(event) =>
-                    heartDispatch({
-                      type: 'draft-edited',
-                      workspaceId,
-                      field: { scope: 'workerDefault' },
-                      providerId: event.target.value,
-                      model: heart.draft.workerDefault.model
-                    })
-                  }
-                  aria-label="Default worker provider"
-                >
-                  <option value="openai">openai</option>
-                </select>
-                <input
-                  className="session__field"
-                  value={heart.draft.workerDefault.model}
-                  onChange={(event) =>
-                    heartDispatch({
-                      type: 'draft-edited',
-                      workspaceId,
-                      field: { scope: 'workerDefault' },
-                      providerId: heart.draft.workerDefault.providerId,
-                      model: event.target.value
-                    })
-                  }
-                  placeholder="Default worker model…"
-                  aria-label="Default worker model"
-                  list="heart-model-options"
-                />
-              </div>
-              {(Object.keys(heart.draft.workerRoutes) as ('general' | 'coding' | 'reasoning' | 'fast')[]).map(
-                (profile) => (
-                  <div key={profile}>
-                    <p className="session__eyebrow">{profile[0]?.toUpperCase() + profile.slice(1)} override (optional)</p>
-                    <div className="session__settings-row">
-                      <select
-                        className="session__select"
-                        value={heart.draft.workerRoutes[profile].providerId}
-                        onChange={(event) =>
-                          heartDispatch({
-                            type: 'draft-edited',
-                            workspaceId,
-                            field: { scope: 'route', profile },
-                            providerId: event.target.value,
-                            model: heart.draft.workerRoutes[profile].model
-                          })
-                        }
-                        aria-label={`${profile} worker provider`}
-                      >
-                        <option value="openai">openai</option>
-                      </select>
-                      <input
-                        className="session__field"
-                        value={heart.draft.workerRoutes[profile].model}
-                        onChange={(event) =>
-                          heartDispatch({
-                            type: 'draft-edited',
-                            workspaceId,
-                            field: { scope: 'route', profile },
-                            providerId: heart.draft.workerRoutes[profile].providerId,
-                            model: event.target.value
-                          })
-                        }
-                        placeholder={`${profile} model… (optional)`}
-                        aria-label={`${profile} worker model`}
-                        list="heart-model-options"
-                      />
-                    </div>
-                  </div>
-                )
-              )}
-            </>
-          )}
-          <datalist id="heart-model-options">
-            {provider.models.map((entry) => (
-              <option key={entry.id} value={entry.id} />
-            ))}
-          </datalist>
-          {heart.loading && (
-            <p className="session__status" role="status">
-              Loading Heart…
-            </p>
-          )}
-          {heart.loadError !== null && (
-            <p className="session__error" role="alert">
-              {heart.loadError}
-            </p>
-          )}
-          {heart.saveError !== null && (
-            <p className="session__error" role="alert">
-              {heart.saveError}
-            </p>
-          )}
-          {heart.notice !== null && (
-            <p className="session__status" role="status">
-              {heart.notice}
-            </p>
-          )}
-          <div className="session__settings-row">
-            <button
-              className="explorer__primary"
-              type="button"
-              onClick={() => void handleSaveHeart()}
-              disabled={heart.saving}
-            >
-              {heart.saving ? 'Saving…' : 'Save Heart'}
-            </button>
-          </div>
-          <div className="session__settings-row">
-            <span className="session__eyebrow">Continuity Recovery</span>
-          </div>
-          <div className="session__composer-row" role="group" aria-label="Continuity recovery mode">
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => recoveryDispatch({ type: 'mode-selected', workspaceId, mode: 'off' })}
-              aria-pressed={recovery.draft.mode === 'off'}
-            >
-              Off
-            </button>
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => recoveryDispatch({ type: 'mode-selected', workspaceId, mode: 'handoff' })}
-              aria-pressed={recovery.draft.mode === 'handoff'}
-            >
-              Handoff only
-            </button>
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => recoveryDispatch({ type: 'mode-selected', workspaceId, mode: 'auto_once' })}
-              aria-pressed={recovery.draft.mode === 'auto_once'}
-            >
-              Auto once
-            </button>
-          </div>
-          <p className="session__hint" role="note">
-            {recovery.draft.mode === 'handoff'
-              ? 'Create a Looplink recovery session after a recoverable provider failure, but do not call another model automatically.'
-              : recovery.draft.mode === 'auto_once'
-                ? 'Create one Looplink recovery session and make one attempt using your Recovery models. STARK will not retry or create another automatic handoff if that attempt fails.'
-                : 'Recovery is off. Provider failures surface normally.'}
-          </p>
-          {(['ask', 'brain', 'worker'] as const).map((scope) => (
-            <div key={scope}>
-              <p className="session__eyebrow">
-                {scope === 'ask' ? 'Ask Recovery' : scope === 'brain' ? 'Brain Recovery' : 'Worker Recovery'}
-              </p>
-              <div className="session__settings-row">
-                <select
-                  className="session__select"
-                  value={recovery.draft[scope].providerId}
-                  onChange={(event) =>
-                    recoveryDispatch({
-                      type: 'draft-edited',
-                      workspaceId,
-                      field: { scope },
-                      providerId: event.target.value,
-                      model: recovery.draft[scope].model
-                    })
-                  }
-                  aria-label={`${scope} recovery provider`}
-                >
-                  <option value="openai">openai</option>
-                </select>
-                <input
-                  className="session__field"
-                  value={recovery.draft[scope].model}
-                  onChange={(event) =>
-                    recoveryDispatch({
-                      type: 'draft-edited',
-                      workspaceId,
-                      field: { scope },
-                      providerId: recovery.draft[scope].providerId,
-                      model: event.target.value
-                    })
-                  }
-                  placeholder={`${scope} recovery model…`}
-                  aria-label={`${scope} recovery model`}
-                  list="recovery-model-options"
-                />
-              </div>
-            </div>
-          ))}
-          <datalist id="recovery-model-options">
-            {provider.models.map((entry) => (
-              <option key={entry.id} value={entry.id} />
-            ))}
-          </datalist>
-          {recovery.loading && (
-            <p className="session__status" role="status">
-              Loading recovery…
-            </p>
-          )}
-          {recovery.loadError !== null && (
-            <p className="session__error" role="alert">
-              {recovery.loadError}
-            </p>
-          )}
-          {recovery.saveError !== null && (
-            <p className="session__error" role="alert">
-              {recovery.saveError}
-            </p>
-          )}
-          {recovery.notice !== null && (
-            <p className="session__status" role="status">
-              {recovery.notice}
-            </p>
-          )}
-          <div className="session__settings-row">
-            <button
-              className="explorer__primary"
-              type="button"
-              onClick={() => void handleSaveRecovery()}
-              disabled={recovery.saving}
-            >
-              {recovery.saving ? 'Saving…' : 'Save Recovery'}
-            </button>
-          </div>
-          <div className="session__settings-row">
-            <span className="session__eyebrow">Usage &amp; Threshold Routing</span>
-            <span className="session__hint">{usage.draft.thresholdRoutingEnabled ? 'On' : 'Off'}</span>
-          </div>
-          <p className="session__hint" role="note">
-            STARK tracks only provider calls made by STARK. It does not query provider billing or quota APIs and
-            cannot see usage generated outside STARK.
-          </p>
-          <p className="session__hint" role="note">
-            Token counts are shown only when the provider reports them.
-          </p>
-          <div className="session__composer-row" role="group" aria-label="Threshold routing">
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => usageDispatch({ type: 'routing-toggled', workspaceId, enabled: false })}
-              aria-pressed={!usage.draft.thresholdRoutingEnabled}
-            >
-              Off
-            </button>
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => usageDispatch({ type: 'routing-toggled', workspaceId, enabled: true })}
-              aria-pressed={usage.draft.thresholdRoutingEnabled}
-            >
-              On
-            </button>
-          </div>
-          <p className="session__hint" role="note">
-            When a base Heart model reaches your local routing threshold, STARK may use the configured alternate
-            before making the provider call.
-          </p>
-          <p className="session__hint" role="note">
-            This does not retry failed models and is not a provider quota guarantee.
-          </p>
-          <p className="session__hint" role="note">
-            If no alternate is configured, STARK continues using the normal Heart route.
-          </p>
-          <div className="session__settings-row">
-            <span className="session__eyebrow">Local usage — last 24 hours</span>
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => void refreshUsageSummary(workspaceId)}
-              disabled={usage.summaryLoading}
-              aria-label="Refresh usage"
-            >
-              {usage.summaryLoading ? 'Refreshing…' : 'Refresh usage'}
-            </button>
-          </div>
-          {usage.summary !== null && (
-            <ul className="session__context-list" aria-label="Local usage summary">
-              {usage.summary.models.map((entry) => (
-                <li key={`${entry.providerId}/${entry.model}`}>
-                  <p className="session__hint" role="note">
-                    {entry.providerId} / {entry.model} · {entry.calls24h} calls ·{' '}
-                    {entry.tokenTelemetryComplete && entry.totalTokens24h !== null
-                      ? `${entry.totalTokens24h} tokens`
-                      : 'Token telemetry incomplete'}{' '}
-                    · {entry.rateLimitFailures24h} rate-limit failures · {formatUsageThreshold(entry)} ·{' '}
-                    {entry.thresholdReached ? 'Threshold reached' : 'Below threshold'}
-                  </p>
-                  {!entry.tokenTelemetryComplete && (
-                    <p className="session__hint" role="note">
-                      Token threshold cannot be evaluated completely because this provider/model did not report token
-                      usage for every observed call.
-                    </p>
-                  )}
-                </li>
-              ))}
-              {usage.summary.truncated && (
-                <li>
-                  <p className="session__hint" role="note">
-                    Showing the first {usage.summary.models.length} provider/model rows.
-                  </p>
-                </li>
-              )}
-            </ul>
-          )}
-          {usage.summaryError !== null && (
-            <p className="session__error" role="alert">
-              {usage.summaryError}
-            </p>
-          )}
-          <div className="session__settings-row">
-            <span className="session__eyebrow">Local routing thresholds</span>
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => usageDispatch({ type: 'limit-added', workspaceId })}
-              aria-label="Add usage limit"
-            >
-              Add limit
-            </button>
-          </div>
-          {usage.draft.limits.map((entry, index) => (
-            <div key={index}>
-              <div className="session__settings-row">
-                <select
-                  className="session__select"
-                  value={entry.providerId}
-                  onChange={(event) =>
-                    usageDispatch({
-                      type: 'limit-edited',
-                      workspaceId,
-                      index,
-                      limit: { ...entry, providerId: event.target.value }
-                    })
-                  }
-                  aria-label={`Usage limit ${index + 1} provider`}
-                >
-                  <option value="openai">openai</option>
-                </select>
-                <input
-                  className="session__field"
-                  value={entry.model}
-                  onChange={(event) =>
-                    usageDispatch({
-                      type: 'limit-edited',
-                      workspaceId,
-                      index,
-                      limit: { ...entry, model: event.target.value }
-                    })
-                  }
-                  placeholder="Model…"
-                  aria-label={`Usage limit ${index + 1} model`}
-                  list="usage-model-options"
-                />
-                <button
-                  className="explorer__secondary"
-                  type="button"
-                  onClick={() => usageDispatch({ type: 'limit-removed', workspaceId, index })}
-                  aria-label={`Remove usage limit ${index + 1}`}
-                >
-                  Remove
-                </button>
-              </div>
-              <div className="session__settings-row">
-                <input
-                  className="session__field"
-                  value={entry.maxCalls}
-                  onChange={(event) =>
-                    usageDispatch({
-                      type: 'limit-edited',
-                      workspaceId,
-                      index,
-                      limit: { ...entry, maxCalls: event.target.value }
-                    })
-                  }
-                  placeholder="Max STARK calls / 24h…"
-                  aria-label={`Usage limit ${index + 1} max calls`}
-                />
-                <input
-                  className="session__field"
-                  value={entry.maxTokens}
-                  onChange={(event) =>
-                    usageDispatch({
-                      type: 'limit-edited',
-                      workspaceId,
-                      index,
-                      limit: { ...entry, maxTokens: event.target.value }
-                    })
-                  }
-                  placeholder="Max reported tokens / 24h…"
-                  aria-label={`Usage limit ${index + 1} max tokens`}
-                />
-                <input
-                  className="session__field"
-                  value={entry.switchAt}
-                  onChange={(event) =>
-                    usageDispatch({
-                      type: 'limit-edited',
-                      workspaceId,
-                      index,
-                      limit: { ...entry, switchAt: event.target.value }
-                    })
-                  }
-                  placeholder="Switch at %…"
-                  aria-label={`Usage limit ${index + 1} switch percent`}
-                />
-              </div>
-            </div>
-          ))}
-          <div className="session__settings-row">
-            <span className="session__eyebrow">Threshold alternates</span>
-          </div>
-          {USAGE_ROUTE_KEYS.map((routeKey) => (
-            <div key={routeKey}>
-              <p className="session__eyebrow">{usageRouteLabel(routeKey)}</p>
-              <div className="session__settings-row">
-                <select
-                  className="session__select"
-                  value={usage.draft.alternates[routeKey].providerId}
-                  onChange={(event) =>
-                    usageDispatch({
-                      type: 'alternate-edited',
-                      workspaceId,
-                      routeKey,
-                      alternate: { ...usage.draft.alternates[routeKey], providerId: event.target.value }
-                    })
-                  }
-                  aria-label={`${usageRouteLabel(routeKey)} alternate provider`}
-                >
-                  <option value="openai">openai</option>
-                </select>
-                <input
-                  className="session__field"
-                  value={usage.draft.alternates[routeKey].model}
-                  onChange={(event) =>
-                    usageDispatch({
-                      type: 'alternate-edited',
-                      workspaceId,
-                      routeKey,
-                      alternate: { ...usage.draft.alternates[routeKey], model: event.target.value }
-                    })
-                  }
-                  placeholder={`${usageRouteLabel(routeKey)} alternate model…`}
-                  aria-label={`${usageRouteLabel(routeKey)} alternate model`}
-                  list="usage-model-options"
-                />
-              </div>
-            </div>
-          ))}
-          <datalist id="usage-model-options">
-            {provider.models.map((entry) => (
-              <option key={entry.id} value={entry.id} />
-            ))}
-          </datalist>
-          {usage.loading && (
-            <p className="session__status" role="status">
-              Loading usage…
-            </p>
-          )}
-          {usage.loadError !== null && (
-            <p className="session__error" role="alert">
-              {usage.loadError}
-            </p>
-          )}
-          {usage.saveError !== null && (
-            <p className="session__error" role="alert">
-              {usage.saveError}
-            </p>
-          )}
-          {usage.notice !== null && (
-            <p className="session__status" role="status">
-              {usage.notice}
-            </p>
-          )}
-          <div className="session__settings-row">
-            <button
-              className="explorer__primary"
-              type="button"
-              onClick={() => void handleSaveUsage()}
-              disabled={usage.saving}
-            >
-              {usage.saving ? 'Saving…' : 'Save usage routing'}
-            </button>
-          </div>
-          <div className="session__settings-row">
-            <span className="session__eyebrow">Agent Permissions</span>
-            <span className="session__hint">{capabilities.draft.enabled ? 'Enabled' : 'Disabled'}</span>
-          </div>
-          <p className="session__hint" role="note">
-            Permissions only control whether future STARK Worker tools may request an action. They do not bypass
-            Workspace security or human review.
-          </p>
-          <div className="session__settings-row">
-            <span className="session__eyebrow">Workspace Agent Capabilities</span>
-          </div>
-          <div className="session__composer-row" role="group" aria-label="Workspace agent capabilities">
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => capabilitiesDispatch({ type: 'enabled-toggled', workspaceId, enabled: false })}
-              aria-pressed={!capabilities.draft.enabled}
-            >
-              Disabled
-            </button>
-            <button
-              className="explorer__secondary"
-              type="button"
-              onClick={() => capabilitiesDispatch({ type: 'enabled-toggled', workspaceId, enabled: true })}
-              aria-pressed={capabilities.draft.enabled}
-            >
-              Enabled
-            </button>
-          </div>
-          <div aria-disabled={!capabilities.draft.enabled}>
-            {CAPABILITY_ORDER.map((capability) => (
-              <div key={capability}>
-                <p className="session__eyebrow">{capabilityLabel(capability)}</p>
-                <div className="session__composer-row" role="group" aria-label={`${capability} permission`}>
-                  {legalModesFor(capability).map((mode) => (
-                    <button
-                      key={mode}
-                      className="explorer__secondary"
-                      type="button"
-                      onClick={() => capabilitiesDispatch({ type: 'mode-selected', workspaceId, capability, mode })}
-                      aria-pressed={capabilities.draft.modes[capability] === mode}
-                      disabled={!capabilities.draft.enabled}
-                    >
-                      {mode === 'deny' ? 'Deny' : mode === 'ask' ? 'Ask' : 'Allow'}
-                    </button>
-                  ))}
-                </div>
-                {capability === 'terminal.execute' && (
-                  <p className="session__hint" role="note">
-                    Terminal execution always requires approval for the exact command.
-                  </p>
-                )}
-                {capability === 'change.propose' && (
-                  <p className="session__hint" role="note">
-                    Allowing proposals does not allow STARK to apply them. File changes still require review and Accept.
-                  </p>
-                )}
-                {capability === 'runtime.observe' && (
-                  <p className="session__hint" role="note">
-                    Allows the Worker to inspect the managed runtime&apos;s status and bounded stdout/stderr logs.
-                  </p>
-                )}
-                {capability === 'preview.inspect' && (
-                  <p className="session__hint" role="note">
-                    Allows the Worker to inspect bounded rendered content from STARK&apos;s local Live Preview. It does not allow clicking, typing, form submission, or DOM modification.
-                  </p>
-                )}
-              </div>
-            ))}
-          </div>
-          <p className="session__hint" role="note">
-            STARK must ask before each future action.
-          </p>
-          {capabilities.loading && (
-            <p className="session__status" role="status">
-              Loading permissions…
-            </p>
-          )}
-          {capabilities.loadError !== null && (
-            <p className="session__error" role="alert">
-              {capabilities.loadError}
-            </p>
-          )}
-          {capabilities.saveError !== null && (
-            <p className="session__error" role="alert">
-              {capabilities.saveError}
-            </p>
-          )}
-          {capabilities.notice !== null && (
-            <p className="session__status" role="status">
-              {capabilities.notice}
-            </p>
-          )}
-          <div className="session__settings-row">
-            <button
-              className="explorer__primary"
-              type="button"
-              onClick={() => void handleSaveCapabilities()}
-              disabled={capabilities.saving}
-            >
-              {capabilities.saving ? 'Saving…' : 'Save permissions'}
-            </button>
-          </div>
-        </div>
+        <StarkSettingsSurface
+          workspaceId={workspaceId}
+          section={settingsSection}
+          onSectionChange={onSettingsSectionChange}
+          onClose={onCloseSettings}
+          provider={provider}
+          apiKeyInput={apiKeyInput}
+          onApiKeyInputChange={setApiKeyInput}
+          revealKey={revealKey}
+          onToggleRevealKey={() => setRevealKey((reveal) => !reveal)}
+          modelValue={modelValue}
+          selectedModelMissing={selectedModelMissing}
+          useModelDisabled={modelDraft === null || modelDraft === provider.selectedModel}
+          onModelDraftChange={setModelDraft}
+          onSaveKey={() => void handleSaveKey()}
+          onRemoveKey={() => void handleRemoveKey()}
+          onTestConnection={() => void handleTestConnection()}
+          onRefreshModels={() => void handleRefreshModels()}
+          onUseModel={() => void handleUseModel()}
+          heart={heart}
+          heartDispatch={heartDispatch}
+          onSaveHeart={() => void handleSaveHeart()}
+          recovery={recovery}
+          recoveryDispatch={recoveryDispatch}
+          onSaveRecovery={() => void handleSaveRecovery()}
+          usage={usage}
+          usageDispatch={usageDispatch}
+          onRefreshUsageSummary={() => void refreshUsageSummary(workspaceId)}
+          onSaveUsage={() => void handleSaveUsage()}
+          capabilities={capabilities}
+          capabilitiesDispatch={capabilitiesDispatch}
+          onSaveCapabilities={() => void handleSaveCapabilities()}
+        />
       )}
+      {/* All provider, Heart, Recovery, usage, and capability settings live in StarkSettingsSurface. */}
       {state.loadingSessions && state.sessions.length === 0 ? (
         <div className="session__empty">
           <p className="session__status" role="status">
@@ -2721,7 +1635,10 @@ export function SessionPanel({
                       message.role === 'assistant' ? 'session__message session__message--assistant' : 'session__message'
                     }
                   >
-                    <span className="session__role">{roleLabel(message.role)}</span>
+                    <span className="session__role-row">
+                      {message.role === 'assistant' && <StarkMark size="bar" />}
+                      <span className="session__role">{roleLabel(message.role)}</span>
+                    </span>
                     <p className="session__content">{message.content}</p>
                     {(message.context ?? []).length > 0 && (
                       <div className="session__sent-context" aria-label={`Context sent with message ${message.id}`}>
@@ -2843,144 +1760,367 @@ export function SessionPanel({
               )}
             </div>
           )}
-          <div className="session__context" aria-label="Attached context">
-            <div className="session__context-header">
-              <p className="session__eyebrow">Attached context{contextDrafts.length > 0 ? ` (${String(contextDrafts.length)})` : ''}</p>
-              <button
-                className="explorer__secondary"
-                type="button"
-                onClick={() => setContextOpen((open) => !open)}
-                aria-expanded={contextOpen}
-                aria-label={contextOpen ? 'Collapse attached context' : 'Expand attached context'}
-              >
-                {contextOpen ? 'Collapse' : 'Expand'}
-              </button>
-              <button
-                className="explorer__secondary"
-                type="button"
-                onClick={() => setNoteOpen((open) => !open)}
-                aria-expanded={noteOpen}
-              >
-                Add note
-              </button>
+          {(recovery.event !== null ||
+            pendingApproval !== null ||
+            runtime.active !== null ||
+            runtime.history.length > 0 ||
+            work.preparing ||
+            work.error !== null ||
+            work.run !== null) && (
+            <div className="session__dock" aria-label="Pending actions">
+              {recovery.event !== null && (
+                <div className="session__recovery" aria-label="Recovery handoff">
+                  <p className="session__status" role="status">
+                    {recoverySourceCopy(recovery.event.status)}
+                  </p>
+                  <p className="session__hint" role="note">
+                    {recoveryTargetCopy(recovery.event)}
+                  </p>
+                  {recovery.event.routes.length > 0 && (
+                    <ul className="session__list" aria-label="Recovery routes">
+                      {recovery.event.routes.map((route) => (
+                        <li key={route.role} className="session__message">
+                          <span className="session__role">{route.role}</span>
+                          <p className="session__content">
+                            {route.providerId} / {route.model}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="session__settings-row">
+                    <button
+                      className="explorer__secondary"
+                      type="button"
+                      onClick={() => handleSelect(recovery.event?.targetSessionId ?? 0)}
+                      disabled={(recovery.event?.targetSessionId ?? 0) === 0}
+                      aria-label="Open recovery session"
+                    >
+                      Open recovery session
+                    </button>
+                    {recovery.event.status === 'handoff_ready' && (
+                      <button
+                        className="explorer__secondary"
+                        type="button"
+                        onClick={() => void handleDismissRecovery()}
+                        aria-label="Dismiss recovery"
+                      >
+                        Dismiss
+                      </button>
+                    )}
+                  </div>
+                  {recovery.eventError !== null && (
+                    <p className="session__error" role="alert">
+                      {recovery.eventError}
+                    </p>
+                  )}
+                </div>
+              )}
+              {pendingApproval !== null && (
+                <div className="session__recovery" aria-label="Worker approval">
+                  <p className="session__status" role="status">
+                    {pendingApproval.toolName === 'change_propose' ? 'Worker wants to create a reviewable proposal.' : 'STARK Worker needs permission'}
+                  </p>
+                  {pendingApproval.toolName === 'terminal_execute' && (
+                    <p className="session__hint" role="note">
+                      Capability: Terminal command
+                    </p>
+                  )}
+                  {pendingApproval.toolName === 'runtime_start' && (
+                    <p className="session__hint" role="note">
+                      Capability: Project runtime
+                    </p>
+                  )}
+                  {pendingApproval.toolName === 'runtime_observe' && (
+                    <p className="session__hint" role="note">
+                      Capability: Runtime observation
+                    </p>
+                  )}
+                  {pendingApproval.toolName === 'preview_inspect' && (
+                    <p className="session__hint" role="note">
+                      Capability: Live Preview inspection
+                    </p>
+                  )}
+                  {pendingApproval.toolName === 'runtime_observe' && (
+                    <p className="session__hint" role="note">
+                      Action: Observe managed runtime
+                    </p>
+                  )}
+                  {pendingApproval.toolName === 'preview_inspect' && (
+                    <p className="session__hint" role="note">
+                      Action: Inspect rendered Live Preview
+                    </p>
+                  )}
+                  <p className="session__hint" role="note">
+                    {pendingApproval.summary}
+                  </p>
+                  <p className="session__hint" role="note">
+                    {pendingApproval.toolName === 'change_propose'
+                      ? 'Approval creates a reviewable proposal only. Files will not change until you review and Accept them.'
+                      : pendingApproval.toolName === 'terminal_execute'
+                        ? 'This exact command will run with your user account from the Workspace root. It may modify files, start subprocesses, or access the network.'
+                        : pendingApproval.toolName === 'runtime_start'
+                          ? 'This exact command will run with your user account from the Workspace root and may modify files, start subprocesses, or access the network.'
+                          : pendingApproval.toolName === 'runtime_observe'
+                            ? 'This approval allows STARK Worker to read the current managed runtime state and bounded logs once. This approval does not allow STARK Worker to stop, restart, or modify the runtime.'
+                            : pendingApproval.toolName === 'preview_inspect'
+                              ? 'STARK Worker may inspect bounded rendered content from this local Preview once. STARK does not click, type, submit forms, or modify the DOM. If needed, STARK may load this approved local Preview path in an isolated inspection window.'
+                              : 'This approval applies only to this exact action.'}
+                  </p>
+                  {pendingApproval.toolName === 'runtime_start' && (
+                    <>
+                      <p className="session__hint" role="note">
+                        This runtime may remain active for up to 30 minutes.
+                      </p>
+                      <p className="session__hint" role="note">
+                        This approval applies only to this exact program, arguments, and preview port.
+                      </p>
+                    </>
+                  )}
+                  {pendingApproval.toolName === 'terminal_execute' && (
+                    <p className="session__hint" role="note">
+                      This approval applies only to this exact program and argument list.
+                    </p>
+                  )}
+                  <div className="session__settings-row">
+                    <button
+                      className="explorer__secondary"
+                      type="button"
+                      onClick={() => void handleApprovalDecision(false)}
+                      disabled={approvalActing}
+                      aria-label="Deny approval"
+                    >
+                      Deny
+                    </button>
+                    <button
+                      className="explorer__primary session__approve"
+                      type="button"
+                      onClick={() => void handleApprovalDecision(true)}
+                      disabled={approvalActing}
+                      aria-label="Approve approval"
+                    >
+                      {approvalActing ? 'Resolving…' : 'Approve'}
+                    </button>
+                  </div>
+                  {approvalError !== null && (
+                    <p className="session__error" role="alert">
+                      {approvalError}
+                    </p>
+                  )}
+                </div>
+              )}
+              {(runtime.active !== null || runtime.history.length > 0) && (
+                <div className="session__recovery" aria-label="Project runtime">
+                  <p className="session__status" role="status">
+                    {runtime.active !== null
+                      ? `${runtimeStatusLabel(runtime.active.status)} · port ${runtime.active.previewPort}`
+                      : `Last run · ${runtime.history[0]?.program ?? 'runtime'} · port ${runtime.history[0]?.previewPort ?? ''} · ${runtimeStatusLabel(runtime.history[0]?.status ?? 'exited')}`}
+                  </p>
+                  {runtime.active !== null && (
+                    <div className="session__settings-row">
+                      <button
+                        className="explorer__secondary"
+                        type="button"
+                        onClick={() => void handleOpenPreview(runtime.active?.id ?? 0)}
+                        disabled={runtime.acting || runtime.active.status !== 'running'}
+                        aria-label="Open preview"
+                      >
+                        Open Preview
+                      </button>
+                      <button
+                        className="explorer__secondary"
+                        type="button"
+                        onClick={() => void handleStopRuntime(runtime.active?.id ?? 0)}
+                        disabled={runtime.acting || (runtime.active.status !== 'running' && runtime.active.status !== 'starting')}
+                        aria-label="Stop runtime"
+                      >
+                        Stop Runtime
+                      </button>
+                    </div>
+                  )}
+                  <details className="session__runtime-details">
+                    <summary className="session__eyebrow">Runtime details</summary>
+                    {runtime.active !== null && (
+                      <>
+                        <p className="session__hint" role="note">
+                          Command: {runtime.active.program}{runtime.active.args.length > 0 ? ` ${runtime.active.args.join(' ')}` : ''}
+                        </p>
+                        <p className="session__hint" role="note">
+                          Preview: {runtime.active.previewUrl}
+                        </p>
+                        <p className="session__hint" role="note">
+                          Started: {formatTime(runtime.active.startedAt ?? runtime.active.createdAt)} · Maximum runtime: 30 minutes.
+                        </p>
+                        <div className="session__settings-row">
+                          <button
+                            className="explorer__secondary"
+                            type="button"
+                            onClick={() => void handleReloadPreview(runtime.active?.id ?? 0)}
+                            disabled={runtime.acting || runtime.active.status !== 'running'}
+                            aria-label="Reload preview"
+                          >
+                            Reload Preview
+                          </button>
+                        </div>
+                        {(runtime.active.stdoutTail !== '' || runtime.active.stderrTail !== '') && (
+                          <>
+                            <p className="session__eyebrow">Runtime output</p>
+                            {runtime.active.stdoutTail !== '' && (
+                              <pre className="session__hint" aria-label="Runtime stdout">{runtime.active.stdoutTail}</pre>
+                            )}
+                            {runtime.active.stderrTail !== '' && (
+                              <pre className="session__hint" aria-label="Runtime stderr">{runtime.active.stderrTail}</pre>
+                            )}
+                            {runtime.active.logsTruncated && (
+                              <p className="session__hint" role="note">
+                                Older runtime output was omitted.
+                              </p>
+                            )}
+                          </>
+                        )}
+                        <details aria-label="Worker observation details">
+                          <summary className="session__eyebrow">Worker observation details</summary>
+                          <p className="session__hint" role="note">
+                            Runtime observation: Observed runtime state and bounded logs appear in Work run details as inert text.
+                          </p>
+                          <p className="session__hint" role="note">
+                            Live Preview inspection: Page title, loopback URL, rendered text, and bounded element list appear in Work run details as inert text. No input values are shown.
+                          </p>
+                          <p className="session__hint" role="note">
+                            {PREVIEW_TRUNCATION_NOTICE}
+                          </p>
+                        </details>
+                      </>
+                    )}
+                    {runtime.history.length > 0 && (
+                      <>
+                        <p className="session__eyebrow">Recent runtimes</p>
+                        <ul className="session__context-list">
+                          {runtime.history.map((entry: ProjectRuntimeSummary) => (
+                            <li key={entry.id}>
+                              <span className="session__hint">
+                                {entry.program} · port {entry.previewPort} · {runtimeStatusLabel(entry.status)}
+                                {entry.stopReason !== null ? ` · ${entry.stopReason}` : ''}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                    {runtime.error !== null && (
+                      <p className="session__error" role="alert">
+                        {runtime.error}
+                      </p>
+                    )}
+                  </details>
+                </div>
+              )}
+              {work.preparing && (
+                <p className="session__status" role="status">
+                  Brain is working…
+                </p>
+              )}
+              {work.error !== null && (
+                <div className="session__generation-error" role="alert">
+                  <p className="session__error">{work.error}</p>
+                  <button className="explorer__secondary" type="button" onClick={() => void handleRetryWork()}>
+                    Retry Work
+                  </button>
+                </div>
+              )}
+              {work.run !== null && (
+                <div className="session__generation-error" role="status" aria-label="Work run details">
+                  <p className="session__status">
+                    Work run · {work.run.status}
+                    {work.run.action !== null ? ` · ${work.run.action}` : ''}
+                  </p>
+                  {work.run.planSummary !== null && <p className="session__status">Plan: {work.run.planSummary}</p>}
+                  <ul className="session__context-list">
+                    {work.run.steps.map((step) => (
+                      <li key={step.id}>
+                        <span className="session__hint">
+                          {step.kind === 'brain_plan' ? 'Brain Plan' : step.kind === 'worker' ? 'Worker result' : 'Brain Final response'} · {step.status}
+                          {step.modelAudit !== null
+                            ? ` · ${step.modelAudit.providerId} / ${step.modelAudit.model}`
+                            : ' · Model information unavailable for this older run.'}
+                        </span>
+                        {step.kind === 'worker' && (
+                          <span className="session__hint">
+                            {step.modelAudit !== null && step.modelAudit.requestedProfile !== null
+                              ? `Requested profile: ${step.modelAudit.requestedProfile} · Resolved route: ${step.modelAudit.routeKey}`
+                              : 'Route: Fixed'}
+                          </span>
+                        )}
+                        {step.kind === 'worker' && step.output !== null && (
+                          <ContextCard label="Worker result" detail={step.status} content={step.output} removable={false} />
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  {work.run.usageRouteDecisions.map((decision, index) => (
+                    <p className="session__hint" role="note" key={`${decision.role}-${decision.routeKey}-${String(index)}`}>
+                      {decision.decision === 'threshold_alternate'
+                        ? `${decision.role === 'brain' ? 'Brain' : 'Worker'} — Configured: ${decision.baseProviderId} / ${decision.baseModel} — Threshold route: ${decision.selectedProviderId} / ${decision.selectedModel} — Reason: Local call threshold reached`
+                        : decision.decision === 'threshold_reached_no_alternate'
+                          ? 'Local threshold reached; normal Heart route used because no alternate is configured.'
+                          : null}
+                    </p>
+                  ))}
+                </div>
+              )}
             </div>
-            {contextOpen && (
-            <>
+          )}
+          <div className={`session__composer session__composer--${proposal.mode}`}>
+            {(contextDrafts.length > 0 || contextDraftError !== null) && (
+              <div className="session__context-chips" aria-label="Attached context summary">
+                <button
+                  className="session__context-count"
+                  type="button"
+                  onClick={onOpenContext}
+                  aria-label={`Open attached context, ${contextDrafts.length} items`}
+                  title="Open Context tab"
+                >
+                  Context · {contextDrafts.length}
+                </button>
+                {contextDrafts.slice(0, 4).map((draft) => (
+                  <span
+                    key={draft.draftId}
+                    className={
+                      draft.kind === 'manual-note'
+                        ? 'session__chip session__chip--note'
+                        : 'session__chip'
+                    }
+                    title={draft.label}
+                  >
+                    <span className="session__chip-label">{draft.label}</span>
+                    <button
+                      className="session__chip-remove"
+                      type="button"
+                      onClick={() => handleRemoveDraft(draft.draftId)}
+                      aria-label={`Remove ${draft.label}`}
+                      title={`Remove ${draft.label}`}
+                    >
+                      <StarkIcon name="close" size={12} />
+                    </button>
+                  </span>
+                ))}
+                {contextDrafts.length > 4 && (
+                  <button
+                    className="session__context-count"
+                    type="button"
+                    onClick={onOpenContext}
+                    aria-label={`Open attached context, ${contextDrafts.length - 4} more items`}
+                  >
+                    +{contextDrafts.length - 4} more
+                  </button>
+                )}
+              </div>
+            )}
             {contextDraftError !== null && (
               <p className="session__error" role="alert">
                 {contextDraftError}
               </p>
             )}
-            {contextDrafts.length === 0 ? (
-              <p className="session__empty-text">No context attached. Only what you attach here is sent to the AI.</p>
-            ) : (
-              <ul className="session__context-list">
-                {contextDrafts.map((draft) => (
-                  <li key={draft.draftId}>
-                    <ContextCard
-                      label={draft.label}
-                      detail={draft.kind}
-                      content={draft.content}
-                      removable
-                      onRemove={() => handleRemoveDraft(draft.draftId)}
-                    />
-                  </li>
-                ))}
-              </ul>
-            )}
-            {noteOpen && (
-              <div className="session__note-form">
-                <label className="session__eyebrow" htmlFor="session-note-input">
-                  Manual note
-                </label>
-            {work.preparing && (
-              <p className="session__status" role="status">
-                Brain is working…
-              </p>
-            )}
-            {work.error !== null && (
-              <div className="session__generation-error" role="alert">
-                <p className="session__error">{work.error}</p>
-                <button className="explorer__secondary" type="button" onClick={() => void handleRetryWork()}>
-                  Retry Work
-                </button>
-              </div>
-            )}
-            {work.run !== null && (
-              <div className="session__generation-error" role="status" aria-label="Work run details">
-                <p className="session__status">
-                  Work run · {work.run.status}
-                  {work.run.action !== null ? ` · ${work.run.action}` : ''}
-                </p>
-                {work.run.planSummary !== null && <p className="session__status">Plan: {work.run.planSummary}</p>}
-                <ul className="session__context-list">
-                  {work.run.steps.map((step) => (
-                    <li key={step.id}>
-                      <span className="session__hint">
-                        {step.kind === 'brain_plan' ? 'Brain Plan' : step.kind === 'worker' ? 'Worker result' : 'Brain Final response'} · {step.status}
-                        {step.modelAudit !== null
-                          ? ` · ${step.modelAudit.providerId} / ${step.modelAudit.model}`
-                          : ' · Model information unavailable for this older run.'}
-                      </span>
-                      {step.kind === 'worker' && (
-                        <span className="session__hint">
-                          {step.modelAudit !== null && step.modelAudit.requestedProfile !== null
-                            ? `Requested profile: ${step.modelAudit.requestedProfile} · Resolved route: ${step.modelAudit.routeKey}`
-                            : 'Route: Fixed'}
-                        </span>
-                      )}
-                      {step.kind === 'worker' && step.output !== null && (
-                        <ContextCard label="Worker result" detail={step.status} content={step.output} removable={false} />
-                      )}
-                    </li>
-                  ))}
-                </ul>
-                {work.run.usageRouteDecisions.map((decision, index) => (
-                  <p className="session__hint" role="note" key={`${decision.role}-${decision.routeKey}-${String(index)}`}>
-                    {decision.decision === 'threshold_alternate'
-                      ? `${decision.role === 'brain' ? 'Brain' : 'Worker'} — Configured: ${decision.baseProviderId} / ${decision.baseModel} — Threshold route: ${decision.selectedProviderId} / ${decision.selectedModel} — Reason: Local call threshold reached`
-                      : decision.decision === 'threshold_reached_no_alternate'
-                        ? 'Local threshold reached; normal Heart route used because no alternate is configured.'
-                        : null}
-                  </p>
-                ))}
-              </div>
-            )}
-            <textarea
-                  id="session-note-input"
-                  className="session__input"
-                  value={noteText}
-                  onChange={(event) => setNoteText(event.target.value)}
-                  placeholder="Type a short note or snippet…"
-                  aria-label="Manual context note"
-                  rows={3}
-                />
-                <div className="session__composer-row">
-                  <button
-                    className="explorer__primary"
-                    type="button"
-                    onClick={() => void handleAddNote()}
-                    disabled={isComposerEmpty(noteText)}
-                  >
-                    Attach note
-                  </button>
-                  <button
-                    className="explorer__secondary"
-                    type="button"
-                    onClick={() => {
-                      setNoteOpen(false)
-                      setNoteText('')
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-            </>
-            )}
-          </div>
-          <div className={`session__composer session__composer--${proposal.mode}`}>
             {state.sendError !== null && (
               <p className="session__error" role="alert">
                 {state.sendError}

@@ -73,7 +73,7 @@ describe('session context content safety', () => {
     }
     assert.ok(explorer.includes('Attach selection'), 'editor excerpt attach must be explicit')
     assert.ok(explorer.includes('Attach file'), 'whole-file attach must be explicit')
-    const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('Add note') || panel.includes('Attach note'), 'manual note attach must be explicit')
+    const contextTab = readRenderer('features/sessions/ContextTab.tsx')
+    assert.ok(contextTab.includes('Add note') || contextTab.includes('Attach note'), 'manual note attach must be explicit')
   })
 })

@@ -7,6 +7,7 @@ import { Explorer } from '../features/explorer/Explorer'
 import type { ActivityKind } from '../features/explorer/ActivityRail'
 import { ProfileSection } from '../features/profile/ProfileSection'
 import { SessionPanel } from '../features/sessions/SessionPanel'
+import type { SettingsSection } from '../features/sessions/StarkSettingsSurface'
 import {
   initialSessionContextDraftState,
   sessionContextDraftReducer
@@ -15,15 +16,26 @@ import { SystemStatus } from '../features/system-status/SystemStatus'
 import { WorkspaceSection } from '../features/workspace/WorkspaceSection'
 import './HomePage.css'
 
+function accountInitialFor(displayName: string): string {
+  const trimmed = displayName.trim()
+  if (trimmed === '') {
+    return 'A'
+  }
+  const first = trimmed[0]
+  return first === undefined ? 'A' : first.toUpperCase()
+}
+
 /**
  * STARK shell with two modes. Without a workspace it is a centered
  * empty-state card (open-folder CTA + recent list). Once a workspace
  * is active it becomes one calm application surface: a single compact
- * global bar, then a work area of activity rail + contextual sidebar +
- * primary canvas (AI conversation or editor tabs) with a docked
- * terminal drawer, then a thin status strip. The Session panel mounts
- * per workspace so no session state leaks across projects.
- * All pane visibility is renderer-local; nothing persists.
+ * global bar, then a work area of primary session pane + contextual
+ * secondary workspace pane (review / context / file with a stacked
+ * terminal), then a thin status strip. A workspace-tools drawer
+ * overlays the work area on demand and never consumes a permanent
+ * layout column. The Session panel mounts per workspace so no session
+ * state leaks across projects. All pane visibility is renderer-local;
+ * nothing persists.
  */
 export function HomePage(): ReactElement {
   const { profile, refreshProfile, workspace } = useApp()
@@ -47,11 +59,20 @@ export function HomePage(): ReactElement {
     activeId,
     (id) => ({ ...initialSessionContextDraftState(), workspaceId: id })
   )
-  // Renderer-local shell state: activity, canvas view, pane visibility.
+  // Renderer-local shell state: activity, canvas view, drawer,
+  // terminal, and settings visibility. The settings surface is owned
+  // here (open/section only) so AppChrome can reach it; all provider,
+  // Heart, Recovery, usage, and capability reducers stay owned by
+  // SessionPanel.
   const [activity, setActivity] = useState<ActivityKind>('explorer')
   const [canvasView, setCanvasView] = useState<'session' | 'editor'>('session')
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('ai')
+  // Renderer-local request for the secondary Context tab (e.g. from a
+  // composer chip). Consumed once by the Explorer; no persistence.
+  const [contextRequest, setContextRequest] = useState(0)
 
   // Stable callbacks for effects inside Explorer (identity must not
   // churn or one-shot review handoffs would refire).
@@ -59,6 +80,18 @@ export function HomePage(): ReactElement {
   const handleCanvasViewChange = useCallback((view: 'session' | 'editor') => setCanvasView(view), [])
   const handleToggleTerminal = useCallback(() => setTerminalOpen((open) => !open), [])
   const handleToggleSidebar = useCallback(() => setSidebarOpen((open) => !open), [])
+  const handleCloseSidebar = useCallback(() => setSidebarOpen(false), [])
+  const handleOpenSidebar = useCallback(() => setSidebarOpen(true), [])
+  const handleOpenSearch = useCallback(() => {
+    setActivity('search')
+    setSidebarOpen(true)
+  }, [])
+  const handleOpenSettings = useCallback((section: SettingsSection = 'ai') => {
+    setSettingsSection(section)
+    setSettingsOpen(true)
+  }, [])
+  const handleCloseSettings = useCallback(() => setSettingsOpen(false), [])
+  const handleOpenContext = useCallback(() => setContextRequest((count) => count + 1), [])
 
   // A new workspace resets shell + review state; panels remount per
   // workspace (key={active.id}) so no session, message, composer, or
@@ -67,8 +100,10 @@ export function HomePage(): ReactElement {
     setSessionWorkspace(activeId)
     setActivity('explorer')
     setCanvasView('session')
-    setSidebarOpen(true)
+    setSidebarOpen(false)
     setTerminalOpen(false)
+    setSettingsOpen(false)
+    setSettingsSection('ai')
     setReviewTransactionId(null)
     setReviewChangeSetId(null)
   }
@@ -102,19 +137,28 @@ export function HomePage(): ReactElement {
         onToggleSidebar={handleToggleSidebar}
         terminalOpen={terminalOpen}
         onToggleTerminal={handleToggleTerminal}
+        onOpenSearch={handleOpenSearch}
+        onOpenSettings={() => handleOpenSettings('ai')}
+        onOpenAccount={() => handleOpenSettings('account')}
+        accountInitial={accountInitialFor(displayName)}
       />
       <div className="stage-workarea">
         <Explorer
           key={active.id}
           workspaceId={active.id}
+          contextDrafts={contextDrafts.drafts}
+          contextDraftError={contextDrafts.error}
           contextDraftsDispatch={contextDraftsDispatch}
           externalReviewTransactionId={reviewTransactionId}
           externalReviewChangeSetId={reviewChangeSetId}
+          externalContextRequest={contextRequest}
           activity={activity}
           onActivityChange={handleActivityChange}
           canvasView={canvasView}
           onCanvasViewChange={handleCanvasViewChange}
           sidebarOpen={sidebarOpen}
+          onCloseSidebar={handleCloseSidebar}
+          onOpenSidebar={handleOpenSidebar}
           terminalOpen={terminalOpen}
           onToggleTerminal={handleToggleTerminal}
           sessionNode={
@@ -124,6 +168,12 @@ export function HomePage(): ReactElement {
               contextDrafts={contextDrafts.drafts}
               contextDraftsDispatch={contextDraftsDispatch}
               contextDraftError={contextDrafts.error}
+              settingsOpen={settingsOpen}
+              settingsSection={settingsSection}
+              onSettingsSectionChange={setSettingsSection}
+              onCloseSettings={handleCloseSettings}
+              onOpenSettings={() => handleOpenSettings('ai')}
+              onOpenContext={handleOpenContext}
               onReviewTransaction={(transactionId) => {
                 setReviewTransactionId(transactionId)
                 setCanvasView('editor')
@@ -137,11 +187,9 @@ export function HomePage(): ReactElement {
         />
       </div>
       <div className="workbench-status" role="contentinfo" aria-label="Status bar">
-        <span className="workbench-status__workspace" title={active.displayName}>
+        <span className="workbench-status__workspace" title={active.rootPath}>
           {active.displayName}
         </span>
-        <span className="workbench-status__divider" aria-hidden="true" />
-        <ProfileSection current={profile} onChanged={() => void refreshProfile()} />
         <span className="workbench-status__spacer" aria-hidden="true" />
         <SystemStatus />
       </div>

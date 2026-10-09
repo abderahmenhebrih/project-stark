@@ -9,33 +9,33 @@ function readRenderer(relative: string): string {
 
 describe('usage renderer safety', () => {
   it('states the local-only boundary with no quota promises', () => {
-    const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('STARK tracks only provider calls made by STARK'))
-    assert.ok(panel.includes('does not query provider billing or quota APIs'))
-    assert.ok(panel.includes('Token counts are shown only when the provider reports them'))
-    assert.ok(panel.includes('Token telemetry incomplete'))
+    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    assert.ok(settings.includes('STARK tracks only provider calls made by STARK'))
+    assert.ok(settings.includes('does not query provider billing or quota APIs'))
+    assert.ok(settings.includes('Token counts are shown only when the provider reports them'))
+    assert.ok(settings.includes('Token telemetry incomplete'))
     // Copy wraps across source lines; assert on stable fragments.
-    assert.ok(panel.includes('Token threshold cannot be evaluated completely'))
-    assert.ok(panel.includes('did not report token'))
+    assert.ok(settings.includes('Token threshold cannot be evaluated completely'))
+    assert.ok(settings.includes('did not report token'))
     for (const forbidden of [
       'remaining provider quota',
       'exact provider quota',
       'billing balance',
       'guaranteed quota'
     ]) {
-      assert.ok(!panel.includes(forbidden), `usage UI must not claim ${forbidden}`)
+      assert.ok(!settings.includes(forbidden), `usage UI must not claim ${forbidden}`)
     }
   })
 
   it('explains threshold routing honestly with explicit save only', () => {
-    const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('configured alternate'))
-    assert.ok(panel.includes('before making the provider call'))
-    assert.ok(panel.includes('does not retry failed models and is not a provider quota guarantee'))
-    assert.ok(panel.includes('continues using the normal Heart route'))
-    assert.ok(panel.includes('Save usage routing'))
-    assert.ok(panel.includes('Refresh usage'))
-    assert.ok(panel.includes('Threshold reached; no alternate configured') || panel.includes('no alternate is configured'))
+    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    assert.ok(settings.includes('configured alternate'))
+    assert.ok(settings.includes('before making the provider call'))
+    assert.ok(settings.includes('does not retry failed models and is not a provider quota guarantee'))
+    assert.ok(settings.includes('continues using the normal Heart route'))
+    assert.ok(settings.includes('Save usage routing'))
+    assert.ok(settings.includes('Refresh usage'))
+    assert.ok(settings.includes('Threshold reached; no alternate configured') || settings.includes('no alternate is configured'))
   })
 
   it('has no polling, fetch, monetary, or credential surface', () => {
@@ -53,8 +53,9 @@ describe('usage renderer safety', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     assert.ok(!panel.includes('setInterval'), 'SessionPanel must not poll')
     assert.ok(!panel.includes('dangerouslySetInnerHTML'))
-    assert.ok(panel.includes('Save usage routing'))
-    assert.ok(panel.includes('Refresh usage'))
+    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    assert.ok(settings.includes('Save usage routing'))
+    assert.ok(settings.includes('Refresh usage'))
   })
 
   it('shows threshold route decisions without implying provider rejection', () => {

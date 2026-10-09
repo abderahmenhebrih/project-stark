@@ -40,8 +40,9 @@
 }
 
 /* Active workspace: one calm application surface — global chrome,
-   work area (rail + contextual sidebar + primary canvas), thin
-   status strip. No page scroll, no stacked toolbars. */
+   work area (session pane + contextual secondary pane with the tools
+   drawer overlaying on demand), thin status strip. No page scroll,
+   no stacked toolbars, no permanent third column. */
 .stage-shell {
   flex: 1;
   min-height: 0;
@@ -59,6 +60,7 @@
   min-width: 0;
   display: flex;
   overflow: hidden;
+  position: relative;
 }
 
 .workbench-status {
@@ -66,7 +68,8 @@
   display: flex;
   align-items: center;
   gap: var(--stark-space-sm);
-  min-height: 28px;
+  min-height: 24px;
+  max-height: 24px;
   min-width: 0;
   padding: 2px var(--stark-space-md);
   border-top: 1px solid var(--stark-border);
@@ -83,66 +86,15 @@
   min-width: 0;
   font-family: var(--stark-font-sans);
   font-weight: 700;
-  color: var(--stark-lime);
+  color: var(--stark-text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.workbench-status__divider {
-  flex: 0 0 auto;
-  width: 1px;
-  align-self: stretch;
-  margin: 3px 0;
-  background: var(--stark-border);
 }
 
 .workbench-status__spacer {
   flex: 1;
   min-width: var(--stark-space-sm);
-}
-
-/* Compact profile: single inline row inside the status bar — never a
-   full-width workbench strip. Full editing stays on the welcome card. */
-.workbench-status .profile-section {
-  flex: 0 1 auto;
-  min-width: 0;
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--stark-space-xs);
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.workbench-status .profile-section__line {
-  margin: 0;
-  font-family: var(--stark-font-sans);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.workbench-status .profile-section .stark-btn {
-  min-height: 24px;
-  padding: 2px 8px;
-  font-size: 11px;
-}
-
-.workbench-status .profile-section__label,
-.workbench-status .profile-section input,
-.workbench-status .profile-section [role="alert"] {
-  font-size: 11px;
-}
-
-.workbench-status .profile-section input {
-  width: 140px;
-  min-height: 24px;
-  padding: 2px 6px;
-  color: var(--stark-text);
-  background: var(--stark-bg);
-  border: 1px solid var(--stark-border);
-  border-radius: var(--stark-radius-sm);
-  font-family: var(--stark-font-sans);
 }
 
 .workbench-status .system-status {

@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react'
+import { StarkIcon, type StarkIconName } from '../../components/icons/StarkIcon'
 
 export type ActivityKind = 'explorer' | 'search' | 'changes' | 'git'
 
@@ -7,17 +8,17 @@ interface ActivityRailProps {
   readonly onSelect: (activity: ActivityKind) => void
 }
 
-const ACTIVITIES: readonly { readonly kind: ActivityKind; readonly label: string; readonly icon: string }[] = [
-  { kind: 'explorer', label: 'Explorer', icon: '▤' },
-  { kind: 'search', label: 'Search', icon: '⌕' },
-  { kind: 'changes', label: 'Changes', icon: '⇄' },
-  { kind: 'git', label: 'Git', icon: '⎇' }
+const ACTIVITIES: readonly { readonly kind: ActivityKind; readonly label: string; readonly icon: StarkIconName }[] = [
+  { kind: 'explorer', label: 'Explorer', icon: 'explorer' },
+  { kind: 'search', label: 'Search', icon: 'search' },
+  { kind: 'changes', label: 'Changes', icon: 'changes' },
+  { kind: 'git', label: 'Git', icon: 'git' }
 ]
 
 /**
- * Compact icon-first activity rail. The selected activity fills the
- * contextual sidebar; labels are always full (tooltip + caption),
- * the selected state is a lime indicator, never a neon block.
+ * Compact icon-first activity selector for the workspace tools
+ * drawer. The selected activity fills the drawer body; the selected
+ * state is a lime indicator, never a neon block.
  */
 export function ActivityRail({ activity, onSelect }: ActivityRailProps): ReactElement {
   return (
@@ -35,7 +36,7 @@ export function ActivityRail({ activity, onSelect }: ActivityRailProps): ReactEl
             onClick={() => onSelect(entry.kind)}
           >
             <span className="explorer__tab-icon" aria-hidden="true">
-              {entry.icon}
+              <StarkIcon name={entry.icon} size={17} />
             </span>
             <span className="explorer__tab-label">{entry.label}</span>
           </button>

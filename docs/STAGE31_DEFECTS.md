@@ -144,6 +144,44 @@ no migration 019 was created.
 
 ---
 
+## STAGE31-D05 — final UI rebuild, OpenCode UX architecture × STARK brand (implemented, human visual retest required)
+
+- Status: **FAIL → pending human visual retest.** Automated gates are
+  green; visual PASS may only be granted by a human inspecting the
+  rendered result. Stage 31 acceptance remains paused.
+- Direction: the structural/UX quality of OpenCode with the identity
+  and product logic of STARK, reimplemented natively in STARK's
+  existing React renderer. No OpenCode source, packages, branding, or
+  assets were used.
+- Architecture (renderer-only):
+  primary Session pane (always mounted on desktop) + optional
+  secondary workspace pane (Review | Context | file tabs) with the
+  terminal stacked beneath it; workspace-tools drawer overlays on
+  demand and consumes no permanent column; composer dock at the
+  session bottom with approval/recovery/runtime docks directly above
+  it; dedicated settings surface (modal) hosting AI & Models, Heart,
+  Recovery, Permissions, Usage, Account (existing AccountSection), and
+  Profile; compact AppChrome (menu, STARK mark, workspace name,
+  workspace search, terminal toggle, settings, account initial);
+  quiet 24px status strip without profile editing.
+- State ownership unchanged: single context-draft reducer in HomePage;
+  all session/provider/Heart/Recovery/usage/capability/runtime
+  reducers still owned by SessionPanel (settings visibility only
+  lifted so AppChrome can reach the surface); all explorer/preview/
+  editor/changes/Git reducers still owned by Explorer; terminal PTY
+  behavior untouched. No new IPC, no timers, no polling, no network
+  calls, no persistence.
+- Boundary: `git diff -- src/main` EMPTY, `git diff -- src/preload`
+  EMPTY, no migration 019, schema v18, no shared IPC changes.
+- Validation: `npm run typecheck` PASS, `npm run lint` PASS,
+  `npm run build` PASS, `npm test` 283 suites / 1868 tests / 0
+  failures, `npm run release:check` ALL CHECKS PASSED.
+- Retest result: PASS (automated). **D05 HUMAN VISUAL RETEST REQUIRED**
+  at 1920×1080, 1440×900, 1366×768, and 1024×768 before Stage 31
+  acceptance may resume.
+
+---
+
 ## Investigated and ruled NOT defects (no change made)
 
 - **Terminal program charset** (`npm; rm -rf` accepted by

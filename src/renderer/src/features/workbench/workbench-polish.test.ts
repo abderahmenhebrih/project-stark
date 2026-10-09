@@ -4,9 +4,10 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
 /**
- * Stage 31 frontend rearchitecture regression: one global bar above
- * rail + contextual sidebar + primary canvas (Session | Editor) with
- * a docked terminal drawer and a thin status strip. Official brand is
+ * Stage 31 frontend shell regression: one global bar above a primary
+ * session pane + contextual secondary pane (Review | Context | file
+ * with a stacked terminal), an overlay workspace-tools drawer, a thin
+ * status strip, and a dedicated settings surface. Official brand is
  * obsidian + neon lime (primary) + neon magenta (AI accent); repo
  * green is semantic-only. All behavior preserved; renderer-only.
  * Runs against repository source (cwd is the repo root via npm).
@@ -32,64 +33,68 @@ describe('stage 31 frontend shell', () => {
     assert.ok(chrome.includes('workspaceName'), 'global bar must carry the workspace identity')
     assert.ok(chrome.includes('workspacePath'), 'path must stay available as muted metadata')
     assert.ok(!chrome.includes('FOUNDATION'), 'unfinished foundation chrome must be gone')
+    assert.ok(chrome.includes('Search workspace'), 'workspace search must stay in the chrome')
+    assert.ok(!chrome.includes('☰'), 'chrome must use SVG icons, not glyphs')
     const shell = readRenderer('layouts/MainLayout.tsx')
     assert.ok(!shell.includes('shell__header'), 'shell must not stack a second toolbar')
     assert.ok(!shell.includes('FOUNDATION'), 'shell must not render foundation copy')
   })
 
-  it('activity rail selects one contextual sidebar', () => {
+  it('tools drawer overlays on demand with the activity selector', () => {
     const rail = readRenderer('features/explorer/ActivityRail.tsx')
     for (const activity of ['explorer', 'search', 'changes', 'git']) {
-      assert.ok(rail.includes(activity), `rail must offer the ${activity} activity`)
+      assert.ok(rail.includes(activity), `drawer must offer the ${activity} activity`)
     }
-    assert.ok(rail.includes('aria-selected'), 'rail must expose selection')
-    assert.ok(rail.includes('title='), 'rail must tooltip its icon-first controls')
+    assert.ok(rail.includes('aria-selected'), 'drawer must expose selection')
+    assert.ok(rail.includes('title='), 'drawer must tooltip its icon-first controls')
+    assert.ok(!rail.includes('▤'), 'rail must use SVG icons, not glyphs')
     const explorer = readRenderer('features/explorer/Explorer.tsx')
-    assert.ok(explorer.includes('<ActivityRail'), 'shell must render the rail')
-    assert.ok(explorer.includes('activity={activity}'), 'rail must drive the controlled activity')
-    assert.ok(explorer.includes('onSelect={onActivityChange}'), 'rail selection must reach the sidebar')
+    assert.ok(explorer.includes('<WorkspaceToolsDrawer'), 'shell must render the drawer')
+    assert.ok(explorer.includes('onCloseSidebar'), 'drawer must be closable')
     const css = readRenderer('features/explorer/Explorer.css')
-    const column = css.match(/\.activity-rail\s*\{[^}]*\}/)
-    assert.ok(column !== null, 'rail column CSS must exist')
-    const width = column[0].match(/width:\s*(\d+)px/)
-    assert.ok(width !== null && Number(width[1]) >= 44 && Number(width[1]) <= 52, 'rail must stay a compact 44–52px')
+    const drawer = css.match(/\.workspace-tools-drawer\s*\{[^}]*\}/)
+    assert.ok(drawer !== null, 'drawer CSS must exist')
+    assert.ok(drawer[0].includes('position: absolute'), 'drawer must overlay instead of consuming a column')
     const active = css.match(/\.explorer__tab--active\s*\{[^}]*\}/)
-    assert.ok(active !== null, 'selected rail state must exist')
+    assert.ok(active !== null, 'selected activity state must exist')
     assert.ok(!active[0].includes('background: var(--stark-lime);'), 'selection must be an indicator, not a neon block')
   })
 
-  it('session conversation receives the primary canvas width', () => {
+  it('session conversation stays mounted beside the secondary pane', () => {
     const explorer = readRenderer('features/explorer/Explorer.tsx')
-    assert.ok(explorer.includes('primary-canvas'), 'canvas surface must exist')
-    assert.ok(explorer.includes('canvas-tabs'), 'canvas must expose Session and Editor views')
-    assert.ok(explorer.includes('sessionNode'), 'conversation must mount as a primary view')
+    assert.ok(explorer.includes('workspace__session'), 'session pane must exist')
+    assert.ok(explorer.includes('<WorkspaceSecondaryPane'), 'secondary pane must exist')
+    assert.ok(explorer.includes('sessionNode'), 'conversation must mount as the primary pane')
     assert.ok(!explorer.includes('workbench__session'), 'conversation must not use a fixed side pane')
     const css = readRenderer('features/explorer/Explorer.css')
-    const canvas = css.match(/\.primary-canvas\s*\{[^}]*\}/)
-    assert.ok(canvas !== null && canvas[0].includes('border-radius: 14px'), 'canvas must be a calm rounded surface')
-    const view = css.match(/\.canvas-view\s*\{[^}]*\}/)
-    assert.ok(view !== null && view[0].includes('flex: 1'), 'views must fill the canvas')
-    assert.ok(css.includes('.canvas-view[hidden]'), 'inactive views must hide without unmounting')
+    const session = css.match(/\.session-frame\s*\{[^}]*\}/)
+    assert.ok(session !== null && session[0].includes('border-radius: 12px'), 'session must be a calm rounded surface')
+    const secondary = css.match(/\.workspace__secondary\s*\{[^}]*\}/)
+    assert.ok(secondary !== null && secondary[0].includes('border-radius: 12px'), 'secondary must be a calm rounded surface')
   })
 
-  it('context drawer collapses without losing functionality', () => {
+  it('attached context lives in the secondary pane, not the conversation flow', () => {
+    const tab = readRenderer('features/sessions/ContextTab.tsx')
+    assert.ok(tab.includes('Add note'), 'manual notes must stay reachable')
+    assert.ok(tab.includes('No context attached'), 'empty-state guidance must stay reachable')
+    assert.ok(tab.includes('Preview'), 'context previews must stay reachable')
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('contextOpen'), 'attached context must collapse')
-    assert.ok(panel.includes('aria-expanded={contextOpen}'), 'collapse state must be exposed')
-    assert.ok(panel.includes('Attached context'), 'context must keep its identity')
-    assert.ok(panel.includes('Add note'), 'manual notes must stay reachable')
-    assert.ok(panel.includes('No context attached'), 'empty-state guidance must stay reachable')
+    assert.ok(panel.includes('session__context-chips'), 'composer must summarize context as chips')
+    assert.ok(panel.includes('onOpenContext'), 'chips must open the Context tab')
+    assert.ok(!panel.includes('aria-label="Attached context"'), 'no large context drawer may remain in the conversation flow')
   })
 
-  it('terminal drawer collapses to a handle without reserving height', () => {
+  it('terminal stacks in the secondary region without a global drawer', () => {
     const explorer = readRenderer('features/explorer/Explorer.tsx')
-    assert.ok(explorer.includes('bottom-drawer__handle'), 'closed drawer must be a minimal handle')
-    assert.ok(explorer.includes('aria-expanded'), 'drawer state must be exposed')
-    assert.ok(explorer.includes('<TerminalPanel'), 'open drawer must host the terminal')
-    assert.ok(explorer.includes('terminalOpen'), 'drawer must be user-controlled')
+    assert.ok(explorer.includes('aria-label="Hide terminal"'), 'stack state must be exposed')
+    assert.ok(explorer.includes('<TerminalPanel'), 'open stack must host the terminal')
+    assert.ok(explorer.includes('terminalOpen'), 'stack must be user-controlled')
+    assert.ok(!explorer.includes('bottom-drawer'), 'the global bottom drawer must be retired')
+    const pane = readRenderer('features/workspace/WorkspaceSecondaryPane.tsx')
+    assert.ok(pane.includes('workspace__terminal'), 'terminal must stack in the secondary region')
     const css = readRenderer('features/explorer/Explorer.css')
-    const handle = css.match(/\.bottom-drawer__handle\s*\{[^}]*\}/)
-    assert.ok(handle !== null && handle[0].includes('min-height: 32px'), 'handle must stay a slim strip')
+    const stack = css.match(/\.workspace__terminal\s*\{[^}]*\}/)
+    assert.ok(stack !== null && stack[0].includes('min-height: 120px'), 'stack must stay bounded')
   })
 
   it('composer contains its modes, input, context state, and send', () => {
@@ -108,13 +113,23 @@ describe('stage 31 frontend shell', () => {
     assert.ok(send !== null && send[0].includes('background: var(--stark-lime)'), 'Send must use authoritative lime')
   })
 
-  it('secondary session actions stay reachable without dominating', () => {
+  it('pending approval docks above the composer with exact actions', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    for (const action of ['New', 'Settings', 'Continue with Looplink', 'History', 'Recent sessions']) {
-      assert.ok(panel.includes(action), `secondary action must stay reachable: ${action}`)
+    assert.ok(panel.includes('session__dock'), 'urgent actions must dock above the composer')
+    for (const action of ['Deny', 'Approve']) {
+      assert.ok(panel.includes(action), `approval must stay reachable: ${action}`)
     }
-    assert.ok(panel.includes('session__menu'), 'secondary actions must live in compact chrome')
-    assert.ok(panel.includes('session__looplink'), 'Looplink must stay a recognizable text action')
+    assert.ok(panel.indexOf('session__dock') < panel.indexOf('session__composer--'), 'dock must precede the composer')
+  })
+
+  it('secondary session actions stay reachable without dominating', () => {
+    const header = readRenderer('features/sessions/SessionHeaderBar.tsx')
+    for (const action of ['New', 'Settings', 'Continue with Looplink', 'History']) {
+      assert.ok(header.includes(action), `secondary action must stay reachable: ${action}`)
+    }
+    const panel = readRenderer('features/sessions/SessionPanel.tsx')
+    assert.ok(panel.includes('<SessionHeaderBar'), 'session must render the compact header')
+    assert.ok(!panel.includes('session__looplink'), 'Looplink must not consume a permanent header row')
   })
 
   it('official lime + magenta brand is tokenized; mint is not brand', () => {
@@ -124,8 +139,8 @@ describe('stage 31 frontend shell', () => {
     assert.ok(!tokens.includes('--stark-accent-2'), 'mint must not exist as a brand token')
     const css = readRenderer('features/sessions/session.css')
     assert.ok(css.includes('var(--stark-magenta)'), 'AI surfaces must show magenta')
-    const tabs = readRenderer('features/explorer/Explorer.css')
-    assert.ok(tabs.includes('.canvas-tab--session.canvas-tab--active'), 'active AI tab must carry the AI accent')
+    const explorer = readRenderer('features/explorer/Explorer.tsx')
+    assert.ok(explorer.includes("tab: 'review'") || explorer.includes('Review'), 'review must exist as a secondary tab')
   })
 
   it('emblem asset slot exists with a faithful temporary stand-in', () => {
@@ -137,6 +152,20 @@ describe('stage 31 frontend shell', () => {
     const css = readRenderer('components/StarkMark.css')
     assert.ok(css.includes('var(--stark-lime)'), 'stand-in must use lime')
     assert.ok(css.includes('var(--stark-magenta)'), 'stand-in must use magenta, never mint')
+  })
+
+  it('icon set replaces glyph chrome with accessible SVG controls', () => {
+    const icons = readRenderer('components/icons/StarkIcon.tsx')
+    for (const name of ['menu', 'search', 'terminal', 'settings', 'close', 'plus', 'send']) {
+      assert.ok(icons.includes(`'${name}'`), `icon set must include ${name}`)
+    }
+    assert.ok(icons.includes('<svg'), 'icons must render SVG')
+    for (const file of ['layouts/AppChrome.tsx', 'features/explorer/ActivityRail.tsx']) {
+      const source = readRenderer(file)
+      for (const glyph of ['☰', '⌁', '▤', '⌕', '⇄', '⎇']) {
+        assert.ok(!source.includes(glyph), `${file} must not use glyph chrome (${glyph})`)
+      }
+    }
   })
 
   it('filenames stay on one line with room for actions', () => {
@@ -164,7 +193,7 @@ describe('stage 31 frontend shell', () => {
     const bar = css.match(/\.workbench-status\s*\{[^}]*\}/)
     assert.ok(bar !== null, 'status CSS must exist')
     const height = bar[0].match(/min-height:\s*(\d+)px/)
-    assert.ok(height !== null && Number(height[1]) >= 28 && Number(height[1]) <= 32, 'status must stay a 28–32px strip')
+    assert.ok(height !== null && Number(height[1]) >= 22 && Number(height[1]) <= 28, 'status must stay a quiet 22–28px strip')
     const status = readRenderer('features/system-status/SystemStatus.tsx')
     assert.ok(status.includes('appInfo.version'), 'status must show the version')
   })
@@ -201,37 +230,41 @@ describe('stage 31 frontend shell', () => {
       assert.ok(home.includes(region), `shell must keep ${region}`)
     }
     const explorer = readRenderer('features/explorer/Explorer.tsx')
-    for (const feature of ['<ActivityRail', '<SearchPanel', '<GitPanel', '<ChangesPanel', '<CodeEditor', '<TerminalPanel', 'Review change', '<WorkspaceSection']) {
+    for (const feature of ['<WorkspaceToolsDrawer', '<SearchPanel', '<GitPanel', '<ChangesPanel', '<CodeEditor', '<TerminalPanel', 'Review change', '<ContextTab']) {
       assert.ok(explorer.includes(feature), `workbench must keep ${feature}`)
     }
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     for (const feature of [
-      'Settings',
       'Composer mode',
       'Message composer',
       'Ask',
       'Work',
       'Propose change',
       'Send',
-      'Continue with Looplink',
       'Heart routing',
       'Workspace Agent Capabilities',
       'Open Preview',
       'Stop Runtime'
     ]) {
-      assert.ok(panel.includes(feature), `session panel must keep ${feature}`)
+      const owner = feature === 'Heart routing' || feature === 'Workspace Agent Capabilities'
+        ? readRenderer('features/sessions/StarkSettingsSurface.tsx')
+        : panel
+      assert.ok(owner.includes(feature), `shell must keep ${feature}`)
     }
+    const header = readRenderer('features/sessions/SessionHeaderBar.tsx')
+    assert.ok(header.includes('Continue with Looplink'), 'Looplink must remain reachable')
   })
 
   it('responsive shell never requires three squeezed columns', () => {
     const home = readRenderer('pages/HomePage.tsx')
-    assert.ok(home.includes('sidebarOpen'), 'sidebar must collapse on demand')
+    assert.ok(home.includes('sidebarOpen'), 'drawer must collapse on demand')
     const explorer = readRenderer('features/explorer/Explorer.tsx')
-    assert.ok(explorer.includes('sidebarOpen'), 'sidebar visibility must gate the pane')
-    assert.ok(explorer.includes('canvasView'), 'canvas must switch instead of squeezing')
+    assert.ok(explorer.includes('sidebarOpen'), 'drawer visibility must gate the overlay')
+    assert.ok(explorer.includes('canvasView'), 'narrow widths must switch instead of squeezing')
+    assert.ok(explorer.includes('workspace__narrow-switch'), 'narrow widths must offer single-pane switching')
     const css = readRenderer('features/explorer/Explorer.css')
-    assert.ok(css.includes('minmax(0, 1fr)'), 'canvas must flex into available width')
     assert.ok(css.includes('@media'), 'narrow widths must adapt pane widths')
+    assert.ok(css.includes('data-canvas-view="session"') || css.includes('[data-canvas-view'), 'single-pane switching must be wired')
   })
 
   it('shell adds no unsafe HTML and no new IPC surface', () => {
@@ -239,12 +272,17 @@ describe('stage 31 frontend shell', () => {
       'pages/HomePage.tsx',
       'layouts/AppChrome.tsx',
       'layouts/MainLayout.tsx',
+      'layouts/WorkspaceToolsDrawer.tsx',
       'features/explorer/Explorer.tsx',
       'features/explorer/ActivityRail.tsx',
       'features/sessions/SessionPanel.tsx',
+      'features/sessions/SessionHeaderBar.tsx',
+      'features/sessions/StarkSettingsSurface.tsx',
+      'features/sessions/ContextTab.tsx',
       'features/profile/ProfileSection.tsx',
       'features/account/AccountSection.tsx',
-      'components/StarkMark.tsx'
+      'components/StarkMark.tsx',
+      'components/icons/StarkIcon.tsx'
     ]) {
       const source = readRenderer(file)
       assert.ok(!source.includes('dangerouslySetInnerHTML'), `${file} must not render raw HTML`)

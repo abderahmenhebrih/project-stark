@@ -15,34 +15,35 @@ describe('capability renderer safety', () => {
   })
 
   it('has explicit save with no autosave, polling, or tool execution', () => {
-    const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('Save permissions'))
+    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    assert.ok(settings.includes('Save permissions'))
     const state = readRenderer('features/sessions/capabilities-state.ts')
     assert.ok(!state.includes('setInterval'))
     assert.ok(!state.includes('setTimeout'))
+    const panel = readRenderer('features/sessions/SessionPanel.tsx')
     assert.ok(!panel.includes('Run tool'))
     assert.ok(!panel.includes('Execute'))
   })
 
   it('terminal never renders Allow and shows exact-command copy', () => {
-    const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('Terminal execution always requires approval for the exact command.'))
-    assert.ok(panel.includes('Allowing proposals does not allow STARK to apply them.'))
-    assert.ok(panel.includes('Permissions only control whether future STARK Worker tools may request an action.'))
+    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    assert.ok(settings.includes('Terminal execution always requires approval for the exact command.'))
+    assert.ok(settings.includes('Allowing proposals does not allow STARK to apply them.'))
+    assert.ok(settings.includes('Permissions only control whether future STARK Worker tools may request an action.'))
   })
 
   it('shows all five capability rows with Deny/Ask/Allow where legal', () => {
-    const panel = readRenderer('features/sessions/SessionPanel.tsx')
+    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
     for (const label of ['Agent Permissions', 'Workspace Agent Capabilities', 'Disabled', 'Enabled']) {
-      assert.ok(panel.includes(label), `panel must contain ${label}`)
+      assert.ok(settings.includes(label), `settings must contain ${label}`)
     }
   })
 
   it('exposes no approval dialog, credentials, or provider controls', () => {
-    const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    const start = panel.indexOf('Agent Permissions')
+    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    const start = settings.indexOf('Agent Permissions')
     assert.ok(start >= 0)
-    const slice = panel.slice(start, start + 12000)
+    const slice = settings.slice(start, start + 12000)
     assert.ok(!slice.includes('Approve command'))
     assert.ok(!slice.includes('apiKey'))
     assert.ok(!slice.includes('Authorization'))

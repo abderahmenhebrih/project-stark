@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type Dispatch, type ReactElement, type ReactNode } from 'react'
-import type { WorkspaceEntry } from '../../../../shared/workspace-files/types'
 import { APP_NAME } from '../../../../shared/constants'
 import {
   acceptChangeTransaction,
@@ -22,8 +21,12 @@ import { getWorkspaceFilesApi } from '../../lib/stark-api'
 import type { WorkspaceSearchMatch } from '../../../../shared/workspace-search/types'
 import type { SessionContextDraft } from '../../../../shared/context/types'
 import { ChangesPanel } from '../changes/ChangesPanel'
-import { ActivityRail, type ActivityKind } from './ActivityRail'
+import type { ActivityKind } from './ActivityRail'
 import { StarkMark } from '../../components/StarkMark'
+import { StarkIcon } from '../../components/icons/StarkIcon'
+import { WorkspaceToolsDrawer } from '../../layouts/WorkspaceToolsDrawer'
+import { WorkspaceSecondaryPane, type SecondaryTabKind } from '../workspace/WorkspaceSecondaryPane'
+import { ContextTab } from '../sessions/ContextTab'
 import { ChangeSetPanel } from '../changes/ChangeSetPanel'
 import { ChangeSetReview } from '../changes/ChangeSetReview'
 import { changeSetPanelReducer, initialChangeSetPanelState } from '../changes/change-set-state'
@@ -37,7 +40,6 @@ import { toEditorFocus, type EditorFocus } from '../editor/editor-focus'
 import { detectEditorLanguage } from '../editor/editor-language'
 import { GitDiffViewer } from '../git/GitDiffViewer'
 import { GitPanel } from '../git/GitPanel'
-import { WorkspaceSection } from '../workspace/WorkspaceSection'
 import { gitDiffReducer, initialGitDiffState } from '../git/git-state'
 import { SearchPanel } from '../search/SearchPanel'
 import type { SessionContextDraftAction } from '../sessions/session-context-state'
@@ -62,13 +64,6 @@ interface TreeNodeProps {
   readonly onAttachFile: (path: string) => void
 }
 
-function entryGlyph(kind: WorkspaceEntry['kind'], expanded: boolean): string {
-  if (kind === 'directory') {
-    return expanded ? '▾' : '▸'
-  }
-  return ''
-}
-
 function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile }: TreeNodeProps): ReactElement | null {
   const entries = state.entries[path]
   const loading = state.loading.includes(path)
@@ -88,7 +83,10 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile }: TreeNod
               onClick={() => onToggle(entry.relativePath)}
             >
               <span className="explorer__chevron" aria-hidden="true">
-                {entryGlyph(entry.kind, state.expanded.includes(entry.relativePath))}
+                <StarkIcon
+                  name={state.expanded.includes(entry.relativePath) ? 'chevron-down' : 'chevron-right'}
+                  size={13}
+                />
               </span>
               <span className="explorer__name">{entry.name}</span>
             </button>
@@ -109,7 +107,7 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile }: TreeNod
                 aria-label={`Attach ${entry.relativePath} to chat`}
                 title="Attach file to chat"
               >
-                Attach
+                <StarkIcon name="plus" size={13} />
               </button>
             </span>
           ) : (
@@ -144,25 +142,42 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile }: TreeNod
   )
 }
 
-interface ExplorerProps {
-  readonly workspaceId: number
-  readonly contextDraftsDispatch: Dispatch<SessionContextDraftAction>
-  /** Stage 16 review handoff: when set, open this transaction's existing review. */
-  readonly externalReviewTransactionId?: number | null
-  /** Stage 17 review handoff: when set, open this change set's grouped review. */
-  readonly externalReviewChangeSetId?: number | null
-  /** Controlled activity driving the contextual sidebar. */
-  readonly activity: ActivityKind
-  readonly onActivityChange: (activity: ActivityKind) => void
-  /** Primary canvas view: AI conversation or editor. */
-  readonly canvasView: 'session' | 'editor'
-  readonly onCanvasViewChange: (view: 'session' | 'editor') => void
-  /** Renderer-local pane visibility (no persistence). */
-  readonly sidebarOpen: boolean
-  readonly terminalOpen: boolean
-  readonly onToggleTerminal: () => void
-  /** Session workspace rendered as the primary canvas view. */
-  readonly sessionNode: ReactNode
+function fileBasename(relativePath: string): string {
+  const parts = relativePath.split('/')
+  const last = parts[parts.length - 1]
+  return last === undefined || last === '' ? relativePath : last
+}
+
+interface SecondaryUiState {
+  readonly tab: SecondaryTabKind
+  readonly contextPinned: boolean
+  readonly splitPct: number | null
+}
+
+type SecondaryUiAction =
+  | { readonly type: 'open-tab'; readonly tab: SecondaryTabKind }
+  | { readonly type: 'pin-context' }
+  | { readonly type: 'unpin-context' }
+  | { readonly type: 'set-split'; readonly pct: number | null }
+  | { readonly type: 'reset' }
+
+function secondaryUiReducer(state: SecondaryUiState, action: SecondaryUiAction): SecondaryUiState {
+  switch (action.type) {
+    case 'open-tab':
+      return state.tab === action.tab ? state : { ...state, tab: action.tab }
+    case 'pin-context':
+      return state.contextPinned && state.tab === 'context'
+        ? state
+        : { ...state, contextPinned: true, tab: 'context' }
+    case 'unpin-context':
+      return state.contextPinned ? { ...state, contextPinned: false } : state
+    case 'set-split':
+      return state.splitPct === action.pct ? state : { ...state, splitPct: action.pct }
+    case 'reset':
+      return state.tab === 'file' && !state.contextPinned && state.splitPct === null
+        ? state
+        : { tab: 'file', contextPinned: false, splitPct: null }
+  }
 }
 
 function toChangeSetsError(error: unknown, fallback: string): string {
@@ -180,7 +195,32 @@ function toReadError(error: unknown): string {
   return error instanceof Error && error.message !== '' ? error.message : 'We couldn’t read this file.'
 }
 
-
+interface ExplorerProps {
+  readonly workspaceId: number
+  readonly contextDrafts: readonly SessionContextDraft[]
+  readonly contextDraftError: string | null
+  readonly contextDraftsDispatch: Dispatch<SessionContextDraftAction>
+  /** Stage 16 review handoff: when set, open this transaction's existing review. */
+  readonly externalReviewTransactionId?: number | null
+  /** Stage 17 review handoff: when set, open this change set's grouped review. */
+  readonly externalReviewChangeSetId?: number | null
+  /** Renderer-local request to reveal the secondary Context tab. Consumed once per count. */
+  readonly externalContextRequest?: number
+  /** Controlled activity driving the workspace tools drawer. */
+  readonly activity: ActivityKind
+  readonly onActivityChange: (activity: ActivityKind) => void
+  /** Primary view selector for narrow single-pane widths. Reinterpreted on desktop. */
+  readonly canvasView: 'session' | 'editor'
+  readonly onCanvasViewChange: (view: 'session' | 'editor') => void
+  /** Renderer-local drawer visibility (overlay; never a permanent column). */
+  readonly sidebarOpen: boolean
+  readonly onCloseSidebar: () => void
+  readonly onOpenSidebar: () => void
+  readonly terminalOpen: boolean
+  readonly onToggleTerminal: () => void
+  /** Session workspace rendered as the primary pane (always mounted on desktop). */
+  readonly sessionNode: ReactNode
+}
 
 /**
  * Lazy workspace explorer with bounded project search and
@@ -195,25 +235,36 @@ function toReadError(error: unknown): string {
  * preserved; mixed-ending files open read-only. The Git tab is
  * read-only awareness (branch/status/diff, explicit Refresh only, no
  * polling); selecting a staged/working row opens its patch in the
- * main pane via a read-only Monaco viewer, and Open file reuses the
- * existing file read path. Explicit chat context attaches only on
+ * secondary pane via a read-only Monaco viewer, and Open file reuses
+ * the existing file read path. Explicit chat context attaches only on
  * visible actions (preview Attach selection/file, tree Attach, search
  * Attach) through the validated prepare bridges — never on open,
  * edit, or save. All filesystem access
  * goes through workspace bridges; stale responses from a previous
  * workspace are ignored, and switching workspaces resets tree,
  * preview, search, editor, change review, and Git diff.
+ *
+ * Layout: the session stays mounted as the primary pane while file,
+ * review, and context surfaces open in a contextual secondary pane
+ * beside it; the terminal stacks beneath that secondary pane. The
+ * workspace tools drawer overlays on demand and consumes no permanent
+ * column when closed.
  */
 export function Explorer({
   workspaceId,
+  contextDrafts,
+  contextDraftError,
   contextDraftsDispatch,
   externalReviewTransactionId = null,
   externalReviewChangeSetId = null,
+  externalContextRequest = 0,
   activity,
   onActivityChange,
   canvasView,
   onCanvasViewChange,
   sidebarOpen,
+  onCloseSidebar,
+  onOpenSidebar,
   terminalOpen,
   onToggleTerminal,
   sessionNode
@@ -242,6 +293,19 @@ export function Explorer({
     workspaceId: id
   }))
   const gitDiffRequestRef = useRef(0)
+  // Secondary pane tab + explicit context pin + session/secondary split.
+  // Renderer-local only; review/file events select their tab, explicit
+  // context requests pin and reveal Context. A reducer (not cascading
+  // setState) keeps one-shot navigation effects lint-clean.
+  // No persistence, no backend.
+  const [secondaryUi, secondaryUiDispatch] = useReducer(secondaryUiReducer, undefined, () => ({
+    tab: 'file',
+    contextPinned: false,
+    splitPct: null
+  }) as SecondaryUiState)
+  const consumedContextRequestRef = useRef(0)
+  const workareaRef = useRef<HTMLDivElement | null>(null)
+  const draggingRef = useRef(false)
 
   // Publish the derived dirty flag so file selection, search-result
   // selection, and workspace switching share one discard guard.
@@ -318,6 +382,11 @@ export function Explorer({
     gitDiffRequestRef.current = 0
   }, [workspaceId])
 
+  useEffect(() => {
+    secondaryUiDispatch({ type: 'reset' })
+    consumedContextRequestRef.current = externalContextRequest
+  }, [workspaceId, externalContextRequest])
+
   // Stage 16 review handoff: open the newly proposed transaction in the
   // existing review + DiffEditor and refresh history. Consumed once per
   // id; null clears nothing. Tab switch here is a one-shot external
@@ -328,9 +397,11 @@ export function Explorer({
     }
     const transactionId = externalReviewTransactionId
     // One-shot external navigation: the Session panel requested review
-    // of a newly created proposal transaction.
+    // of a newly created proposal transaction. On desktop the session
+    // stays visible and the secondary pane reveals Review.
     onActivityChange('changes')
     onCanvasViewChange('editor')
+    secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
     changesDispatch({ type: 'review-loading', transactionId })
     getChangeTransaction({ transactionId }).then(
       (transaction) =>
@@ -352,6 +423,7 @@ export function Explorer({
     // of a newly created grouped proposal.
     onActivityChange('changes')
     onCanvasViewChange('editor')
+    secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
     changesDispatch({ type: 'review-closed' })
     changeSetsDispatch({ type: 'set-loading', changeSetId })
     getChangeSet({ changeSetId }).then(
@@ -363,6 +435,17 @@ export function Explorer({
     void refreshChangeSets()
     void refreshHistory()
   }, [workspaceId, externalReviewChangeSetId, refreshHistory, refreshChangeSets, onActivityChange, onCanvasViewChange])
+
+  // Explicit context request (e.g. a composer chip): pin and reveal
+  // the secondary Context tab without touching session state.
+  useEffect(() => {
+    if (externalContextRequest === consumedContextRequestRef.current) {
+      return
+    }
+    consumedContextRequestRef.current = externalContextRequest
+    secondaryUiDispatch({ type: 'pin-context' })
+    onCanvasViewChange('editor')
+  }, [externalContextRequest, onCanvasViewChange])
 
   function handleToggle(path: string): void {
     const expanding = !state.expanded.includes(path)
@@ -408,6 +491,7 @@ export function Explorer({
     }
     setPreviewLine(null)
     loadPreviewFile(path)
+    secondaryUiDispatch({ type: 'open-tab', tab: 'file' })
     onCanvasViewChange('editor')
   }
 
@@ -418,6 +502,7 @@ export function Explorer({
     changesDispatch({ type: 'review-closed' })
     const requestId = gitDiffRequestRef.current + 1
     gitDiffRequestRef.current = requestId
+    secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
     onCanvasViewChange('editor')
     gitDiffDispatch({ type: 'diff-loading', workspaceId, relativePath, target, requestId })
     getGitDiff({ workspaceId, relativePath, target }).then(
@@ -451,6 +536,7 @@ export function Explorer({
     }
     setPreviewLine(null)
     onActivityChange('explorer')
+    secondaryUiDispatch({ type: 'open-tab', tab: 'file' })
     onCanvasViewChange('editor')
     loadPreviewFile(relativePath)
   }
@@ -461,15 +547,16 @@ export function Explorer({
     }
     setPreviewLine(line)
     loadPreviewFile(path)
+    secondaryUiDispatch({ type: 'open-tab', tab: 'file' })
     onCanvasViewChange('editor')
     setFocusRequest(toEditorFocus(line, column))
   }
 
   /**
    * Explicit context attach plumbing. Each action performs exactly one
-   * bounded prepare call; failures surface as safe copy in the Session
-   * panel's Attached context section (the single owner of draft
-   * errors). Nothing attaches implicitly — no open/edit/save hooks.
+   * bounded prepare call; failures surface as safe copy in the Context
+   * tab (the single draft-error owner is the HomePage reducer).
+   * Nothing attaches implicitly — no open/edit/save hooks.
    */
   function handleAttachDraft(promise: Promise<SessionContextDraft>): void {
     promise.then(
@@ -562,6 +649,7 @@ export function Explorer({
       })
       setEditor(null)
       changesDispatch({ type: 'review-opened', transaction })
+      secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
       void refreshHistory()
     } catch (error: unknown) {
       // Never display raw invoke rejections: the normalizer reduces any
@@ -576,6 +664,7 @@ export function Explorer({
     if (!confirmDiscardUnsavedDraft()) {
       return
     }
+    secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
     onCanvasViewChange('editor')
     changesDispatch({ type: 'review-loading', transactionId })
     getChangeTransaction({ transactionId }).then(
@@ -590,6 +679,7 @@ export function Explorer({
     if (!confirmDiscardUnsavedDraft()) {
       return
     }
+    secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
     onCanvasViewChange('editor')
     changesDispatch({ type: 'review-closed' })
     changeSetsDispatch({ type: 'set-loading', changeSetId })
@@ -696,6 +786,58 @@ export function Explorer({
     }
   }
 
+  function handleCloseSecondaryPane(): void {
+    if (terminalOpen) {
+      onToggleTerminal()
+    }
+    secondaryUiDispatch({ type: 'unpin-context' })
+    handleCloseGitDiff()
+    handleCloseReview()
+    handleCloseChangeSet()
+  }
+
+  function handleResizeStart(event: React.PointerEvent): void {
+    if (event.button !== 0) {
+      return
+    }
+    draggingRef.current = true
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  function handleResizeMove(event: React.PointerEvent): void {
+    if (!draggingRef.current) {
+      return
+    }
+    const container = workareaRef.current
+    if (container === null || container.clientWidth === 0) {
+      return
+    }
+    const rect = container.getBoundingClientRect()
+    const pct = ((event.clientX - rect.left) / rect.width) * 100
+    secondaryUiDispatch({ type: 'set-split', pct: Math.min(68, Math.max(30, pct)) })
+  }
+
+  function handleResizeEnd(): void {
+    draggingRef.current = false
+  }
+
+  function handleResizeKey(event: React.KeyboardEvent): void {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
+      return
+    }
+    event.preventDefault()
+    const container = workareaRef.current
+    const base =
+      secondaryUi.splitPct ??
+      (container !== null && container.clientWidth > 0
+        ? (container.querySelector('.workspace__session')?.getBoundingClientRect().width ?? 0) /
+          container.clientWidth /
+          0.01
+        : 45)
+    const next = event.key === 'ArrowLeft' ? base - 2 : base + 2
+    secondaryUiDispatch({ type: 'set-split', pct: Math.min(68, Math.max(30, next)) })
+  }
+
   const dirty = editor !== null && isEditorDirty(editor)
   const previewContent = state.preview?.content ?? null
   const previewEol = useMemo(
@@ -706,12 +848,253 @@ export function Explorer({
   const previewPathLabel = state.preview === null ? '' : state.preview.path === '' ? '/' : state.preview.path
   const readOnlyStatus = !previewEditable ? 'Mixed line endings — read-only' : previewLine !== null ? `Line ${previewLine} · Read-only` : 'Read-only'
 
+  const hasReviewContent =
+    changes.detail !== null ||
+    changes.detailLoading ||
+    changes.detailError !== null ||
+    changeSets.setDetail !== null ||
+    changeSets.setDetailLoading ||
+    changeSets.setDetailError !== null
+  const hasGitDiff = gitDiff.relativePath !== null
+  const hasReviewTab = hasReviewContent || hasGitDiff
+  const hasFile = state.preview !== null
+  const secondaryOpen = hasReviewTab || hasFile || secondaryUi.contextPinned || terminalOpen
+
+  const tabs: { readonly kind: SecondaryTabKind; readonly label: string }[] = []
+  if (hasReviewTab) {
+    tabs.push({ kind: 'review', label: 'Review' })
+  }
+  tabs.push({ kind: 'context', label: 'Context' })
+  if (hasFile) {
+    tabs.push({ kind: 'file', label: fileBasename(state.preview?.path ?? '') })
+  }
+  const effectiveTab: SecondaryTabKind = tabs.some((tab) => tab.kind === secondaryUi.tab)
+    ? secondaryUi.tab
+    : hasReviewTab
+      ? 'review'
+      : hasFile
+        ? 'file'
+        : 'context'
+
+  function renderReviewBody(): ReactElement {
+    if (hasGitDiff) {
+      return (
+        <div className="workbench__editor-body">
+          <EditorToolbar
+            path={`Git diff · ${gitDiff.relativePath ?? ''} · ${gitDiff.target === 'staged' ? 'Staged' : 'Working tree'}`}
+            status="Read-only"
+            actions={
+              <>
+                <button className="explorer__secondary" type="button" onClick={() => handleOpenGitFile(gitDiff.relativePath as string)}>
+                  Open file
+                </button>
+                <button className="explorer__secondary" type="button" onClick={handleCloseGitDiff}>
+                  Close
+                </button>
+              </>
+            }
+          />
+          {gitDiff.phase === 'loading' ? (
+            <p className="explorer__status explorer__status--centered" role="status">
+              Loading Git diff…
+            </p>
+          ) : gitDiff.phase === 'error' ? (
+            <p className="explorer__error explorer__status--centered" role="alert">
+              {gitDiff.error ?? 'We couldn’t read this Git diff.'}
+            </p>
+          ) : gitDiff.result !== null ? (
+            gitDiff.result.patch === '' ? (
+              <p className="explorer__status explorer__status--centered">No patch content.</p>
+            ) : (
+              <div className="editor-canvas">
+                <GitDiffViewer
+                  key={`gitdiff:${workspaceId}:${gitDiff.result.relativePath}:${gitDiff.result.target}`}
+                  relativePath={gitDiff.result.relativePath}
+                  target={gitDiff.result.target}
+                  patch={gitDiff.result.patch}
+                />
+              </div>
+            )
+          ) : (
+            <p className="explorer__status explorer__status--centered">Loading Git diff…</p>
+          )}
+        </div>
+      )
+    }
+    if (changes.detail !== null) {
+      return (
+        <TransactionReview
+          transaction={changes.detail}
+          busy={changes.busy}
+          actionError={changes.actionError}
+          notice={changes.notice}
+          onAccept={() => void handleAccept()}
+          onReject={() => void handleReject()}
+          onRollback={() => void handleRollback()}
+          onClose={handleCloseReview}
+        />
+      )
+    }
+    if (changes.detailLoading) {
+      return (
+        <p className="explorer__status explorer__status--centered" role="status">
+          Loading change…
+        </p>
+      )
+    }
+    if (changes.detailError !== null) {
+      return (
+        <p className="explorer__error explorer__status--centered" role="alert">
+          {changes.detailError}
+        </p>
+      )
+    }
+    if (changeSets.setDetail !== null) {
+      return (
+        <ChangeSetReview
+          changeSet={changeSets.setDetail}
+          onReviewFile={handleSelectTransaction}
+          onClose={handleCloseChangeSet}
+        />
+      )
+    }
+    if (changeSets.setDetailLoading) {
+      return (
+        <p className="explorer__status explorer__status--centered" role="status">
+          Loading change set…
+        </p>
+      )
+    }
+    return (
+      <p className="explorer__error explorer__status--centered" role="alert">
+        {changeSets.setDetailError ?? 'We couldn’t load this review.'}
+      </p>
+    )
+  }
+
+  function renderFileBody(): ReactElement {
+    if (state.preview === null) {
+      return (
+        <div className="editor-empty" role="status" aria-label="No file selected">
+          <StarkMark size="hero" />
+          <p className="editor-empty__brand">{APP_NAME}</p>
+          <p className="editor-empty__title">Select a file to open</p>
+          <p className="editor-empty__hint">Open a file from the Explorer · attach context · ask STARK on the right</p>
+        </div>
+      )
+    }
+    if (state.preview.loading) {
+      return (
+        <p className="explorer__status explorer__status--centered" role="status">
+          Loading…
+        </p>
+      )
+    }
+    if (state.preview.error !== null) {
+      return (
+        <p className="explorer__error explorer__status--centered" role="alert">
+          {state.preview.error}
+        </p>
+      )
+    }
+    if (editor !== null && state.preview.content !== null && state.preview.revision !== null) {
+      return (
+        <div className="workbench__editor-body">
+          <EditorToolbar
+            path={previewPathLabel}
+            status={dirty ? 'Unsaved changes' : 'No unsaved changes'}
+            actions={
+              <>
+                <button
+                  className="explorer__primary"
+                  type="button"
+                  disabled={!dirty || editor.saving}
+                  onClick={() => void handleReviewChange()}
+                >
+                  {editor.saving ? 'Reviewing…' : 'Review change'}
+                </button>
+                <button className="explorer__secondary" type="button" onClick={handleCancel}>
+                  Cancel
+                </button>
+              </>
+            }
+          />
+          {editor.saveError !== null && (
+            <p className="explorer__error explorer__inline-alert" role="alert">
+              {editor.saveError}
+            </p>
+          )}
+          <div className="editor-canvas">
+            <CodeEditor
+              key={`edit:${workspaceId}:${state.preview.path}:${state.preview.revision}`}
+              documentUri={buildDocumentUri(workspaceId, state.preview.path)}
+              language={detectEditorLanguage(state.preview.path)}
+              initialValue={editor.draftContent}
+              eol={previewEol === 'crlf' ? 'CRLF' : 'LF'}
+              readOnly={false}
+              focusRequest={null}
+              onContentChange={handleMonacoChange}
+              ariaLabel="File editor"
+            />
+          </div>
+        </div>
+      )
+    }
+    return (
+      <div className="workbench__editor-body">
+        <EditorToolbar
+          path={previewPathLabel}
+          status={readOnlyStatus}
+          actions={
+            state.preview.revision !== null && previewEditable && editor === null ? (
+              <>
+                <button className="explorer__primary" type="button" onClick={handleEdit}>
+                  Edit
+                </button>
+                <button
+                  className="explorer__secondary"
+                  type="button"
+                  onClick={handleAttachPreviewSelection}
+                  disabled={editorSelection === null}
+                  title={editorSelection === null ? 'Select text in the preview first' : 'Attach the selected lines to chat'}
+                >
+                  Attach selection
+                </button>
+                <button className="explorer__secondary" type="button" onClick={handleAttachPreviewFile}>
+                  Attach file
+                </button>
+              </>
+            ) : null
+          }
+        />
+        {previewEol !== null && !previewEditable && (
+          <p className="explorer__error explorer__inline-alert" role="alert">
+            {MIXED_EOL_MESSAGE}
+          </p>
+        )}
+        {state.preview.content !== null && state.preview.revision !== null && (
+          <div className="editor-canvas">
+            <CodeEditor
+              key={`view:${workspaceId}:${state.preview.path}:${state.preview.revision}`}
+              documentUri={buildDocumentUri(workspaceId, state.preview.path)}
+              language={detectEditorLanguage(state.preview.path)}
+              initialValue={state.preview.content}
+              eol={previewEol === 'crlf' ? 'CRLF' : 'LF'}
+              readOnly
+              focusRequest={focusRequest}
+              onSelectionChange={setEditorSelection}
+              ariaLabel="File preview"
+            />
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Directory chevrons resolve per expanded state via the drawer tree.
   return (
-    <div className="workbench">
-      <ActivityRail activity={activity} onSelect={onActivityChange} />
-      {sidebarOpen && (
-      <aside className="workbench__sidebar" aria-label="Sidebar">
-        <WorkspaceSection />
+    <div ref={workareaRef} className="workspace" data-canvas-view={canvasView}>
+      <WorkspaceToolsDrawer open={sidebarOpen} activity={activity} onActivityChange={onActivityChange} onClose={onCloseSidebar}>
         <div className="workbench__sidebar-body">
           {activity === 'explorer' ? (
             <TreeNode path="" state={state} onToggle={handleToggle} onSelectFile={handleSelectFile} onAttachFile={handleAttachTreeFile} />
@@ -748,247 +1131,90 @@ export function Explorer({
             </>
           )}
         </div>
-      </aside>
-      )}
-      <section className="primary-canvas" aria-label="Workspace canvas">
-        <div className="canvas-tabs" role="tablist" aria-label="Primary views">
-          <button
-            className={canvasView === 'session' ? 'canvas-tab canvas-tab--session canvas-tab--active' : 'canvas-tab canvas-tab--session'}
-            type="button"
-            role="tab"
-            aria-selected={canvasView === 'session'}
-            onClick={() => onCanvasViewChange('session')}
-          >
-            <span className="canvas-tab__dot" aria-hidden="true" />
-            Session
-          </button>
-          <button
-            className={canvasView === 'editor' ? 'canvas-tab canvas-tab--editor canvas-tab--active' : 'canvas-tab canvas-tab--editor'}
-            type="button"
-            role="tab"
-            aria-selected={canvasView === 'editor'}
-            onClick={() => onCanvasViewChange('editor')}
-          >
-            <span className="canvas-tab__dot" aria-hidden="true" />
-            Editor
-          </button>
-        </div>
-        <div className="canvas-view" hidden={canvasView !== 'session'}>
+      </WorkspaceToolsDrawer>
+      <div className="workspace__narrow-switch" role="tablist" aria-label="Primary views">
+        <button
+          className={canvasView === 'session' ? 'workspace__narrow-tab workspace__narrow-tab--active' : 'workspace__narrow-tab'}
+          type="button"
+          role="tab"
+          aria-selected={canvasView === 'session'}
+          onClick={() => onCanvasViewChange('session')}
+        >
+          Session
+        </button>
+        <button
+          className={canvasView === 'editor' ? 'workspace__narrow-tab workspace__narrow-tab--active' : 'workspace__narrow-tab'}
+          type="button"
+          role="tab"
+          aria-selected={canvasView === 'editor'}
+          onClick={() => onCanvasViewChange('editor')}
+        >
+          Workspace
+        </button>
+      </div>
+      <section className="workspace__session" aria-label="Session">
+        <div className="session-frame" style={secondaryUi.splitPct !== null ? { flexBasis: `${secondaryUi.splitPct}%` } : undefined}>
           {sessionNode}
         </div>
-        <div className="canvas-view" hidden={canvasView !== 'editor'}>
-        <section className="workbench__editor" aria-label="Editor">
-        <div className="workbench__editor-main">
-        {gitDiff.relativePath !== null ? (
-          <div className="workbench__editor-body">
-            <EditorToolbar
-              path={`Git diff · ${gitDiff.relativePath} · ${gitDiff.target === 'staged' ? 'Staged' : 'Working tree'}`}
-              status="Read-only"
-              actions={
-                <>
-                  <button className="explorer__secondary" type="button" onClick={() => handleOpenGitFile(gitDiff.relativePath as string)}>
-                    Open file
-                  </button>
-                  <button className="explorer__secondary" type="button" onClick={handleCloseGitDiff}>
-                    Close
-                  </button>
-                </>
-              }
-            />
-            {gitDiff.phase === 'loading' ? (
-              <p className="explorer__status explorer__status--centered" role="status">
-                Loading Git diff…
-              </p>
-            ) : gitDiff.phase === 'error' ? (
-              <p className="explorer__error explorer__status--centered" role="alert">
-                {gitDiff.error ?? 'We couldn’t read this Git diff.'}
-              </p>
-            ) : gitDiff.result !== null ? (
-              gitDiff.result.patch === '' ? (
-                <p className="explorer__status explorer__status--centered">No patch content.</p>
-              ) : (
-                <div className="editor-canvas">
-                  <GitDiffViewer
-                    key={`gitdiff:${workspaceId}:${gitDiff.result.relativePath}:${gitDiff.result.target}`}
-                    relativePath={gitDiff.result.relativePath}
-                    target={gitDiff.result.target}
-                    patch={gitDiff.result.patch}
-                  />
-                </div>
-              )
-            ) : (
-              <p className="explorer__status explorer__status--centered">Loading Git diff…</p>
-            )}
-          </div>
-        ) : changes.detail !== null ? (
-          <TransactionReview
-            transaction={changes.detail}
-            busy={changes.busy}
-            actionError={changes.actionError}
-            notice={changes.notice}
-            onAccept={() => void handleAccept()}
-            onReject={() => void handleReject()}
-            onRollback={() => void handleRollback()}
-            onClose={handleCloseReview}
+        {secondaryOpen && (
+          <div
+            className="workspace__resize"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize session and workspace panes"
+            aria-valuenow={secondaryUi.splitPct ?? 45}
+            aria-valuemin={30}
+            aria-valuemax={68}
+            tabIndex={0}
+            onPointerDown={handleResizeStart}
+            onPointerMove={handleResizeMove}
+            onPointerUp={handleResizeEnd}
+            onPointerCancel={handleResizeEnd}
+            onKeyDown={handleResizeKey}
           />
-        ) : changes.detailLoading ? (
-          <p className="explorer__status explorer__status--centered" role="status">
-            Loading change…
-          </p>
-        ) : changes.detailError !== null ? (
-          <p className="explorer__error explorer__status--centered" role="alert">
-            {changes.detailError}
-          </p>
-        ) : changeSets.setDetail !== null ? (
-          <ChangeSetReview
-            changeSet={changeSets.setDetail}
-            onReviewFile={handleSelectTransaction}
-            onClose={handleCloseChangeSet}
-          />
-        ) : changeSets.setDetailLoading ? (
-          <p className="explorer__status explorer__status--centered" role="status">
-            Loading change set…
-          </p>
-        ) : changeSets.setDetailError !== null ? (
-          <p className="explorer__error explorer__status--centered" role="alert">
-            {changeSets.setDetailError}
-          </p>
-        ) : state.preview === null ? (
-          <div className="editor-empty" role="status" aria-label="No file selected">
-            <StarkMark size="hero" />
-            <p className="editor-empty__brand">{APP_NAME}</p>
-            <p className="editor-empty__title">Select a file to open</p>
-            <p className="editor-empty__hint">Open a file from the Explorer · attach context · ask STARK on the right</p>
-          </div>
-        ) : state.preview.loading ? (
-          <p className="explorer__status explorer__status--centered" role="status">
-            Loading…
-          </p>
-        ) : state.preview.error !== null ? (
-          <p className="explorer__error explorer__status--centered" role="alert">
-            {state.preview.error}
-          </p>
-        ) : editor !== null && state.preview.content !== null && state.preview.revision !== null ? (
-          <div className="workbench__editor-body">
-            <EditorToolbar
-              path={previewPathLabel}
-              status={dirty ? 'Unsaved changes' : 'No unsaved changes'}
-              actions={
-                <>
+        )}
+        {secondaryOpen && (
+          <WorkspaceSecondaryPane
+            tabs={tabs}
+            activeTab={effectiveTab}
+            onTabChange={(tab) => secondaryUiDispatch({ type: 'open-tab', tab })}
+            onOpenDrawer={onOpenSidebar}
+            onClosePane={handleCloseSecondaryPane}
+            terminalOpen={terminalOpen}
+            terminalNode={
+              <div className="terminal-stack">
+                <div className="terminal-stack__bar">
+                  <span className="terminal-stack__label">Terminal</span>
                   <button
-                    className="explorer__primary"
+                    className="stark-btn stark-btn--ghost"
                     type="button"
-                    disabled={!dirty || editor.saving}
-                    onClick={() => void handleReviewChange()}
+                    onClick={onToggleTerminal}
+                    aria-label="Hide terminal"
                   >
-                    {editor.saving ? 'Reviewing…' : 'Review change'}
+                    Hide
                   </button>
-                  <button className="explorer__secondary" type="button" onClick={handleCancel}>
-                    Cancel
-                  </button>
-                </>
-              }
-            />
-            {editor.saveError !== null && (
-              <p className="explorer__error explorer__inline-alert" role="alert">
-                {editor.saveError}
-              </p>
-            )}
-            <div className="editor-canvas">
-              <CodeEditor
-                key={`edit:${workspaceId}:${state.preview.path}:${state.preview.revision}`}
-                documentUri={buildDocumentUri(workspaceId, state.preview.path)}
-                language={detectEditorLanguage(state.preview.path)}
-                initialValue={editor.draftContent}
-                eol={previewEol === 'crlf' ? 'CRLF' : 'LF'}
-                readOnly={false}
-                focusRequest={null}
-                onContentChange={handleMonacoChange}
-                ariaLabel="File editor"
-              />
-            </div>
-          </div>
-        ) : (
-          <div className="workbench__editor-body">
-            <EditorToolbar
-              path={previewPathLabel}
-              status={readOnlyStatus}
-              actions={
-                state.preview.revision !== null && previewEditable && editor === null ? (
-                  <>
-                    <button className="explorer__primary" type="button" onClick={handleEdit}>
-                      Edit
-                    </button>
-                    <button
-                      className="explorer__secondary"
-                      type="button"
-                      onClick={handleAttachPreviewSelection}
-                      disabled={editorSelection === null}
-                      title={editorSelection === null ? 'Select text in the preview first' : 'Attach the selected lines to chat'}
-                    >
-                      Attach selection
-                    </button>
-                    <button className="explorer__secondary" type="button" onClick={handleAttachPreviewFile}>
-                      Attach file
-                    </button>
-                  </>
-                ) : null
-              }
-            />
-            {previewEol !== null && !previewEditable && (
-              <p className="explorer__error explorer__inline-alert" role="alert">
-                {MIXED_EOL_MESSAGE}
-              </p>
-            )}
-            {state.preview.content !== null && state.preview.revision !== null && (
-              <div className="editor-canvas">
-                <CodeEditor
-                  key={`view:${workspaceId}:${state.preview.path}:${state.preview.revision}`}
-                  documentUri={buildDocumentUri(workspaceId, state.preview.path)}
-                  language={detectEditorLanguage(state.preview.path)}
-                  initialValue={state.preview.content}
-                  eol={previewEol === 'crlf' ? 'CRLF' : 'LF'}
-                  readOnly
-                  focusRequest={focusRequest}
-                  onSelectionChange={setEditorSelection}
-                  ariaLabel="File preview"
-                />
+                </div>
+                <TerminalPanel key={`terminal:${workspaceId}`} workspaceId={workspaceId} />
               </div>
-            )}
-          </div>
-        )}
-        </div>
-        </section>
-        </div>
-      </section>
-      <div className="bottom-drawer">
-        {terminalOpen ? (
-          <>
-            <div className="bottom-drawer__bar">
-              <span className="bottom-drawer__label">Terminal</span>
-              <button
-                className="stark-btn stark-btn--ghost"
-                type="button"
-                onClick={onToggleTerminal}
-                aria-label="Hide terminal"
-              >
-                Hide
-              </button>
-            </div>
-            <TerminalPanel key={`terminal:${workspaceId}`} workspaceId={workspaceId} />
-          </>
-        ) : (
-          <button
-            className="bottom-drawer__handle"
-            type="button"
-            onClick={onToggleTerminal}
-            aria-expanded={false}
-            aria-label="Show terminal"
+            }
           >
-            <span aria-hidden="true">⌁</span> Terminal
-          </button>
+            <div className="workbench__editor-main">
+              {effectiveTab === 'review' && hasReviewTab ? (
+                renderReviewBody()
+              ) : effectiveTab === 'file' && hasFile ? (
+                renderFileBody()
+              ) : (
+                <ContextTab
+                  workspaceId={workspaceId}
+                  drafts={contextDrafts}
+                  dispatch={contextDraftsDispatch}
+                  draftError={contextDraftError}
+                />
+              )}
+            </div>
+          </WorkspaceSecondaryPane>
         )}
-      </div>
+      </section>
     </div>
   )
 }

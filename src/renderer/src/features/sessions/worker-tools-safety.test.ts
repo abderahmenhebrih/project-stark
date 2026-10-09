@@ -12,7 +12,7 @@ describe('worker-tool renderer safety', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     const start = panel.indexOf('STARK Worker needs permission')
     assert.ok(start >= 0, 'approval card must exist')
-    const slice = panel.slice(start, start + 4000)
+    const slice = panel.slice(start, start + 6000)
     assert.ok(slice.includes('This approval applies only to this exact action.'))
     assert.ok(slice.includes('Deny'))
     assert.ok(slice.includes('Approve'))
