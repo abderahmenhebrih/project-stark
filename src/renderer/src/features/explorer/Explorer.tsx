@@ -54,6 +54,8 @@ import {
   type EditorState
 } from './editor-state'
 import { explorerReducer, initialExplorerState, type ExplorerState } from './explorer-state'
+import { FILE_ICON_URLS, FOLDER_ICON_URL, FOLDER_OPEN_ICON_URL } from './fileIconAssets'
+import { getFileIconKind } from './fileIconForName'
 import './Explorer.css'
 
 interface TreeNodeProps {
@@ -88,16 +90,32 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile }: TreeNod
                   size={13}
                 />
               </span>
+              <span className="explorer__folder-icon" aria-hidden="true">
+                <img
+                  src={state.expanded.includes(entry.relativePath) ? FOLDER_OPEN_ICON_URL : FOLDER_ICON_URL}
+                  alt=""
+                  draggable={false}
+                />
+              </span>
               <span className="explorer__name">{entry.name}</span>
             </button>
           ) : entry.kind === 'file' ? (
-            <span className="explorer__file-row">
+            <span
+              className={
+                state.selectedPath === entry.relativePath
+                  ? 'explorer__file-row explorer__file-row--selected'
+                  : 'explorer__file-row'
+              }
+            >
               <button
                 className="explorer__row explorer__row--file"
                 type="button"
                 onClick={() => onSelectFile(entry.relativePath)}
+                aria-current={state.selectedPath === entry.relativePath}
               >
-                <span className="explorer__chevron" aria-hidden="true" />
+                <span className="explorer__file-icon" aria-hidden="true">
+                  <img src={FILE_ICON_URLS[getFileIconKind(entry.name)]} alt="" draggable={false} />
+                </span>
                 <span className="explorer__name">{entry.name}</span>
               </button>
               <button
@@ -105,7 +123,7 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile }: TreeNod
                 type="button"
                 onClick={() => onAttachFile(entry.relativePath)}
                 aria-label={`Attach ${entry.relativePath} to chat`}
-                title="Attach file to chat"
+                title="Attach to context"
               >
                 <StarkIcon name="plus" size={13} />
               </button>

@@ -54,7 +54,7 @@ export function WorkspaceToolsDrawer({
       onKeyDown={handleKeyDown}
     >
       <div className="workspace-tools-drawer__head">
-        <WorkspaceSection />
+        <WorkspaceSection onClosePanel={onClose} />
         <button
           className="workspace-tools-drawer__close"
           type="button"

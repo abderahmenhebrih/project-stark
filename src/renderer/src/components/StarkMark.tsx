@@ -13,7 +13,7 @@ interface StarkMarkProps {
  *
  * Renders the official emblem asset when `src` is provided; until the
  * official logo asset lands in the repository it renders a faithful
- * CSS representation (lime block, magenta core) as a temporary
+ * CSS representation (lime/magenta split) as a temporary
  * stand-in. Never invents a different emblem.
  */
 export function StarkMark({ src, size = 'bar', label = 'STARK' }: StarkMarkProps): ReactElement {

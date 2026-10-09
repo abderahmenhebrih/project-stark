@@ -1,5 +1,8 @@
 import type { ReactElement } from 'react'
+import { useState } from 'react'
 import { useApp } from '../../app/app-context'
+import { StarkIcon } from '../../components/icons/StarkIcon'
+import { FOLDER_ICON_URL } from '../explorer/fileIconAssets'
 import { confirmDiscardUnsavedDraft } from '../explorer/editor-guard'
 import {
   closeActiveTerminalForSwitch,
@@ -17,9 +20,14 @@ import './WorkspaceSection.css'
  * draft / running terminal) in place. An accepted terminal prompt
  * kills the session with bounded cleanup before switching, and no
  * terminal is ever re-created automatically in the new workspace.
+ *
+ * When `onClosePanel` is provided (drawer usage), the compact header
+ * renders a project identity row with an overflow menu plus a
+ * full-width folder action; otherwise it renders the standalone form.
  */
-export function WorkspaceSection(): ReactElement {
+export function WorkspaceSection({ onClosePanel }: { readonly onClosePanel?: () => void }): ReactElement {
   const { workspace } = useApp()
+  const [menuOpen, setMenuOpen] = useState(false)
 
   if (workspace.loading) {
     return (
@@ -78,17 +86,76 @@ export function WorkspaceSection(): ReactElement {
         </button>
       ) : (
         <div className="workspace__current workspace__current--compact">
-          <div className="workspace__identity">
-            <p className="workspace__name">{workspace.current.displayName}</p>
-            <p className="workspace__path">{workspace.current.rootPath}</p>
+          <div className="workspace__identity-row">
+            <span className="workspace__project-icon" aria-hidden="true">
+              <img src={FOLDER_ICON_URL} alt="" draggable={false} />
+            </span>
+            <div className="workspace__identity">
+              <p className="workspace__name" title={workspace.current.displayName}>{workspace.current.displayName}</p>
+              <p className="workspace__path" title={workspace.current.rootPath}>{workspace.current.rootPath}</p>
+            </div>
+            {onClosePanel !== undefined && (
+              <div className="workspace__menu">
+                <button
+                  className="workspace__menu-toggle"
+                  type="button"
+                  onClick={() => setMenuOpen((open) => !open)}
+                  aria-expanded={menuOpen}
+                  aria-label="Workspace options"
+                  title="Workspace options"
+                >
+                  <StarkIcon name="more" size={16} />
+                </button>
+                {menuOpen && (
+                  <div
+                    className="workspace__menu-list"
+                    role="menu"
+                    aria-label="Workspace options"
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        event.stopPropagation()
+                        setMenuOpen(false)
+                      }
+                    }}
+                  >
+                    <button
+                      className="workspace__menu-item"
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuOpen(false)
+                        handleChooseWorkspace()
+                      }}
+                      disabled={workspace.choosing}
+                    >
+                      Open another folder
+                    </button>
+                    <button
+                      className="workspace__menu-item"
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuOpen(false)
+                        onClosePanel()
+                      }}
+                    >
+                      Close panel
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <button
-            className="workspace__secondary workspace__secondary--compact"
+            className="workspace__folder-btn"
             type="button"
           onClick={handleChooseWorkspace}
             disabled={workspace.choosing}
           >
-            {workspace.choosing ? 'Opening…' : 'Open another folder'}
+            <span className="workspace__folder-btn-icon" aria-hidden="true">
+              <img src={FOLDER_ICON_URL} alt="" draggable={false} />
+            </span>
+            <span className="workspace__folder-btn-label">{workspace.choosing ? 'Opening…' : 'Open another folder'}</span>
           </button>
         </div>
       )}

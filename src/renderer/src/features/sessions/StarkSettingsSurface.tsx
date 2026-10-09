@@ -1,6 +1,7 @@
 import { useEffect, useRef, type Dispatch, type ReactElement } from 'react'
 import type { ProviderConnectionStatus } from '../../../../shared/providers/types'
 import { useApp } from '../../app/app-context'
+import { useAppInfo } from '../../hooks/useAppInfo'
 import { StarkIcon } from '../../components/icons/StarkIcon'
 import { AccountSection } from '../account/AccountSection'
 import { ProfileSection } from '../profile/ProfileSection'
@@ -11,7 +12,7 @@ import { type RecoveryPanelAction, type RecoveryPanelState } from './recovery-st
 import type { ProviderPanelState } from './provider-state'
 import './StarkSettingsSurface.css'
 
-export type SettingsSection = 'ai' | 'heart' | 'recovery' | 'permissions' | 'usage' | 'account' | 'profile'
+export type SettingsSection = 'ai' | 'heart' | 'recovery' | 'permissions' | 'usage' | 'account' | 'profile' | 'about'
 
 const SECTIONS: readonly { readonly kind: SettingsSection; readonly label: string }[] = [
   { kind: 'ai', label: 'AI & Models' },
@@ -20,7 +21,8 @@ const SECTIONS: readonly { readonly kind: SettingsSection; readonly label: strin
   { kind: 'permissions', label: 'Permissions' },
   { kind: 'usage', label: 'Usage' },
   { kind: 'account', label: 'Account' },
-  { kind: 'profile', label: 'Profile' }
+  { kind: 'profile', label: 'Profile' },
+  { kind: 'about', label: 'About' }
 ]
 
 function connectionStatusLabel(status: ProviderConnectionStatus): string {
@@ -84,6 +86,7 @@ export function StarkSettingsSurface(props: StarkSettingsSurfaceProps): ReactEle
   const { workspaceId, section, onSectionChange, onClose } = props
   const { provider, heart, recovery, usage, capabilities } = props
   const { profile, refreshProfile } = useApp()
+  const { appInfo } = useAppInfo()
   const closeRef = useRef<HTMLButtonElement | null>(null)
 
   useEffect(() => {
@@ -127,7 +130,9 @@ export function StarkSettingsSurface(props: StarkSettingsSurfaceProps): ReactEle
               <button
                 key={entry.kind}
                 className={
-                  section === entry.kind ? 'stark-settings__nav-item stark-settings__nav-item--active' : 'stark-settings__nav-item'
+                  section === entry.kind
+                    ? `stark-settings__nav-item stark-settings__nav-item--active${entry.kind === 'ai' ? ' stark-settings__nav-item--ai' : ''}`
+                    : `stark-settings__nav-item${entry.kind === 'ai' ? ' stark-settings__nav-item--ai' : ''}`
                 }
                 type="button"
                 aria-current={section === entry.kind}
@@ -980,6 +985,19 @@ export function StarkSettingsSurface(props: StarkSettingsSurfaceProps): ReactEle
               <div className="stark-settings__profile">
                 <ProfileSection current={profile} onChanged={() => void refreshProfile()} />
               </div>
+            )}
+            {section === 'about' && (
+              <section aria-label="About STARK">
+                <div className="session__settings-row">
+                  <span className="session__eyebrow">STARK</span>
+                  <span className="session__provider-name">
+                    {appInfo === null ? 'Starting…' : `v${appInfo.version} · ${appInfo.platform} · Electron ${appInfo.electron}`}
+                  </span>
+                </div>
+                <p className="session__hint" role="note">
+                  Local-first coding workspace. Your projects and local STARK data remain on this device.
+                </p>
+              </section>
             )}
           </div>
         </div>

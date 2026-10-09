@@ -7,19 +7,7 @@
   overflow: hidden;
 }
 
-/* Compact session header: title left, New / History / options right. */
-.session__header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: var(--stark-space-xs);
-  min-width: 0;
-  min-height: 44px;
-  padding: 6px var(--stark-space-sm);
-  border-bottom: 1px solid var(--stark-border);
-  overflow: visible;
-}
-
+/* Shared session typography for eyebrows used across the canvas. */
 .session__eyebrow {
   margin: 0;
   font-family: var(--stark-font-sans);
@@ -32,160 +20,10 @@
   flex: 0 0 auto;
 }
 
-.session__title {
-  margin: 0;
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--stark-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.session__new {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 28px;
-  padding: 3px 10px;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--stark-lime-text);
-  background: var(--stark-lime);
-  border: 1px solid transparent;
-  border-radius: var(--stark-radius-sm);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.session__new:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.session__new-label {
-  font-size: 12px;
-}
-
-.session__icon-btn {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 28px;
-  padding: 3px 8px;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--stark-text-dim);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--stark-radius-sm);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.session__icon-btn:hover {
-  color: var(--stark-text);
-  background: var(--stark-elevated);
-}
-
-.session__icon-btn:focus-visible,
-.session__new:focus-visible,
-.session__history-item:focus-visible,
-.session__menu-item:focus-visible,
 .session__chip-remove:focus-visible,
 .session__context-count:focus-visible {
   outline: 2px solid var(--stark-lime);
   outline-offset: 2px;
-}
-
-.session__icon-btn-label {
-  font-size: 11px;
-}
-
-.session__popover {
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.session__popover-body {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 4px);
-  z-index: 30;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 220px;
-  max-width: 300px;
-  max-height: 320px;
-  overflow-y: auto;
-  padding: 6px;
-  background: var(--stark-elevated);
-  border: 1px solid var(--stark-border);
-  border-radius: var(--stark-radius-md);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
-}
-
-.session__history-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.session__history-item {
-  width: 100%;
-  padding: 6px 10px;
-  font-family: var(--stark-font-sans);
-  font-size: 12px;
-  text-align: left;
-  color: var(--stark-text-dim);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--stark-radius-sm);
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.session__history-item:hover {
-  color: var(--stark-text);
-  background: var(--stark-bg);
-}
-
-.session__history-item--active {
-  color: var(--stark-lime);
-}
-
-.session__menu-item {
-  width: 100%;
-  padding: 6px 10px;
-  font-family: var(--stark-font-sans);
-  font-size: 12px;
-  font-weight: 600;
-  text-align: left;
-  color: var(--stark-text);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--stark-radius-sm);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.session__menu-item:hover:not(:disabled) {
-  background: var(--stark-bg);
-}
-
-.session__menu-item:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 /* Conversation reads as one calm column with a readable measure. */

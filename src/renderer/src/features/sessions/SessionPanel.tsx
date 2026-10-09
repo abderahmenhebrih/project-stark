@@ -51,7 +51,6 @@ import {
 } from '../../lib/provider-error'
 import { isComposerEmpty, shouldSubmitComposerKey } from './composer-keys'
 import { ContextCard } from './ContextCard'
-import { SessionHeaderBar } from './SessionHeaderBar'
 import { StarkSettingsSurface, type SettingsSection } from './StarkSettingsSurface'
 import { StarkIcon } from '../../components/icons/StarkIcon'
 import { StarkMark } from '../../components/StarkMark'
@@ -118,9 +117,38 @@ interface SessionPanelProps {
   readonly settingsSection: SettingsSection
   readonly onSettingsSectionChange: (section: SettingsSection) => void
   readonly onCloseSettings: () => void
-  readonly onOpenSettings: () => void
   /** Reveal the secondary Context tab (owned by the Explorer). */
   readonly onOpenContext: () => void
+  /**
+   * Mirror the active-session chrome (title, history, busy flags) up to
+   * the shell so AppChrome can render the session tab strip. The
+   * reducer here stays the single source of truth; the shell only
+   * displays the snapshot and forwards the actions back unchanged.
+   */
+  readonly onSessionChrome: (snapshot: SessionChromeSnapshot, actions: SessionChromeActions) => void
+}
+
+/** Minimal session identity for the AppChrome tab strip + history menu. */
+export interface SessionChromeSession {
+  readonly id: number
+  readonly title: string
+}
+
+/** Display snapshot mirrored to the shell; reducer state stays canonical. */
+export interface SessionChromeSnapshot {
+  readonly title: string
+  readonly sessions: readonly SessionChromeSession[]
+  readonly selectedSessionId: number | null
+  readonly sessionsLoading: boolean
+  readonly looplinkActing: boolean
+  readonly sendBusy: boolean
+}
+
+/** Existing session actions forwarded to the shell unchanged. */
+export interface SessionChromeActions {
+  readonly newSession: () => void
+  readonly selectSession: (sessionId: number) => void
+  readonly continueLooplink: () => void
 }
 
 const OPENAI_PROVIDER_ID = 'openai' as const
@@ -202,8 +230,8 @@ export function SessionPanel({
   settingsSection,
   onSettingsSectionChange,
   onCloseSettings,
-  onOpenSettings,
-  onOpenContext
+  onOpenContext,
+  onSessionChrome
 }: SessionPanelProps): ReactElement {
   const [state, dispatch] = useReducer(sessionPanelReducer, workspaceId, (id) => ({
     ...initialSessionPanelState(),
@@ -1524,20 +1552,42 @@ export function SessionPanel({
   const selectedModelMissing =
     selectedModel !== null && !provider.models.some((entry) => entry.id === selectedModel)
 
+  // Mirror session chrome state to the shell tab strip. The reducer
+  // above stays canonical; HomePage only displays the snapshot and
+  // forwards actions back, so there is exactly one state owner.
+  // Handler identities are intentionally excluded below: the effect
+  // re-mirrors only when display inputs change, always forwarding the
+  // latest handlers by closure.
+  /* eslint-disable react-hooks/exhaustive-deps */
+  useEffect(() => {
+    onSessionChrome(
+      {
+        title: selectedSession?.title ?? 'New session',
+        sessions: state.sessions.map((entry) => ({ id: entry.id, title: entry.title })),
+        selectedSessionId: state.selectedSessionId,
+        sessionsLoading: state.loadingSessions,
+        looplinkActing: looplink.acting,
+        sendBusy: state.sending
+      },
+      {
+        newSession: () => void handleNew(),
+        selectSession: (sessionId: number) => handleSelect(sessionId),
+        continueLooplink: () => void handleContinueWithLooplink()
+      }
+    )
+  }, [
+    onSessionChrome,
+    selectedSession?.title,
+    state.sessions,
+    state.selectedSessionId,
+    state.loadingSessions,
+    state.sending,
+    looplink.acting
+  ])
+  /* eslint-enable react-hooks/exhaustive-deps */
+
   return (
     <section className="session" aria-label="STARK Session">
-      <SessionHeaderBar
-        title={selectedSession?.title ?? 'New session'}
-        sessions={state.sessions}
-        selectedSessionId={state.selectedSessionId}
-        sessionsLoading={state.loadingSessions}
-        onNew={() => void handleNew()}
-        onSelect={handleSelect}
-        onOpenSettings={onOpenSettings}
-        onContinueLooplink={() => void handleContinueWithLooplink()}
-        looplinkActing={looplink.acting}
-        sendBusy={state.sending}
-      />
       {looplink.actionError !== null && (
         <p className="session__error" role="alert">
           {looplink.actionError}

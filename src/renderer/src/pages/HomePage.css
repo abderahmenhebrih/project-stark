@@ -40,9 +40,10 @@
 }
 
 /* Active workspace: one calm application surface — global chrome,
-   work area (session pane + contextual secondary pane with the tools
-   drawer overlaying on demand), thin status strip. No page scroll,
-   no stacked toolbars, no permanent third column. */
+   then a work area (session pane + contextual secondary pane with
+   the tools drawer overlaying on demand) extending to the bottom of
+   the content area. No page scroll, no stacked toolbars, no
+   permanent third column, no bottom footer. */
 .stage-shell {
   flex: 1;
   min-height: 0;
@@ -61,51 +62,4 @@
   display: flex;
   overflow: hidden;
   position: relative;
-}
-
-.workbench-status {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: var(--stark-space-sm);
-  min-height: 24px;
-  max-height: 24px;
-  min-width: 0;
-  padding: 2px var(--stark-space-md);
-  border-top: 1px solid var(--stark-border);
-  background: var(--stark-surface);
-  overflow: hidden;
-  font-family: var(--stark-font-mono);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  color: var(--stark-text-dim);
-}
-
-.workbench-status__workspace {
-  flex: 0 1 auto;
-  min-width: 0;
-  font-family: var(--stark-font-sans);
-  font-weight: 700;
-  color: var(--stark-text-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.workbench-status__spacer {
-  flex: 1;
-  min-width: var(--stark-space-sm);
-}
-
-.workbench-status .system-status {
-  flex-direction: row;
-  align-items: center;
-  gap: var(--stark-space-sm);
-  margin-top: 0;
-}
-
-.workbench-status .system-status__meta {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }

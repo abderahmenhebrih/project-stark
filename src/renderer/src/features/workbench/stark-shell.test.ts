@@ -116,8 +116,8 @@ describe('stage 31 D05 shell proof', () => {
   })
 
   it('14. looplink remains reachable', () => {
-    const header = readRenderer('features/sessions/SessionHeaderBar.tsx')
-    assert.ok(header.includes('Continue with Looplink'), 'Looplink must live in the session menu')
+    const chrome = readRenderer('layouts/AppChrome.tsx')
+    assert.ok(chrome.includes('Continue with Looplink'), 'Looplink must live in the session tab overflow')
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     assert.ok(panel.includes('handleContinueWithLooplink'), 'Looplink behavior must be unchanged')
   })
@@ -159,7 +159,6 @@ describe('stage 31 D05 shell proof', () => {
       'features/explorer/Explorer.tsx',
       'features/workspace/WorkspaceSecondaryPane.tsx',
       'features/sessions/SessionPanel.tsx',
-      'features/sessions/SessionHeaderBar.tsx',
       'features/sessions/StarkSettingsSurface.tsx',
       'features/sessions/ContextTab.tsx',
       'components/icons/StarkIcon.tsx'

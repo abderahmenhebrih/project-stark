@@ -16,9 +16,9 @@ const ACTIVITIES: readonly { readonly kind: ActivityKind; readonly label: string
 ]
 
 /**
- * Compact icon-first activity selector for the workspace tools
- * drawer. The selected activity fills the drawer body; the selected
- * state is a lime indicator, never a neon block.
+ * Activity selector for the workspace tools drawer. Labels stay
+ * visible beside large icons; the selected activity fills the drawer
+ * body with a lime indicator, never a neon block.
  */
 export function ActivityRail({ activity, onSelect }: ActivityRailProps): ReactElement {
   return (
@@ -36,7 +36,7 @@ export function ActivityRail({ activity, onSelect }: ActivityRailProps): ReactEl
             onClick={() => onSelect(entry.kind)}
           >
             <span className="explorer__tab-icon" aria-hidden="true">
-              <StarkIcon name={entry.icon} size={17} />
+              <StarkIcon name={entry.icon} size={20} />
             </span>
             <span className="explorer__tab-label">{entry.label}</span>
           </button>

@@ -6,8 +6,8 @@ import { describe, it } from 'node:test'
 /**
  * Stage 31 frontend shell regression: one global bar above a primary
  * session pane + contextual secondary pane (Review | Context | file
- * with a stacked terminal), an overlay workspace-tools drawer, a thin
- * status strip, and a dedicated settings surface. Official brand is
+ * with a stacked terminal), an overlay workspace-tools drawer with no
+ * bottom footer, and a dedicated settings surface. Official brand is
  * obsidian + neon lime (primary) + neon magenta (AI accent); repo
  * green is semantic-only. All behavior preserved; renderer-only.
  * Runs against repository source (cwd is the repo root via npm).
@@ -33,7 +33,7 @@ describe('stage 31 frontend shell', () => {
     assert.ok(chrome.includes('workspaceName'), 'global bar must carry the workspace identity')
     assert.ok(chrome.includes('workspacePath'), 'path must stay available as muted metadata')
     assert.ok(!chrome.includes('FOUNDATION'), 'unfinished foundation chrome must be gone')
-    assert.ok(chrome.includes('Search workspace'), 'workspace search must stay in the chrome')
+    assert.ok(chrome.includes('Search workspace'), 'workspace search must stay one click away')
     assert.ok(!chrome.includes('☰'), 'chrome must use SVG icons, not glyphs')
     const shell = readRenderer('layouts/MainLayout.tsx')
     assert.ok(!shell.includes('shell__header'), 'shell must not stack a second toolbar')
@@ -55,9 +55,173 @@ describe('stage 31 frontend shell', () => {
     const drawer = css.match(/\.workspace-tools-drawer\s*\{[^}]*\}/)
     assert.ok(drawer !== null, 'drawer CSS must exist')
     assert.ok(drawer[0].includes('position: absolute'), 'drawer must overlay instead of consuming a column')
+    assert.ok(drawer[0].includes('width: 392px'), 'drawer must be approximately 380–410px on desktop')
+    const railCss = css.match(/\.workspace-tools-drawer__body \.activity-rail\s*\{[^}]*\}/)
+    assert.ok(railCss !== null && railCss[0].includes('flex: 0 0 86px'), 'rail must be a fixed 82–90px')
+    const content = css.match(/\.workspace-tools-drawer__content\s*\{[^}]*\}/)
+    assert.ok(content !== null && content[0].includes('flex: 1 1 0'), 'content pane must be flexible minmax(0,1fr)')
+    const close = css.match(/\.workspace-tools-drawer__close\s*\{[^}]*\}/)
+    assert.ok(close !== null && close[0].includes('position: absolute'), 'close must sit top-right, off the header row')
+    assert.ok(readRenderer('features/workspace/WorkspaceSection.css').includes('.workspace__folder-btn'), 'folder switch must read as its own dedicated action')
     const active = css.match(/\.explorer__tab--active\s*\{[^}]*\}/)
     assert.ok(active !== null, 'selected activity state must exist')
+    assert.ok(active[0].includes('background: var(--stark-elevated)'), 'selection must be a dark surface, not a lime block')
     assert.ok(!active[0].includes('background: var(--stark-lime);'), 'selection must be an indicator, not a neon block')
+  })
+
+  it('drawer header never clips or wraps workspace identity', () => {
+    const css = readRenderer('features/explorer/Explorer.css')
+    for (const selector of [
+      '.workspace-tools-drawer__head .workspace__name',
+      '.workspace-tools-drawer__head .workspace__path'
+    ]) {
+      const start = css.indexOf(`${selector} {`)
+      assert.ok(start >= 0, `${selector} must be styled`)
+      const slice = css.slice(start, start + 400)
+      assert.ok(slice.includes('white-space: nowrap'), `${selector} must not wrap`)
+      assert.ok(slice.includes('text-overflow: ellipsis'), `${selector} must ellipsize`)
+    }
+    const folderCss = readRenderer('features/workspace/WorkspaceSection.css')
+    const folder = folderCss.match(/\.workspace__folder-btn\s*\{[^}]*\}/)
+    assert.ok(folder !== null, 'folder button must have its own dedicated rule')
+    assert.ok(folder[0].includes('display: flex'), 'folder button must be one horizontal flex row')
+    assert.ok(folder[0].includes('flex-direction: row'), 'folder button icon and label must share one row')
+    assert.ok(folder[0].includes('justify-content: center'), 'folder button content must be grouped and centered')
+    assert.ok(!folder[0].includes('position: absolute'), 'folder button must not absolutely position its content')
+  })
+
+  it('workspace tools drawer reads as a substantial project navigator', () => {
+    const css = readRenderer('features/explorer/Explorer.css')
+    const drawer = css.match(/\.workspace-tools-drawer\s*\{[^}]*\}/)
+    assert.ok(drawer !== null, 'drawer CSS must exist')
+    const drawerWidth = drawer[0].match(/width:\s*(\d+)px/)
+    assert.ok(drawerWidth !== null, 'drawer must declare a fixed desktop width')
+    const drawerWidthPx = Number(drawerWidth[1])
+    assert.ok(drawerWidthPx >= 380 && drawerWidthPx <= 410, `drawer width must sit in 380–410px, got ${drawerWidthPx}px`)
+    assert.ok(drawer[0].includes('border-radius: 12px'), 'drawer must keep the 12px outer radius')
+    const railCss = css.match(/\.workspace-tools-drawer__body \.activity-rail\s*\{[^}]*\}/)
+    assert.ok(railCss !== null, 'in-drawer rail CSS must exist')
+    const railWidth = railCss[0].match(/flex:\s*0\s+0\s+(\d+)px/)
+    assert.ok(railWidth !== null, 'rail must declare a fixed width')
+    const railWidthPx = Number(railWidth[1])
+    assert.ok(railWidthPx >= 82 && railWidthPx <= 90, `rail width must sit in 82–90px, got ${railWidthPx}px`)
+    const tab = css.match(/\.explorer__tab\s*\{[^}]*\}/)
+    assert.ok(tab !== null, 'rail item CSS must exist')
+    const tabHeight = tab[0].match(/min-height:\s*(\d+)px/)
+    assert.ok(tabHeight !== null, 'rail items must declare a fixed height')
+    const tabHeightPx = Number(tabHeight[1])
+    assert.ok(tabHeightPx >= 68 && tabHeightPx <= 76, `rail items must sit in 68–76px, got ${tabHeightPx}px`)
+    const label = css.match(/\.explorer__tab-label\s*\{[^}]*\}/)
+    assert.ok(label !== null, 'rail labels must be styled visible')
+    const labelSize = label[0].match(/font-size:\s*([\d.]+)px/)
+    assert.ok(labelSize !== null, 'rail labels must declare a size')
+    const labelSizePx = Number(labelSize[1])
+    assert.ok(labelSizePx >= 11 && labelSizePx <= 12, `rail labels must sit in 11–12px, got ${labelSizePx}px`)
+    const rail = readRenderer('features/explorer/ActivityRail.tsx')
+    for (const activity of ['Explorer', 'Search', 'Changes', 'Git']) {
+      assert.ok(rail.includes(activity), `rail must keep the visible ${activity} label`)
+    }
+  })
+
+  it('drawer project header carries identity, folder action, and recent', () => {
+    const section = readRenderer('features/workspace/WorkspaceSection.tsx')
+    assert.ok(section.includes('workspace__project-icon'), 'project identity must show a folder icon')
+    assert.ok(section.includes('workspace__menu'), 'header must offer a compact overflow menu')
+    assert.ok(section.includes('Close panel'), 'overflow menu must expose the close action')
+    assert.ok(section.includes('Open another folder'), 'folder action must keep its full readable label')
+    assert.ok(section.includes('handleChooseWorkspace'), 'folder action must reuse the native picker handler')
+    assert.ok(section.includes('Recent ('), 'recent heading must be present')
+    const css = readRenderer('features/explorer/Explorer.css')
+    const nameStart = css.indexOf('.workspace-tools-drawer__head .workspace__name {')
+    assert.ok(nameStart >= 0, 'project name must be styled in the drawer head')
+    const nameSlice = css.slice(nameStart, nameStart + 400)
+    const nameSize = nameSlice.match(/font-size:\s*(\d+)px/)
+    assert.ok(nameSize !== null, 'project name must declare a size')
+    const nameSizePx = Number(nameSize[1])
+    assert.ok(nameSizePx >= 16 && nameSizePx <= 18, `project name must sit in 16–18px, got ${nameSizePx}px`)
+    const folderCss = readRenderer('features/workspace/WorkspaceSection.css')
+    const folder = folderCss.match(/\.workspace__folder-btn\s*\{[^}]*\}/)
+    assert.ok(folder !== null, 'folder action must have its own dedicated rule')
+    const folderHeight = folder[0].match(/min-height:\s*(\d+)px/)
+    assert.ok(folderHeight !== null, 'folder action must declare a height')
+    const folderHeightPx = Number(folderHeight[1])
+    assert.ok(folderHeightPx >= 42 && folderHeightPx <= 46, `folder action must sit in 42–46px, got ${folderHeightPx}px`)
+    assert.ok(folder[0].includes('width: 100%'), 'folder action must be full-width and unclipped')
+    const buttonImages = (section.match(/<img/g) ?? []).length
+    assert.ok(buttonImages >= 1, 'folder button must render its folder image inline')
+    const iconRule = folderCss.match(/\.workspace__folder-btn-icon\s*\{[^}]*\}/)
+    assert.ok(iconRule !== null && iconRule[0].includes('flex-shrink: 0'), 'button icon must be a stable flex item')
+    assert.ok(!iconRule[0].includes('position: absolute'), 'button icon must not be absolutely positioned')
+    assert.ok(folder[0].includes('height: 42px'), 'folder button must be 42px tall')
+    const buttonStart = section.indexOf('className="workspace__folder-btn"')
+    assert.ok(buttonStart >= 0, 'folder button must exist in the section markup')
+    const buttonEnd = section.indexOf('</button>', buttonStart)
+    const buttonBlock = section.slice(buttonStart, buttonEnd)
+    assert.equal((buttonBlock.match(/<img/g) ?? []).length, 1, 'folder button must contain exactly one folder icon')
+    assert.ok(folderCss.includes('.workspace__folder-btn:focus-visible'), 'folder button must show a clear focus ring')
+    assert.ok(folderCss.includes('.workspace__folder-btn:disabled'), 'folder button must define a muted disabled state')
+    const toggle = readRenderer('features/workspace/WorkspaceSection.css')
+    assert.ok(toggle.includes('.workspace__recent-toggle'), 'recent heading must be styled')
+    const toggleBlock = toggle.match(/\.workspace__recent-toggle\s*\{[^}]*\}/)
+    assert.ok(toggleBlock !== null && toggleBlock[0].includes('min-height: 38px'), 'recent heading must be a 36–40px row')
+    assert.ok(toggleBlock[0].includes('border-bottom'), 'recent heading must carry its separator')
+  })
+
+  it('explorer rows show chevrons, type icons, names, and compact attach', () => {
+    const explorer = readRenderer('features/explorer/Explorer.tsx')
+    assert.ok(explorer.includes('explorer__folder-icon'), 'folder rows must include a folder icon')
+    assert.ok(explorer.includes('explorer__file-icon'), 'file rows must include a type icon')
+    assert.ok(explorer.includes('getFileIconKind'), 'file icons must resolve from the filename')
+    assert.ok(explorer.includes('title="Attach to context"'), 'attach action must carry the context tooltip')
+    assert.ok(explorer.includes('onClick={() => onAttachFile(entry.relativePath)}'), 'attach must reuse the existing handler')
+    assert.ok(explorer.includes('onAttachFile={handleAttachTreeFile}'), 'tree attach must stay wired to context drafts')
+    assert.ok(explorer.includes('aria-current={state.selectedPath'), 'open file must be exposed to assistive tech')
+    assert.ok(!explorer.includes('magenta'), 'explorer tree must stay lime/neutral, never magenta')
+    const assetDir = join(process.cwd(), 'src', 'renderer', 'src', 'assets', 'file-icons')
+    const requiredAssets = [
+      'folder.svg',
+      'folder-open.svg',
+      'file.svg',
+      'markdown.svg',
+      'javascript.svg',
+      'typescript.svg',
+      'json.svg',
+      'git.svg',
+      'config.svg',
+      'package.svg'
+    ]
+    for (const asset of requiredAssets) {
+      const assetPath = join(assetDir, asset)
+      assert.ok(existsSync(assetPath), `local icon asset must exist: ${asset}`)
+      const content = readFileSync(assetPath, 'utf8')
+      assert.ok(content.includes('<svg'), `${asset} must be an SVG document`)
+      assert.ok(!content.includes('<script'), `${asset} must not contain scripts`)
+    }
+    const assetMap = readRenderer('features/explorer/fileIconAssets.ts')
+    assert.ok(!assetMap.includes('http://') && !assetMap.includes('https://'), 'icon assets must load locally, never remote')
+    assert.ok(!assetMap.includes('vscode-icons') || assetMap.includes('THIRD_PARTY'), 'asset module must not fetch from upstream at runtime')
+    for (const asset of requiredAssets) {
+      assert.ok(assetMap.includes(asset), `asset map must reference local ${asset}`)
+    }
+    assert.ok(assetMap.includes('FOLDER_ICON_URL') && assetMap.includes('FOLDER_OPEN_ICON_URL'), 'folder open/closed URLs must both be exported')
+    assert.ok(explorer.includes('FOLDER_OPEN_ICON_URL'), 'expanded directories must use the open folder icon')
+    assert.ok(explorer.includes('FILE_ICON_URLS[getFileIconKind'), 'file icons must resolve through the pure mapping')
+    assert.ok(readSource('THIRD_PARTY_NOTICES.md').includes('vscode-icons'), 'icon provenance must be recorded')
+    const css = readRenderer('features/explorer/Explorer.css')
+    const row = css.match(/\.explorer__row\s*\{[^}]*\}/)
+    assert.ok(row !== null, 'row CSS must exist')
+    const rowHeight = row[0].match(/min-height:\s*(\d+)px/)
+    assert.ok(rowHeight !== null, 'rows must declare a height')
+    const rowHeightPx = Number(rowHeight[1])
+    assert.ok(rowHeightPx >= 30 && rowHeightPx <= 32, `rows must sit in 30–32px, got ${rowHeightPx}px`)
+    assert.ok(css.includes('.explorer__file-row--selected'), 'open file must have a selected style')
+    const selected = css.match(/\.explorer__file-row--selected\s*\{[^}]*\}/)
+    assert.ok(selected !== null && selected[0].includes('var(--stark-lime)'), 'selected file must use a lime indicator, not a fill')
+    assert.ok(!selected[0].includes('background: var(--stark-lime)'), 'selected file must not be a bright fill')
+    const attach = css.match(/\.explorer__attach\s*\{[^}]*\}/)
+    assert.ok(attach !== null, 'attach action CSS must exist')
+    assert.ok(!attach[0].includes('opacity: 0'), 'attach must never be hover-only')
+    assert.ok(!attach[0].includes('display: none'), 'attach must stay reachable on touch')
   })
 
   it('session conversation stays mounted beside the secondary pane', () => {
@@ -122,14 +286,44 @@ describe('stage 31 frontend shell', () => {
     assert.ok(panel.indexOf('session__dock') < panel.indexOf('session__composer--'), 'dock must precede the composer')
   })
 
-  it('secondary session actions stay reachable without dominating', () => {
-    const header = readRenderer('features/sessions/SessionHeaderBar.tsx')
-    for (const action of ['New', 'Settings', 'Continue with Looplink', 'History']) {
-      assert.ok(header.includes(action), `secondary action must stay reachable: ${action}`)
-    }
+  it('top bar is a session tab strip without a permanent search field', () => {
+    const chrome = readRenderer('layouts/AppChrome.tsx')
+    assert.ok(!chrome.includes('app-chrome__search'), 'large permanent search field must be gone')
+    assert.ok(!chrome.includes('Search workspace…'), 'no permanent search box copy may remain')
+    assert.ok(chrome.includes('app-chrome__tab'), 'active session must render as a desktop tab')
+    assert.ok(chrome.includes('sessionTitle'), 'tab must show the selected session title')
+    assert.ok(chrome.includes('app-chrome__tab-dot'), 'tab must carry the magenta AI identity cue')
+    assert.ok(!chrome.includes('name="close"'), 'tab must not render a destructive close affordance')
+    const tabs = chrome.match(/role="tab"/g) ?? []
+    assert.equal(tabs.length, 1, 'only the active session renders as a tab; no fake multi-tab system')
+    assert.ok(chrome.includes('app-chrome__newtab'), 'New Session + must sit beside the tab')
+    assert.ok(chrome.includes('onNewSession'), '+ must invoke the existing new-session action')
+    assert.ok(chrome.includes('app-chrome__history-item'), 'history must live in the tab overflow')
+    assert.ok(chrome.includes('onSelectSession'), 'history must switch via the existing select action')
+    assert.ok(chrome.includes('Continue with Looplink'), 'Looplink must stay in the session overflow')
+    assert.ok(chrome.includes('name="search"'), 'search must stay one icon click away')
+    assert.ok(chrome.includes('workspaceName'), 'workspace name must stay visible')
+    const css = readRenderer('layouts/AppChrome.css')
+    assert.ok(!css.includes('.app-chrome__search'), 'search field CSS must be retired')
+    const tab = css.match(/\.app-chrome__tab\s*\{[^}]*\}/)
+    assert.ok(tab !== null, 'tab CSS must exist')
+    assert.ok(tab[0].includes('border-radius: 8px'), 'tab must read as a desktop pill')
+    assert.ok(tab[0].includes('min-height: 32px'), 'tab must be 32–34px')
+    assert.ok(tab[0].includes('min-width: 180px') || css.includes('min-width: 180px'), 'tab must not collapse')
+    assert.ok(css.includes('max-width: 420px'), 'long titles must not consume the toolbar')
+    assert.ok(tab[0].includes('background: var(--stark-elevated)'), 'tab resting surface must stay neutral')
+    const dot = css.match(/\.app-chrome__tab-dot\s*\{[^}]*\}/)
+    assert.ok(dot !== null && dot[0].includes('background: var(--stark-magenta)'), 'tab identity must read magenta')
+    const home = readRenderer('pages/HomePage.tsx')
+    assert.ok(home.includes("setActivity('search')"), 'search must remain reachable via the workspace drawer')
+  })
+
+  it('giant inner New button and duplicated session header are gone', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('<SessionHeaderBar'), 'session must render the compact header')
-    assert.ok(!panel.includes('session__looplink'), 'Looplink must not consume a permanent header row')
+    assert.ok(!panel.includes('<SessionHeaderBar'), 'redundant inner header must be removed')
+    assert.ok(!panel.includes('session__new'), 'giant inner + New button must be removed')
+    assert.ok(panel.includes('onSessionChrome'), 'panel must mirror chrome state to the shell')
+    assert.ok(!existsSync(join(process.cwd(), 'src', 'renderer', 'src', 'features', 'sessions', 'SessionHeaderBar.tsx')), 'deleted header component must stay deleted')
   })
 
   it('official lime + magenta brand is tokenized; mint is not brand', () => {
@@ -152,6 +346,22 @@ describe('stage 31 frontend shell', () => {
     const css = readRenderer('components/StarkMark.css')
     assert.ok(css.includes('var(--stark-lime)'), 'stand-in must use lime')
     assert.ok(css.includes('var(--stark-magenta)'), 'stand-in must use magenta, never mint')
+    assert.ok(css.includes('linear-gradient'), 'stand-in must show both accents side by side, not mostly lime')
+  })
+
+  it('idle UI shows both brand accents with magenta in AI roles', () => {
+    const chromeCss = readRenderer('layouts/AppChrome.css')
+    assert.ok(chromeCss.includes('.app-chrome__tab-dot'), 'session identity must carry a magenta cue in the chrome tab')
+    const sessionCss = readRenderer('features/sessions/session.css')
+    assert.ok(sessionCss.includes('.session__composer .session__mode[aria-pressed="true"]'), 'Ask selected must read lime')
+    assert.ok(sessionCss.includes('.session__composer .session__mode--work[aria-pressed="true"]'), 'Work selected must read magenta')
+    const explorerCss = readRenderer('features/explorer/Explorer.css')
+    assert.ok(explorerCss.includes('.workspace__tab--context.workspace__tab--active'), 'Context tab must read magenta')
+    assert.ok(explorerCss.includes('.workspace__tab--review.workspace__tab--active'), 'Review tab must read lime')
+    const chrome = readRenderer('layouts/AppChrome.css')
+    assert.ok(chrome.includes('var(--stark-magenta-dim)'), 'account control may carry only a subtle magenta detail')
+    const settingsCss = readRenderer('features/sessions/StarkSettingsSurface.css')
+    assert.ok(settingsCss.includes('.stark-settings__nav-item--ai'), 'AI settings navigation must carry the magenta indicator')
   })
 
   it('icon set replaces glyph chrome with accessible SVG controls', () => {
@@ -186,16 +396,16 @@ describe('stage 31 frontend shell', () => {
     assert.ok(global.includes('scrollbar-width: thin'), 'scrollbars must be thin')
   })
 
-  it('thin status strip carries version exactly once', () => {
+  it('no permanent bottom bar exists and no replacement footer was added', () => {
     const home = readRenderer('pages/HomePage.tsx')
-    assert.ok(home.includes('workbench-status'), 'thin status strip must exist')
+    assert.ok(!home.includes('workbench-status'), 'the bottom status strip must be gone')
+    assert.ok(!home.includes('Status bar'), 'no status-bar region may remain')
+    assert.ok(!home.includes('<footer'), 'no footer element may replace the bar')
     const css = readRenderer('pages/HomePage.css')
-    const bar = css.match(/\.workbench-status\s*\{[^}]*\}/)
-    assert.ok(bar !== null, 'status CSS must exist')
-    const height = bar[0].match(/min-height:\s*(\d+)px/)
-    assert.ok(height !== null && Number(height[1]) >= 22 && Number(height[1]) <= 28, 'status must stay a quiet 22–28px strip')
-    const status = readRenderer('features/system-status/SystemStatus.tsx')
-    assert.ok(status.includes('appInfo.version'), 'status must show the version')
+    assert.ok(!css.includes('.workbench-status'), 'no footer CSS may remain')
+    assert.ok(home.includes('stage-workarea'), 'the work area must extend to the content bottom')
+    const surface = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    assert.ok(surface.includes('About'), 'version/platform must stay reachable under Settings → About')
   })
 
   it('unified buttons cover every control with touch-safe metrics', () => {
@@ -226,7 +436,7 @@ describe('stage 31 frontend shell', () => {
 
   it('workbench regions and every feature surface remain present', () => {
     const home = readRenderer('pages/HomePage.tsx')
-    for (const region of ['<AppChrome', '<Explorer', 'stage-workarea', 'workbench-status']) {
+    for (const region of ['<AppChrome', '<Explorer', 'stage-workarea']) {
       assert.ok(home.includes(region), `shell must keep ${region}`)
     }
     const explorer = readRenderer('features/explorer/Explorer.tsx')
@@ -251,8 +461,8 @@ describe('stage 31 frontend shell', () => {
         : panel
       assert.ok(owner.includes(feature), `shell must keep ${feature}`)
     }
-    const header = readRenderer('features/sessions/SessionHeaderBar.tsx')
-    assert.ok(header.includes('Continue with Looplink'), 'Looplink must remain reachable')
+    const chrome = readRenderer('layouts/AppChrome.tsx')
+    assert.ok(chrome.includes('Continue with Looplink'), 'Looplink must remain reachable in the session overflow')
   })
 
   it('responsive shell never requires three squeezed columns', () => {
@@ -276,7 +486,6 @@ describe('stage 31 frontend shell', () => {
       'features/explorer/Explorer.tsx',
       'features/explorer/ActivityRail.tsx',
       'features/sessions/SessionPanel.tsx',
-      'features/sessions/SessionHeaderBar.tsx',
       'features/sessions/StarkSettingsSurface.tsx',
       'features/sessions/ContextTab.tsx',
       'features/profile/ProfileSection.tsx',

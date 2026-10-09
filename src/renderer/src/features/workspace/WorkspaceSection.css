@@ -72,6 +72,96 @@
   flex: 1;
 }
 
+.workspace__identity-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--stark-space-sm);
+  min-width: 0;
+}
+
+.workspace__project-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-top: 1px;
+  line-height: 1;
+}
+
+.workspace__project-icon img {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.workspace__menu {
+  position: relative;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.workspace__menu-toggle {
+  min-width: 28px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--stark-text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.workspace__menu-toggle:hover {
+  color: var(--stark-text);
+  background: var(--stark-elevated);
+}
+
+.workspace__menu-toggle:focus-visible,
+.workspace__menu-item:focus-visible {
+  outline: 2px solid var(--stark-accent);
+  outline-offset: 2px;
+}
+
+.workspace__menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--stark-elevated);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.workspace__menu-item {
+  width: 100%;
+  padding: var(--stark-space-xs) var(--stark-space-sm);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--stark-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.workspace__menu-item:hover:not(:disabled) {
+  background: var(--stark-surface);
+}
+
+.workspace__menu-item:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .workspace--compact .workspace__name {
   font-size: 13px;
 }
@@ -101,31 +191,79 @@
   overflow-wrap: anywhere;
 }
 
-.workspace__secondary {
-  margin-top: var(--stark-space-sm);
-  align-self: flex-start;
-  padding: var(--stark-space-sm) var(--stark-space-md);
+/* Dedicated folder-picker action. This intentionally uses its own
+   class: the generic `.workspace__secondary` name collides with the
+   secondary workspace pane surface in Explorer.css, whose column
+   flex rules used to stack this button's icon above its label. */
+.workspace__folder-btn {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: 100%;
+  height: 42px;
+  min-height: 42px;
+  padding: 0 14px;
+  font-family: var(--stark-font-sans);
   font-size: 13px;
   font-weight: 600;
   color: var(--stark-text);
-  background: transparent;
+  background: var(--stark-elevated);
   border: 1px solid var(--stark-border);
-  border-radius: var(--stark-radius-md);
+  border-radius: 8px;
   cursor: pointer;
   white-space: nowrap;
+  overflow: hidden;
+  touch-action: manipulation;
 }
 
-.workspace__secondary--compact {
-  margin-top: 0;
-  align-self: center;
-  padding: var(--stark-space-xs) var(--stark-space-sm);
-  font-size: 12px;
+.workspace__folder-btn-icon {
+  display: inline-flex;
   flex-shrink: 0;
+  line-height: 1;
+  color: var(--stark-text-dim);
 }
 
-.workspace__secondary:disabled {
-  opacity: 0.6;
+.workspace__folder-btn-icon img {
+  display: block;
+  width: 17px;
+  height: 17px;
+}
+
+.workspace__folder-btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace__folder-btn:hover:not(:disabled) {
+  filter: brightness(1.12);
+  border-color: var(--stark-lime);
+}
+
+.workspace__folder-btn:hover:not(:disabled) .workspace__folder-btn-icon {
+  color: var(--stark-lime);
+}
+
+.workspace__folder-btn:focus-visible {
+  outline: 2px solid var(--stark-lime);
+  outline-offset: 2px;
+}
+
+.workspace__folder-btn:active:not(:disabled) {
+  background: var(--stark-bg);
+  filter: none;
+}
+
+.workspace__folder-btn:disabled {
+  opacity: 0.55;
+  color: var(--stark-text-dim);
   cursor: default;
+}
+
+.workspace__folder-btn:disabled .workspace__folder-btn-icon {
+  color: inherit;
 }
 
 .workspace__recent {
@@ -152,13 +290,17 @@
 }
 
 .workspace__recent-toggle {
+  display: flex;
+  align-items: center;
+  min-height: 38px;
   font-family: var(--stark-font-mono);
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--stark-text-dim);
   cursor: pointer;
   user-select: none;
+  border-bottom: 1px solid var(--stark-border);
 }
 
 .workspace__recent-toggle:focus-visible {
@@ -202,6 +344,10 @@
   font-size: 14px;
   font-weight: 600;
   color: var(--stark-text);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .workspace__recent-path {

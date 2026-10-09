@@ -21,6 +21,8 @@
     "src/renderer/src/features/explorer/editor-state.test.ts",
     "src/renderer/src/features/explorer/content-safety.test.ts",
     "src/renderer/src/features/explorer/workspace-layout.test.ts",
+    "src/renderer/src/features/explorer/fileIconForName.ts",
+    "src/renderer/src/features/explorer/fileIconForName.test.ts",
     "src/renderer/src/lib/workspace-write-error.ts",
     "src/renderer/src/lib/workspace-write-error.test.ts",
     "src/renderer/src/lib/change-transaction-error.ts",

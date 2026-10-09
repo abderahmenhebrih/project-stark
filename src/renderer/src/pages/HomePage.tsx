@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { useCallback, useEffect, useReducer, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { APP_TAGLINE } from '../../../shared/constants'
 import { useApp } from '../app/app-context'
 import { AppChrome } from '../layouts/AppChrome'
@@ -7,6 +7,10 @@ import { Explorer } from '../features/explorer/Explorer'
 import type { ActivityKind } from '../features/explorer/ActivityRail'
 import { ProfileSection } from '../features/profile/ProfileSection'
 import { SessionPanel } from '../features/sessions/SessionPanel'
+import type {
+  SessionChromeActions,
+  SessionChromeSnapshot
+} from '../features/sessions/SessionPanel'
 import type { SettingsSection } from '../features/sessions/StarkSettingsSurface'
 import {
   initialSessionContextDraftState,
@@ -26,16 +30,41 @@ function accountInitialFor(displayName: string): string {
 }
 
 /**
+ * Shallow display comparison so mirrored chrome snapshots never cause
+ * render loops: identical snapshots keep the previous reference.
+ */
+function sameChromeSnapshot(
+  prev: SessionChromeSnapshot | null,
+  next: SessionChromeSnapshot
+): boolean {
+  if (prev === null) {
+    return false
+  }
+  return (
+    prev.title === next.title &&
+    prev.selectedSessionId === next.selectedSessionId &&
+    prev.sessionsLoading === next.sessionsLoading &&
+    prev.looplinkActing === next.looplinkActing &&
+    prev.sendBusy === next.sendBusy &&
+    prev.sessions.length === next.sessions.length &&
+    prev.sessions.every(
+      (entry, index) =>
+        entry.id === next.sessions[index]?.id && entry.title === next.sessions[index]?.title
+    )
+  )
+}
+
+/**
  * STARK shell with two modes. Without a workspace it is a centered
  * empty-state card (open-folder CTA + recent list). Once a workspace
  * is active it becomes one calm application surface: a single compact
  * global bar, then a work area of primary session pane + contextual
  * secondary workspace pane (review / context / file with a stacked
- * terminal), then a thin status strip. A workspace-tools drawer
- * overlays the work area on demand and never consumes a permanent
- * layout column. The Session panel mounts per workspace so no session
- * state leaks across projects. All pane visibility is renderer-local;
- * nothing persists.
+ * terminal) that extends to the bottom of the content area. A
+ * workspace-tools drawer overlays the work area on demand and never
+ * consumes a permanent layout column. The Session panel mounts per
+ * workspace so no session state leaks across projects. All pane
+ * visibility is renderer-local; nothing persists.
  */
 export function HomePage(): ReactElement {
   const { profile, refreshProfile, workspace } = useApp()
@@ -73,6 +102,11 @@ export function HomePage(): ReactElement {
   // Renderer-local request for the secondary Context tab (e.g. from a
   // composer chip). Consumed once by the Explorer; no persistence.
   const [contextRequest, setContextRequest] = useState(0)
+  // Mirrored session-chrome display for the AppChrome tab strip. The
+  // SessionPanel reducer stays canonical; actions live in a ref so
+  // forwarding them never re-renders.
+  const [chromeSession, setChromeSession] = useState<SessionChromeSnapshot | null>(null)
+  const sessionActionsRef = useRef<SessionChromeActions | null>(null)
 
   // Stable callbacks for effects inside Explorer (identity must not
   // churn or one-shot review handoffs would refire).
@@ -92,6 +126,22 @@ export function HomePage(): ReactElement {
   }, [])
   const handleCloseSettings = useCallback(() => setSettingsOpen(false), [])
   const handleOpenContext = useCallback(() => setContextRequest((count) => count + 1), [])
+  const handleSessionChrome = useCallback(
+    (snapshot: SessionChromeSnapshot, actions: SessionChromeActions) => {
+      sessionActionsRef.current = actions
+      setChromeSession((prev) => (sameChromeSnapshot(prev, snapshot) ? prev : snapshot))
+    },
+    []
+  )
+  const handleNewSession = useCallback(() => {
+    sessionActionsRef.current?.newSession()
+  }, [])
+  const handleSelectSession = useCallback((sessionId: number) => {
+    sessionActionsRef.current?.selectSession(sessionId)
+  }, [])
+  const handleContinueLooplink = useCallback(() => {
+    sessionActionsRef.current?.continueLooplink()
+  }, [])
 
   // A new workspace resets shell + review state; panels remount per
   // workspace (key={active.id}) so no session, message, composer, or
@@ -104,6 +154,7 @@ export function HomePage(): ReactElement {
     setTerminalOpen(false)
     setSettingsOpen(false)
     setSettingsSection('ai')
+    setChromeSession(null)
     setReviewTransactionId(null)
     setReviewChangeSetId(null)
   }
@@ -112,6 +163,7 @@ export function HomePage(): ReactElement {
     if (activeId !== null) {
       contextDraftsDispatch({ type: 'workspace-changed', workspaceId: activeId })
     }
+    sessionActionsRef.current = null
   }, [activeId])
 
   if (active === null) {
@@ -141,6 +193,20 @@ export function HomePage(): ReactElement {
         onOpenSettings={() => handleOpenSettings('ai')}
         onOpenAccount={() => handleOpenSettings('account')}
         accountInitial={accountInitialFor(displayName)}
+        sessionTitle={chromeSession?.title ?? 'New session'}
+        sessions={chromeSession?.sessions ?? []}
+        selectedSessionId={chromeSession?.selectedSessionId ?? null}
+        sessionsLoading={chromeSession?.sessionsLoading ?? false}
+        looplinkActing={chromeSession?.looplinkActing ?? false}
+        looplinkDisabled={
+          chromeSession === null ||
+          chromeSession.selectedSessionId === null ||
+          chromeSession.looplinkActing ||
+          chromeSession.sendBusy
+        }
+        onNewSession={handleNewSession}
+        onSelectSession={handleSelectSession}
+        onContinueLooplink={handleContinueLooplink}
       />
       <div className="stage-workarea">
         <Explorer
@@ -172,8 +238,8 @@ export function HomePage(): ReactElement {
               settingsSection={settingsSection}
               onSettingsSectionChange={setSettingsSection}
               onCloseSettings={handleCloseSettings}
-              onOpenSettings={() => handleOpenSettings('ai')}
               onOpenContext={handleOpenContext}
+              onSessionChrome={handleSessionChrome}
               onReviewTransaction={(transactionId) => {
                 setReviewTransactionId(transactionId)
                 setCanvasView('editor')
@@ -185,13 +251,6 @@ export function HomePage(): ReactElement {
             />
           }
         />
-      </div>
-      <div className="workbench-status" role="contentinfo" aria-label="Status bar">
-        <span className="workbench-status__workspace" title={active.rootPath}>
-          {active.displayName}
-        </span>
-        <span className="workbench-status__spacer" aria-hidden="true" />
-        <SystemStatus />
       </div>
     </div>
   )
