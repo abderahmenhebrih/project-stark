@@ -7,33 +7,6 @@
   background: var(--stark-bg);
 }
 
-.shell__header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--stark-space-sm);
-  min-height: 40px;
-  padding: var(--stark-space-sm) var(--stark-space-md);
-  border-bottom: 1px solid var(--stark-border);
-  background: var(--stark-surface);
-}
-
-.shell__brand {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--stark-space-sm);
-  font-family: var(--stark-font-mono);
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: 0.35em;
-  color: var(--stark-text);
-}
-
-.shell__brand .stark-mark {
-  margin-right: 2px;
-}
-
 .shell__main {
   flex: 1;
   min-height: 0;

@@ -39,8 +39,10 @@
   color: var(--stark-text-dim);
 }
 
-/* Active workspace: bounded desktop workbench, no page scroll. */
-.workbench-root {
+/* Active workspace: one calm application surface — global chrome,
+   work area (rail + contextual sidebar + primary canvas), thin
+   status strip. No page scroll, no stacked toolbars. */
+.stage-shell {
   flex: 1;
   min-height: 0;
   min-width: 0;
@@ -51,111 +53,7 @@
   background: var(--stark-bg);
 }
 
-.workbench-top {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: var(--stark-space-sm);
-  min-width: 0;
-  min-height: 40px;
-  padding: 0 var(--stark-space-md);
-  background: var(--stark-surface);
-  border-bottom: 1px solid var(--stark-border);
-  overflow: hidden;
-}
-
-.workbench-top__brand {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--stark-space-xs);
-}
-
-.workbench-top__wordmark {
-  font-family: var(--stark-font-mono);
-  font-weight: 700;
-  font-size: 12px;
-  letter-spacing: 0.3em;
-  color: var(--stark-text);
-}
-
-.workbench-top__divider {
-  flex: 0 0 auto;
-  width: 1px;
-  align-self: stretch;
-  margin: 8px 0;
-  background: var(--stark-border);
-}
-
-.workbench-top__crumb {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: var(--stark-space-sm);
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.workbench-top__name {
-  flex: 0 1 auto;
-  min-width: 0;
-  font-family: var(--stark-font-sans);
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--stark-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.workbench-top__path {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-family: var(--stark-font-mono);
-  font-size: 11px;
-  color: var(--stark-text-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.workbench-workspace {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  margin-left: auto;
-  max-width: 55%;
-}
-
-.workbench-workspace .workspace {
-  border-bottom: none;
-}
-
-/* Compact workspace header lives inside the 40px top row: the crumb
-   already shows name + path, so only the switch action (and the
-   collapsible recent list) remains on the right. */
-.workbench-workspace .workspace--compact {
-  gap: 2px;
-  padding: 2px 0;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-}
-
-.workbench-workspace .workspace__identity {
-  display: none;
-}
-
-.workbench-workspace .workspace__current--compact {
-  gap: var(--stark-space-sm);
-  justify-content: flex-end;
-}
-
-.workbench-workspace .workspace__recent--collapsible {
-  padding: 2px 0;
-  text-align: right;
-}
-
-.workbench-main {
+.stage-workarea {
   flex: 1;
   min-height: 0;
   min-width: 0;
@@ -168,7 +66,7 @@
   display: flex;
   align-items: center;
   gap: var(--stark-space-sm);
-  min-height: 30px;
+  min-height: 28px;
   min-width: 0;
   padding: 2px var(--stark-space-md);
   border-top: 1px solid var(--stark-border);

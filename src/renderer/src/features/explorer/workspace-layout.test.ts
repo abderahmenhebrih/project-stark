@@ -4,10 +4,11 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
 /**
- * Stage 10B static layout guarantees: the ready-state STARK shell is a
- * bounded desktop workbench (no giant scrolling document), the sidebar
- * and editor are siblings, Monaco receives non-collapsing flex sizing,
- * and the toolbar exposes Edit / Review change without a direct Save.
+ * Stage 10B structural layout guarantees: the ready-state STARK shell is a
+ * bounded viewport grid (rail + contextual sidebar + primary canvas +
+ * terminal drawer), the sidebar and canvas are siblings, Monaco receives
+ * non-collapsing flex sizing, and the toolbar exposes Edit / Review
+ * change without a direct Save.
  * Runs against repository source (cwd is the repo root via npm).
  */
 function readSource(...parts: string[]): string {
@@ -27,24 +28,25 @@ describe('stage 10B workbench layout', () => {
     assert.ok(shell.includes('overflow: hidden'), 'shell must not scroll as a document')
     assert.ok(shell.includes('min-height: 0'), 'shell flex children must be allowed to shrink')
     const home = readRenderer('pages/HomePage.css')
-    assert.ok(home.includes('workbench-root'), 'active workspace must render a workbench root')
-    assert.ok(home.includes('workbench-main'), 'workbench must define a main coding area')
+    assert.ok(home.includes('stage-shell'), 'active workspace must render a stage shell')
+    assert.ok(home.includes('stage-workarea'), 'shell must define a work area row')
     assert.ok(home.includes('overflow: hidden'), 'workbench areas must clip instead of page-scrolling')
     const homeTsx = readRenderer('pages/HomePage.tsx')
-    assert.ok(homeTsx.includes('workbench-root'), 'HomePage must render the workbench root when active')
-    assert.ok(homeTsx.includes('workbench-main'), 'HomePage must render the main coding area when active')
+    assert.ok(homeTsx.includes('stage-shell'), 'HomePage must render the stage shell when active')
+    assert.ok(homeTsx.includes('stage-workarea'), 'HomePage must render the work area when active')
   })
 
-  it('sidebar and editor are siblings in the main workspace layout', () => {
+  it('sidebar and canvas are siblings in the main workspace layout', () => {
     const source = readRenderer('features/explorer/Explorer.tsx')
     assert.ok(source.includes('workbench__sidebar'), 'Explorer must render a sidebar pane')
-    assert.ok(source.includes('workbench__editor'), 'Explorer must render an editor pane')
+    assert.ok(source.includes('primary-canvas'), 'Explorer must render a primary canvas pane')
+    assert.ok(source.includes('workbench__editor'), 'canvas must host the editor pane')
     const sidebarIndex = source.indexOf('workbench__sidebar')
-    const editorIndex = source.indexOf('workbench__editor" aria-label="Editor"')
-    assert.ok(sidebarIndex >= 0 && editorIndex > sidebarIndex, 'sidebar and editor must be sibling panes')
+    const canvasIndex = source.indexOf('primary-canvas')
+    assert.ok(sidebarIndex >= 0 && canvasIndex > sidebarIndex, 'sidebar and canvas must be sibling panes')
     const css = readRenderer('features/explorer/Explorer.css')
     assert.ok(css.includes('.workbench__sidebar'), 'sidebar must be styled as a workbench pane')
-    assert.ok(css.includes('.workbench__editor'), 'editor must be styled as a workbench pane')
+    assert.ok(css.includes('.primary-canvas'), 'canvas must be styled as the primary surface')
   })
 
   it('Monaco container has non-collapsing flex sizing', () => {
@@ -72,18 +74,21 @@ describe('stage 10B workbench layout', () => {
     assert.ok(source.includes('Review change'), 'editing toolbar must expose Review change')
     assert.ok(source.includes('Cancel'), 'editing toolbar must expose Cancel')
     assert.ok(source.includes('<CodeEditor'), 'editing must use Monaco, not a textarea')
+    assert.ok(source.includes('<TerminalPanel') || source.includes('bottom-drawer'), 'terminal must stay docked in the workbench')
     assert.ok(!source.includes('<textarea'), 'editing must not use a separate textarea')
     for (const forbidden of ['>Save<', '>Save file<', 'onSave', 'handleSave']) {
       assert.ok(!source.includes(forbidden), `editing must not offer a direct Save (${forbidden})`)
     }
   })
 
-  it('Explorer, Search, and Changes are all available from the sidebar', () => {
-    const source = readRenderer('features/explorer/Explorer.tsx')
+  it('Explorer, Search, and Changes are all available from the rail', () => {
+    const rail = readRenderer('features/explorer/ActivityRail.tsx')
     for (const label of ['Explorer', 'Search', 'Changes']) {
-      assert.ok(source.includes(label), `sidebar tabs must include ${label}`)
+      assert.ok(rail.includes(label), `rail must include ${label}`)
     }
-    assert.ok(source.includes("role=\"tablist\""), 'sidebar navigation must use tabs')
+    assert.ok(rail.includes('role="tablist"'), 'activity navigation must use tabs')
+    const source = readRenderer('features/explorer/Explorer.tsx')
+    assert.ok(source.includes('<ActivityRail'), 'workbench must render the activity rail')
     assert.ok(source.includes('<SearchPanel'), 'Search must live in the sidebar')
     assert.ok(source.includes('<ChangesPanel'), 'Changes history must live in the sidebar')
     assert.ok(source.includes('workbench__sidebar-body'), 'sidebar panels must scroll inside the sidebar')

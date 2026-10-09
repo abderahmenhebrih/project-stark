@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type Dispatch, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type Dispatch, type ReactElement, type ReactNode } from 'react'
 import type { WorkspaceEntry } from '../../../../shared/workspace-files/types'
 import { APP_NAME } from '../../../../shared/constants'
 import {
@@ -22,6 +22,7 @@ import { getWorkspaceFilesApi } from '../../lib/stark-api'
 import type { WorkspaceSearchMatch } from '../../../../shared/workspace-search/types'
 import type { SessionContextDraft } from '../../../../shared/context/types'
 import { ChangesPanel } from '../changes/ChangesPanel'
+import { ActivityRail, type ActivityKind } from './ActivityRail'
 import { StarkMark } from '../../components/StarkMark'
 import { ChangeSetPanel } from '../changes/ChangeSetPanel'
 import { ChangeSetReview } from '../changes/ChangeSetReview'
@@ -36,6 +37,7 @@ import { toEditorFocus, type EditorFocus } from '../editor/editor-focus'
 import { detectEditorLanguage } from '../editor/editor-language'
 import { GitDiffViewer } from '../git/GitDiffViewer'
 import { GitPanel } from '../git/GitPanel'
+import { WorkspaceSection } from '../workspace/WorkspaceSection'
 import { gitDiffReducer, initialGitDiffState } from '../git/git-state'
 import { SearchPanel } from '../search/SearchPanel'
 import type { SessionContextDraftAction } from '../sessions/session-context-state'
@@ -149,6 +151,18 @@ interface ExplorerProps {
   readonly externalReviewTransactionId?: number | null
   /** Stage 17 review handoff: when set, open this change set's grouped review. */
   readonly externalReviewChangeSetId?: number | null
+  /** Controlled activity driving the contextual sidebar. */
+  readonly activity: ActivityKind
+  readonly onActivityChange: (activity: ActivityKind) => void
+  /** Primary canvas view: AI conversation or editor. */
+  readonly canvasView: 'session' | 'editor'
+  readonly onCanvasViewChange: (view: 'session' | 'editor') => void
+  /** Renderer-local pane visibility (no persistence). */
+  readonly sidebarOpen: boolean
+  readonly terminalOpen: boolean
+  readonly onToggleTerminal: () => void
+  /** Session workspace rendered as the primary canvas view. */
+  readonly sessionNode: ReactNode
 }
 
 function toChangeSetsError(error: unknown, fallback: string): string {
@@ -190,12 +204,24 @@ function toReadError(error: unknown): string {
  * workspace are ignored, and switching workspaces resets tree,
  * preview, search, editor, change review, and Git diff.
  */
-export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTransactionId = null, externalReviewChangeSetId = null }: ExplorerProps): ReactElement {
+export function Explorer({
+  workspaceId,
+  contextDraftsDispatch,
+  externalReviewTransactionId = null,
+  externalReviewChangeSetId = null,
+  activity,
+  onActivityChange,
+  canvasView,
+  onCanvasViewChange,
+  sidebarOpen,
+  terminalOpen,
+  onToggleTerminal,
+  sessionNode
+}: ExplorerProps): ReactElement {
   const [state, dispatch] = useReducer(explorerReducer, workspaceId, (id) => ({
     ...initialExplorerState(),
     workspaceId: id
   }))
-  const [tab, setTab] = useState<'explorer' | 'search' | 'changes' | 'git'>('explorer')
   const [previewLine, setPreviewLine] = useState<number | null>(null)
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [focusRequest, setFocusRequest] = useState<EditorFocus | null>(null)
@@ -303,8 +329,8 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
     const transactionId = externalReviewTransactionId
     // One-shot external navigation: the Session panel requested review
     // of a newly created proposal transaction.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setTab('changes')
+    onActivityChange('changes')
+    onCanvasViewChange('editor')
     changesDispatch({ type: 'review-loading', transactionId })
     getChangeTransaction({ transactionId }).then(
       (transaction) =>
@@ -313,7 +339,7 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
         changesDispatch({ type: 'review-failed', message: normalizeChangeTransactionError(error).message })
     )
     void refreshHistory()
-  }, [workspaceId, externalReviewTransactionId, refreshHistory])
+  }, [workspaceId, externalReviewTransactionId, refreshHistory, onActivityChange, onCanvasViewChange])
 
   // Stage 17 review handoff: open the newly proposed change set in the
   // grouped review and refresh history. Consumed once per id.
@@ -324,8 +350,8 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
     const changeSetId = externalReviewChangeSetId
     // One-shot external navigation: the Session panel requested review
     // of a newly created grouped proposal.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setTab('changes')
+    onActivityChange('changes')
+    onCanvasViewChange('editor')
     changesDispatch({ type: 'review-closed' })
     changeSetsDispatch({ type: 'set-loading', changeSetId })
     getChangeSet({ changeSetId }).then(
@@ -336,7 +362,7 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
     )
     void refreshChangeSets()
     void refreshHistory()
-  }, [workspaceId, externalReviewChangeSetId, refreshHistory, refreshChangeSets])
+  }, [workspaceId, externalReviewChangeSetId, refreshHistory, refreshChangeSets, onActivityChange, onCanvasViewChange])
 
   function handleToggle(path: string): void {
     const expanding = !state.expanded.includes(path)
@@ -382,6 +408,7 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
     }
     setPreviewLine(null)
     loadPreviewFile(path)
+    onCanvasViewChange('editor')
   }
 
   function handleSelectGitDiff(relativePath: string, target: 'staged' | 'unstaged'): void {
@@ -391,6 +418,7 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
     changesDispatch({ type: 'review-closed' })
     const requestId = gitDiffRequestRef.current + 1
     gitDiffRequestRef.current = requestId
+    onCanvasViewChange('editor')
     gitDiffDispatch({ type: 'diff-loading', workspaceId, relativePath, target, requestId })
     getGitDiff({ workspaceId, relativePath, target }).then(
       (result) => {
@@ -422,7 +450,8 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
       return
     }
     setPreviewLine(null)
-    setTab('explorer')
+    onActivityChange('explorer')
+    onCanvasViewChange('editor')
     loadPreviewFile(relativePath)
   }
 
@@ -432,6 +461,7 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
     }
     setPreviewLine(line)
     loadPreviewFile(path)
+    onCanvasViewChange('editor')
     setFocusRequest(toEditorFocus(line, column))
   }
 
@@ -546,6 +576,7 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
     if (!confirmDiscardUnsavedDraft()) {
       return
     }
+    onCanvasViewChange('editor')
     changesDispatch({ type: 'review-loading', transactionId })
     getChangeTransaction({ transactionId }).then(
       (transaction) =>
@@ -559,6 +590,7 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
     if (!confirmDiscardUnsavedDraft()) {
       return
     }
+    onCanvasViewChange('editor')
     changesDispatch({ type: 'review-closed' })
     changeSetsDispatch({ type: 'set-loading', changeSetId })
     getChangeSet({ changeSetId }).then(
@@ -675,65 +707,22 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
   const readOnlyStatus = !previewEditable ? 'Mixed line endings — read-only' : previewLine !== null ? `Line ${previewLine} · Read-only` : 'Read-only'
 
   return (
-    <section className="workbench" aria-label="Explorer">
+    <div className="workbench">
+      <ActivityRail activity={activity} onSelect={onActivityChange} />
+      {sidebarOpen && (
       <aside className="workbench__sidebar" aria-label="Sidebar">
-        <div className="workbench__tabs" role="tablist" aria-label="Explorer views" aria-orientation="vertical">
-          <button
-            className={tab === 'explorer' ? 'explorer__tab explorer__tab--active' : 'explorer__tab'}
-            type="button"
-            role="tab"
-            aria-selected={tab === 'explorer'}
-            title="Explorer"
-            onClick={() => setTab('explorer')}
-          >
-            <span className="explorer__tab-icon" aria-hidden="true">▤</span>
-            <span className="explorer__tab-label">Explorer</span>
-          </button>
-          <button
-            className={tab === 'search' ? 'explorer__tab explorer__tab--active' : 'explorer__tab'}
-            type="button"
-            role="tab"
-            aria-selected={tab === 'search'}
-            title="Search"
-            onClick={() => setTab('search')}
-          >
-            <span className="explorer__tab-icon" aria-hidden="true">⌕</span>
-            <span className="explorer__tab-label">Search</span>
-          </button>
-          <button
-            className={tab === 'changes' ? 'explorer__tab explorer__tab--active' : 'explorer__tab'}
-            type="button"
-            role="tab"
-            aria-selected={tab === 'changes'}
-            title="Changes"
-            onClick={() => setTab('changes')}
-          >
-            <span className="explorer__tab-icon" aria-hidden="true">⇄</span>
-            <span className="explorer__tab-label">Changes</span>
-          </button>
-          <button
-            className={tab === 'git' ? 'explorer__tab explorer__tab--active' : 'explorer__tab'}
-            type="button"
-            role="tab"
-            aria-selected={tab === 'git'}
-            title="Git"
-            onClick={() => setTab('git')}
-          >
-            <span className="explorer__tab-icon" aria-hidden="true">⎇</span>
-            <span className="explorer__tab-label">Git</span>
-          </button>
-        </div>
+        <WorkspaceSection />
         <div className="workbench__sidebar-body">
-          {tab === 'explorer' ? (
+          {activity === 'explorer' ? (
             <TreeNode path="" state={state} onToggle={handleToggle} onSelectFile={handleSelectFile} onAttachFile={handleAttachTreeFile} />
-          ) : tab === 'search' ? (
+          ) : activity === 'search' ? (
             <SearchPanel
               key={workspaceId}
               workspaceId={workspaceId}
               onSelectResult={handleSelectSearchResult}
               onAttachResult={handleAttachSearchResult}
             />
-          ) : tab === 'git' ? (
+          ) : activity === 'git' ? (
             <GitPanel
               key={workspaceId}
               workspaceId={workspaceId}
@@ -760,7 +749,35 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
           )}
         </div>
       </aside>
-      <section className="workbench__editor" aria-label="Editor">
+      )}
+      <section className="primary-canvas" aria-label="Workspace canvas">
+        <div className="canvas-tabs" role="tablist" aria-label="Primary views">
+          <button
+            className={canvasView === 'session' ? 'canvas-tab canvas-tab--session canvas-tab--active' : 'canvas-tab canvas-tab--session'}
+            type="button"
+            role="tab"
+            aria-selected={canvasView === 'session'}
+            onClick={() => onCanvasViewChange('session')}
+          >
+            <span className="canvas-tab__dot" aria-hidden="true" />
+            Session
+          </button>
+          <button
+            className={canvasView === 'editor' ? 'canvas-tab canvas-tab--editor canvas-tab--active' : 'canvas-tab canvas-tab--editor'}
+            type="button"
+            role="tab"
+            aria-selected={canvasView === 'editor'}
+            onClick={() => onCanvasViewChange('editor')}
+          >
+            <span className="canvas-tab__dot" aria-hidden="true" />
+            Editor
+          </button>
+        </div>
+        <div className="canvas-view" hidden={canvasView !== 'session'}>
+          {sessionNode}
+        </div>
+        <div className="canvas-view" hidden={canvasView !== 'editor'}>
+        <section className="workbench__editor" aria-label="Editor">
         <div className="workbench__editor-main">
         {gitDiff.relativePath !== null ? (
           <div className="workbench__editor-body">
@@ -941,8 +958,37 @@ export function Explorer({ workspaceId, contextDraftsDispatch, externalReviewTra
           </div>
         )}
         </div>
-        <TerminalPanel key={`terminal:${workspaceId}`} workspaceId={workspaceId} />
+        </section>
+        </div>
       </section>
-    </section>
+      <div className="bottom-drawer">
+        {terminalOpen ? (
+          <>
+            <div className="bottom-drawer__bar">
+              <span className="bottom-drawer__label">Terminal</span>
+              <button
+                className="stark-btn stark-btn--ghost"
+                type="button"
+                onClick={onToggleTerminal}
+                aria-label="Hide terminal"
+              >
+                Hide
+              </button>
+            </div>
+            <TerminalPanel key={`terminal:${workspaceId}`} workspaceId={workspaceId} />
+          </>
+        ) : (
+          <button
+            className="bottom-drawer__handle"
+            type="button"
+            onClick={onToggleTerminal}
+            aria-expanded={false}
+            aria-label="Show terminal"
+          >
+            <span aria-hidden="true">⌁</span> Terminal
+          </button>
+        )}
+      </div>
+    </div>
   )
 }

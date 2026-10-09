@@ -108,7 +108,6 @@ import './session.css'
 
 interface SessionPanelProps {
   readonly workspaceId: number
-  readonly onCollapse: () => void
   readonly contextDrafts: readonly SessionContextDraft[]
   readonly contextDraftsDispatch: Dispatch<SessionContextDraftAction>
   readonly contextDraftError: string | null
@@ -201,7 +200,6 @@ function connectionStatusLabel(status: ProviderConnectionStatus): string {
  */
 export function SessionPanel({
   workspaceId,
-  onCollapse,
   contextDrafts,
   contextDraftsDispatch,
   contextDraftError,
@@ -252,6 +250,7 @@ export function SessionPanel({
   const [approvalActing, setApprovalActing] = useState(false)
   const [approvalError, setApprovalError] = useState<string | null>(null)
   const [composer, setComposer] = useState('')
+  const [contextOpen, setContextOpen] = useState(true)
   const [noteOpen, setNoteOpen] = useState(false)
   const [noteText, setNoteText] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -1554,21 +1553,47 @@ export function SessionPanel({
       <div className="session__header">
         <p className="session__eyebrow">Session</p>
         <p className="session__title">{selectedSession?.title ?? 'No session'}</p>
-        <button className="explorer__secondary" type="button" onClick={() => void handleNew()} disabled={state.loadingSessions}>
+        <button className="explorer__primary session__new" type="button" onClick={() => void handleNew()} disabled={state.loadingSessions}>
           New
         </button>
-        <button
-          className="explorer__secondary"
-          type="button"
-          onClick={() => setSettingsOpen((open) => !open)}
-          aria-expanded={settingsOpen}
-          aria-label="Toggle AI settings"
-        >
-          Settings
-        </button>
-        <button className="explorer__secondary" type="button" onClick={onCollapse} aria-label="Hide session panel">
-          Hide
-        </button>
+        <details className="session__menu">
+          <summary
+            className="explorer__secondary session__menu-toggle"
+            aria-label="Session options"
+            title="Session options"
+          >
+            ···
+          </summary>
+          <div className="session__menu-body">
+            <button
+              className="explorer__secondary"
+              type="button"
+              onClick={() => setSettingsOpen((open) => !open)}
+              aria-expanded={settingsOpen}
+              aria-label="Toggle AI settings"
+            >
+              Settings
+            </button>
+            {state.sessions.length > 0 && (
+              <label className="session__menu-history" htmlFor="session-history-select">
+                <span className="session__eyebrow">History</span>
+                <select
+                  id="session-history-select"
+                  className="session__select"
+                  value={state.selectedSessionId ?? ''}
+                  onChange={(event) => handleSelect(Number(event.target.value))}
+                  aria-label="Recent sessions"
+                >
+                  {state.sessions.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+        </details>
         <button
           className="explorer__secondary session__looplink"
           type="button"
@@ -2663,24 +2688,6 @@ export function SessionPanel({
         </div>
       ) : (
         <>
-          <div className="session__history">
-            <label className="session__eyebrow" htmlFor="session-history-select">
-              History
-            </label>
-            <select
-              id="session-history-select"
-              className="session__select"
-              value={state.selectedSessionId ?? ''}
-              onChange={(event) => handleSelect(Number(event.target.value))}
-              aria-label="Recent sessions"
-            >
-              {state.sessions.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.title}
-                </option>
-              ))}
-            </select>
-          </div>
           {state.sessionsError !== null && (
             <p className="session__error" role="alert">
               {state.sessionsError}
@@ -2838,7 +2845,16 @@ export function SessionPanel({
           )}
           <div className="session__context" aria-label="Attached context">
             <div className="session__context-header">
-              <p className="session__eyebrow">Attached context</p>
+              <p className="session__eyebrow">Attached context{contextDrafts.length > 0 ? ` (${String(contextDrafts.length)})` : ''}</p>
+              <button
+                className="explorer__secondary"
+                type="button"
+                onClick={() => setContextOpen((open) => !open)}
+                aria-expanded={contextOpen}
+                aria-label={contextOpen ? 'Collapse attached context' : 'Expand attached context'}
+              >
+                {contextOpen ? 'Collapse' : 'Expand'}
+              </button>
               <button
                 className="explorer__secondary"
                 type="button"
@@ -2848,6 +2864,8 @@ export function SessionPanel({
                 Add note
               </button>
             </div>
+            {contextOpen && (
+            <>
             {contextDraftError !== null && (
               <p className="session__error" role="alert">
                 {contextDraftError}
@@ -2958,6 +2976,8 @@ export function SessionPanel({
                   </button>
                 </div>
               </div>
+            )}
+            </>
             )}
           </div>
           <div className={`session__composer session__composer--${proposal.mode}`}>

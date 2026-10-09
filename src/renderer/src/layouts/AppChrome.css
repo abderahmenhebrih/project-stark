@@ -1,0 +1,91 @@
+.app-chrome {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--stark-space-sm);
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 var(--stark-space-md);
+  background: var(--stark-surface);
+  border-bottom: 1px solid var(--stark-border);
+  overflow: hidden;
+}
+
+.app-chrome__brand {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--stark-space-xs);
+}
+
+.app-chrome__wordmark {
+  font-family: var(--stark-font-mono);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.3em;
+  color: var(--stark-text);
+}
+
+.app-chrome__divider {
+  flex: 0 0 auto;
+  width: 1px;
+  align-self: stretch;
+  margin: 8px 0;
+  background: var(--stark-border);
+}
+
+.app-chrome__identity {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.app-chrome__workspace {
+  font-family: var(--stark-font-sans);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--stark-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-chrome__spacer {
+  flex: 0 0 var(--stark-space-sm);
+}
+
+.app-chrome__controls {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.app-chrome__control {
+  min-width: 30px;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--stark-text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.app-chrome__control:hover {
+  color: var(--stark-text);
+  background: var(--stark-elevated);
+}
+
+.app-chrome__control[aria-pressed="true"] {
+  color: var(--stark-lime);
+  background: var(--stark-lime-dim);
+}

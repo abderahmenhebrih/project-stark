@@ -4,12 +4,13 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
 /**
- * Stage 13 structural layout guarantees: the ready-state workbench is
- * LEFT sidebar / CENTER editor / RIGHT session panel as flex siblings
- * inside the bounded viewport root. The session pane has a bounded
- * desktop width with its own internal scrolling, the center keeps
- * min-width: 0, the composer stays visible at the bottom, and the app
- * never returns to a vertically scrolling document.
+ * Stage 13/31 structural layout guarantees: the ready-state shell is
+ * one global bar above a work area of activity rail + contextual
+ * sidebar + primary canvas (AI conversation or editor tabs) with a
+ * docked terminal drawer and a thin status strip. The conversation is
+ * a primary surface (never a fixed ~300px side pane), secondary panes
+ * are user-collapsible, and the app never returns to a vertically
+ * scrolling document.
  * Runs against repository source (cwd is the repo root via npm).
  */
 function readSource(...parts: string[]): string {
@@ -23,33 +24,42 @@ function readRenderer(relative: string): string {
 }
 
 describe('stage 13 session layout', () => {
-  it('workbench renders left, center, and right panes as siblings', () => {
+  it('shell renders one global bar above rail, sidebar, and canvas', () => {
     const home = readRenderer('pages/HomePage.tsx')
-    assert.ok(home.includes('workbench-main'), 'HomePage must render the main coding area')
-    assert.ok(home.includes('<Explorer'), 'center must keep the Explorer/editor pane')
-    assert.ok(home.includes('workbench__session'), 'right must render the session pane')
-    assert.ok(home.includes('<SessionPanel'), 'right pane must host the session panel')
-    const mainIndex = home.indexOf('workbench-main')
-    const explorerIndex = home.indexOf('<Explorer')
-    const sessionIndex = home.indexOf('workbench__session')
-    assert.ok(mainIndex >= 0 && explorerIndex > mainIndex && sessionIndex > explorerIndex, 'panes must be ordered left, center, right')
+    assert.ok(home.includes('<AppChrome'), 'shell must render one global bar')
+    assert.ok(home.includes('<Explorer'), 'shell must render the workspace explorer')
+    assert.ok(home.includes('stage-shell'), 'shell root must bound the viewport')
+    assert.ok(home.includes('stage-workarea'), 'shell must define the work area row')
+    const chrome = readRenderer('layouts/AppChrome.tsx')
+    assert.ok(chrome.includes('<StarkMark'), 'global bar must carry the STARK identity')
+    assert.ok(chrome.includes('workspaceName'), 'global bar must carry the workspace identity')
+    assert.ok(chrome.includes('onToggleSidebar'), 'sidebar visibility must be user-controlled')
+    assert.ok(chrome.includes('onToggleTerminal'), 'terminal visibility must be user-controlled')
   })
 
-  it('session panel has a bounded desktop width with collapse', () => {
-    const css = readRenderer('features/sessions/session.css')
-    assert.ok(css.includes('.workbench__session'), 'session pane CSS must exist')
-    const widthMatch = css.match(/\.workbench__session\s*\{[^}]*flex:\s*0 0 (\d+)px/)
-    assert.ok(widthMatch !== null, 'session pane must declare a fixed desktop width')
-    const width = Number(widthMatch[1])
-    assert.ok(width >= 320 && width <= 420, `session pane defaults to a desktop width inside 320–420px (found ${String(width)}px)`)
-    assert.ok(css.includes('flex: 0 0'), 'session pane must not grow or shrink the center')
-    assert.ok(css.includes('workbench__session-toggle'), 'a visible collapse toggle must exist')
+  it('activity rail selects one contextual sidebar', () => {
+    const rail = readRenderer('features/explorer/ActivityRail.tsx')
+    for (const activity of ['explorer', 'search', 'changes', 'git']) {
+      assert.ok(rail.includes(activity), `rail must offer the ${activity} activity`)
+    }
+    assert.ok(rail.includes('aria-selected'), 'rail must expose the selected activity')
+    assert.ok(rail.includes('onSelect'), 'rail selection must drive the sidebar')
+    const explorer = readRenderer('features/explorer/Explorer.tsx')
+    assert.ok(explorer.includes('<ActivityRail'), 'workbench must render the rail')
+    assert.ok(explorer.includes('activity={activity}'), 'rail must reflect the controlled activity')
+    assert.ok(explorer.includes('sidebarOpen'), 'sidebar must be collapsible, never permanently squeezed')
+  })
+
+  it('session conversation receives the primary canvas width', () => {
+    const explorer = readRenderer('features/explorer/Explorer.tsx')
+    assert.ok(explorer.includes('primary-canvas'), 'workbench must render a primary canvas surface')
+    assert.ok(explorer.includes('canvas-tabs'), 'canvas must switch Session and Editor views')
+    assert.ok(explorer.includes('sessionNode'), 'conversation must mount as a primary canvas view')
+    assert.ok(explorer.includes("canvasView !== 'session'"), 'canvas views must be exclusive')
+    assert.ok(!explorer.includes('workbench__session'), 'conversation must not live in a fixed side pane')
     const home = readRenderer('pages/HomePage.tsx')
-    assert.ok(home.includes('sessionOpen'), 'panel visibility must be a real toggle')
-    assert.ok(home.includes('Show session panel'), 'collapsed state must offer to show the panel')
-    const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('Hide session panel'), 'open state must offer to hide the panel')
-    assert.ok(panel.includes('onCollapse'), 'hide action must collapse through the owner')
+    assert.ok(home.includes("canvasView"), 'canvas view must be renderer-local state')
+    assert.ok(home.includes('<SessionPanel'), 'canvas must host the session workspace')
   })
 
   it('session internals scroll while the app root stays bounded', () => {
@@ -60,15 +70,32 @@ describe('stage 13 session layout', () => {
     assert.ok(css.includes('.session__composer'), 'composer CSS must exist')
     const shell = readRenderer('layouts/MainLayout.css')
     assert.ok(shell.includes('height: 100vh'), 'shell must stay bound to the viewport height')
-    const homeCss = readRenderer('pages/HomePage.css')
-    assert.ok(homeCss.includes('overflow: hidden'), 'workbench areas must clip instead of page-scrolling')
+    const explorerCss = readRenderer('features/explorer/Explorer.css')
+    assert.ok(explorerCss.includes('.primary-canvas'), 'canvas surface CSS must exist')
+    assert.ok(explorerCss.includes('minmax(0, 1fr)'), 'canvas must flex instead of page-scrolling')
   })
 
-  it('center editor keeps min-width zero beside the session pane', () => {
+  it('context section collapses without losing functionality', () => {
+    const panel = readRenderer('features/sessions/SessionPanel.tsx')
+    assert.ok(panel.includes('contextOpen'), 'attached context must be collapsible')
+    assert.ok(panel.includes('aria-expanded={contextOpen}'), 'collapse state must be exposed')
+    assert.ok(panel.includes('Attached context'), 'context drawer must keep its identity')
+    assert.ok(panel.includes('Add note'), 'manual notes must stay reachable')
+  })
+
+  it('terminal drawer collapses to a handle without reserving height', () => {
+    const explorer = readRenderer('features/explorer/Explorer.tsx')
+    assert.ok(explorer.includes('bottom-drawer'), 'terminal must live in a docked drawer')
+    assert.ok(explorer.includes('bottom-drawer__handle'), 'closed drawer must render a minimal handle')
+    assert.ok(explorer.includes('<TerminalPanel'), 'open drawer must host the terminal')
+    assert.ok(explorer.includes('terminalOpen'), 'drawer visibility must be user-controlled')
+  })
+
+  it('center editor keeps min-width zero beside canvas siblings', () => {
     const explorerCss = readRenderer('features/explorer/Explorer.css')
     assert.ok(explorerCss.includes('.workbench__editor'), 'center editor pane must exist')
     assert.ok(explorerCss.includes('min-width: 0'), 'center must not be pushed off screen')
-    assert.ok(explorerCss.includes('flex: 1'), 'center must fill remaining width')
+    assert.ok(explorerCss.includes('.canvas-view'), 'canvas views must own the flex sizing context')
   })
 
   it('session remounts per workspace with no leakage', () => {
@@ -76,6 +103,5 @@ describe('stage 13 session layout', () => {
     assert.ok(home.includes('key={active.id}'), 'workspace switches must remount workspace-scoped panes')
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     assert.ok(panel.includes('workspace-changed'), 'panel must reset on workspace change')
-    assert.ok(panel.includes('key={workspaceId}') || home.includes('<SessionPanel'), 'session state must be workspace-keyed')
   })
 })

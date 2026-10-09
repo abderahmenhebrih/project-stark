@@ -1,37 +1,64 @@
+/* Primary work area grid: rail | contextual sidebar | canvas,
+   with the terminal drawer spanning the bottom row. */
 .workbench {
   flex: 1;
   min-height: 0;
   min-width: 0;
   width: 100%;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "rail sidebar canvas"
+    "drawer drawer drawer";
+  gap: 8px;
+  padding: 8px;
   overflow: hidden;
   background: var(--stark-bg);
   text-align: left;
 }
 
-.workbench__sidebar {
-  flex: 0 0 320px;
-  width: 320px;
-  min-height: 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: row;
-  overflow: hidden;
-  background: var(--stark-surface);
-  border-right: 1px solid var(--stark-border);
-}
-
-/* Vertical activity rail: icon + full label, never truncated. */
-.workbench__tabs {
-  flex: 0 0 56px;
-  width: 56px;
+.activity-rail {
+  grid-area: rail;
+  width: 48px;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+.workbench__sidebar {
+  grid-area: sidebar;
+  width: 264px;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--stark-surface);
+  border: 1px solid var(--stark-border);
+  border-radius: 12px;
+}
+
+.workbench__sidebar > .workspace--compact {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: var(--stark-space-sm) var(--stark-space-sm) var(--stark-space-xs);
+  gap: var(--stark-space-xs);
+}
+
+/* Rail tabs fill the slim activity column. */
+.workbench__tabs {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
   gap: 2px;
-  padding: var(--stark-space-sm) var(--stark-space-xs);
-  border-right: 1px solid var(--stark-border);
-  background: var(--stark-bg);
+  padding: 2px;
+  border: none;
+  background: transparent;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: none;
@@ -246,8 +273,8 @@ button.explorer__attach:hover {
 .explorer__name {
   flex: 1 1 auto;
   min-width: 0;
-  font-family: var(--stark-font-mono);
-  font-size: 12px;
+  font-family: var(--stark-font-sans);
+  font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -323,21 +350,166 @@ button.explorer__attach:hover {
 
 @media (max-width: 1500px) {
   .workbench__sidebar {
-    flex-basis: 304px;
-    width: 304px;
+    flex-basis: 248px;
+    width: 248px;
   }
 }
 
 @media (max-width: 1280px) {
   .workbench__sidebar {
-    flex-basis: 288px;
-    width: 288px;
+    flex-basis: 232px;
+    width: 232px;
   }
 }
 
 @media (max-width: 900px) {
   .workbench__sidebar {
-    flex-basis: 272px;
-    width: 272px;
+    flex-basis: 216px;
+    width: 216px;
   }
+}
+
+/* Primary canvas: the dominant rounded surface (Session | Editor). */
+.primary-canvas {
+  grid-area: canvas;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--stark-surface);
+  border: 1px solid var(--stark-border);
+  border-radius: 14px;
+}
+
+.canvas-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 12px 0;
+}
+
+.canvas-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 12px;
+  font-family: var(--stark-font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--stark-text-dim);
+  background: transparent;
+  border: none;
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+  white-space: nowrap;
+}
+
+.canvas-tab:hover {
+  color: var(--stark-text);
+  background: var(--stark-elevated);
+}
+
+.canvas-tab__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.4;
+  flex: 0 0 auto;
+}
+
+.canvas-tab--active {
+  color: var(--stark-text);
+}
+
+.canvas-tab--session.canvas-tab--active .canvas-tab__dot {
+  background: var(--stark-magenta);
+  opacity: 1;
+}
+
+.canvas-tab--editor.canvas-tab--active .canvas-tab__dot {
+  background: var(--stark-lime);
+  opacity: 1;
+}
+
+.canvas-view {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 8px 12px 12px;
+}
+
+.canvas-view[hidden] {
+  display: none;
+}
+
+.canvas-view > .session {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.canvas-view > .workbench__editor {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Docked terminal drawer: a 32px handle when closed. */
+.bottom-drawer {
+  grid-area: drawer;
+  min-width: 0;
+}
+
+.bottom-drawer__handle {
+  width: 100%;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--stark-space-xs);
+  font-family: var(--stark-font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--stark-text-dim);
+  background: var(--stark-surface);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.bottom-drawer__handle:hover {
+  color: var(--stark-text);
+}
+
+.bottom-drawer__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--stark-space-sm);
+  min-height: 32px;
+  padding: 0 var(--stark-space-md);
+}
+
+.bottom-drawer__label {
+  font-family: var(--stark-font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--stark-text-dim);
+}
+
+.bottom-drawer .terminal {
+  border: 1px solid var(--stark-border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--stark-surface);
 }

@@ -124,15 +124,23 @@ no migration 019 was created.
   `session-layout.test.ts` (width-range assertion),
   `workbench-polish.test.ts` rewritten for pass 2 (15 regression
   tests), tsconfig include entry.
-- Regression test: `workbench-polish` suite — 17/17 green
-  (overflow, lime/magenta tokens, emblem slot, top bar, rail,
-  filenames, scrollbars, composer, conversation, buttons, typography,
-  compact profile, single status bar, empty state, regions/
-  functionality, no-HTML/no-IPC, schema v18);
-  full gate green (282 suites / 1841 tests / 0 failures).
+- Regression test: `workbench-polish` suite — 18/18 green
+  (global bar, rail/sidebar selection, primary canvas, context
+  collapse, terminal drawer, composer dock, secondary actions, brand
+  tokens, emblem slot, filenames, scrollbars, status strip, buttons,
+  typography, regions/functionality, responsive shell, no-HTML/no-IPC,
+  schema v18);
+  full gate green (282 suites / 1845 tests / 0 failures).
 - Retest result: PASS (automated). Human visual sign-off pending —
   STOPPED for human inspection per instruction; Stage 31 manual
   acceptance remains paused.
+- Rearchitecture note: incremental CSS could not fix the outdated
+  three-pane shell, so the renderer was restructured (single AppChrome
+  bar, 48px activity rail, contextual sidebar, tabbed Session|Editor
+  primary canvas, docked terminal drawer, thin status strip, session
+  options menu, collapsible context drawer). Renderer-only; all
+  shipped functionality preserved with zero main/IPC/DB/schema
+  changes.
 
 ---
 

@@ -1,43 +1,3 @@
-/* Right-hand STARK Session panel: bounded flex column with its own
-   internal scrolling. The center editor keeps min-width: 0; this pane
-   never grows and never pushes Monaco off screen. */
-
-.workbench__session {
-  flex: 0 0 384px;
-  width: 384px;
-  min-height: 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--stark-surface);
-  border-left: 1px solid var(--stark-border);
-}
-
-.workbench__session-toggle {
-  flex: 0 0 auto;
-  align-self: stretch;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--stark-space-xs);
-  color: var(--stark-text-dim);
-  background: var(--stark-surface);
-  border: none;
-  border-left: 1px solid var(--stark-border);
-  cursor: pointer;
-  writing-mode: vertical-rl;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.workbench__session-toggle:focus-visible {
-  outline: 2px solid var(--stark-accent);
-  outline-offset: -2px;
-}
-
 .session {
   flex: 1;
   min-height: 0;
@@ -106,6 +66,55 @@
   background: transparent;
   border-color: transparent;
   color: var(--stark-lime);
+}
+
+/* Session options menu: secondary actions without permanent chrome. */
+.session__menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.session__menu-toggle {
+  list-style: none;
+}
+
+.session__menu-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.session__menu-body {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: var(--stark-space-xs);
+  min-width: 220px;
+  max-width: 280px;
+  padding: var(--stark-space-sm);
+  background: var(--stark-elevated);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-md);
+}
+
+.session__menu-history {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.session__menu-history .session__select {
+  width: 100%;
+}
+
+/* Conversation reads as one calm column with a readable measure. */
+.session__list,
+.session__generation-error {
+  width: 100%;
+  max-width: 880px;
+  margin-inline: auto;
 }
 
 .session__notice {
@@ -505,15 +514,7 @@
 }
 
 @media (max-width: 1500px) {
-  .workbench__session {
-    flex-basis: 352px;
-    width: 352px;
-  }
-}
-
-@media (max-width: 1280px) {
-  .workbench__session {
-    flex-basis: 328px;
-    width: 328px;
+  .session__composer {
+    margin: var(--stark-space-xs) var(--stark-space-sm) var(--stark-space-sm);
   }
 }
