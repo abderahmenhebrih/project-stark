@@ -116,14 +116,12 @@
   margin-bottom: var(--stark-space-xs);
 }
 
-.editor-empty__brand {
-  margin: 0;
-  font-family: var(--stark-font-mono);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.35em;
-  text-indent: 0.35em;
-  color: var(--stark-text);
+.editor-empty__wordmark {
+  display: block;
+  height: 22px;
+  width: auto;
+  max-width: 160px;
+  object-fit: contain;
 }
 
 .editor-empty__title {

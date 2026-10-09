@@ -19,13 +19,12 @@
   border-radius: var(--stark-radius-lg);
 }
 
-.onboarding__brand {
-  margin: 0;
-  font-family: var(--stark-font-mono);
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: 0.35em;
-  color: var(--stark-text-dim);
+.onboarding__logo {
+  display: block;
+  width: 200px;
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
 }
 
 .onboarding__question {

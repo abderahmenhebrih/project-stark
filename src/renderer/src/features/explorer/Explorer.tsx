@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type Dispatch, type ReactElement, type ReactNode } from 'react'
-import { APP_NAME } from '../../../../shared/constants'
 import {
   acceptChangeTransaction,
   createFileChange,
@@ -23,6 +22,7 @@ import type { SessionContextDraft } from '../../../../shared/context/types'
 import { ChangesPanel } from '../changes/ChangesPanel'
 import type { ActivityKind } from './ActivityRail'
 import { StarkMark } from '../../components/StarkMark'
+import { STARK_WORDMARK_URL } from '../../components/brandAssets'
 import { StarkIcon } from '../../components/icons/StarkIcon'
 import { WorkspaceToolsDrawer } from '../../layouts/WorkspaceToolsDrawer'
 import { WorkspaceSecondaryPane, type SecondaryTabKind } from '../workspace/WorkspaceSecondaryPane'
@@ -995,7 +995,7 @@ export function Explorer({
       return (
         <div className="editor-empty" role="status" aria-label="No file selected">
           <StarkMark size="hero" />
-          <p className="editor-empty__brand">{APP_NAME}</p>
+          <img className="editor-empty__wordmark" src={STARK_WORDMARK_URL} alt="STARK" />
           <p className="editor-empty__title">Select a file to open</p>
           <p className="editor-empty__hint">Open a file from the Explorer · attach context · ask STARK on the right</p>
         </div>

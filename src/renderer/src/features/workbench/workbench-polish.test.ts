@@ -337,16 +337,17 @@ describe('stage 31 frontend shell', () => {
     assert.ok(explorer.includes("tab: 'review'") || explorer.includes('Review'), 'review must exist as a secondary tab')
   })
 
-  it('emblem asset slot exists with a faithful temporary stand-in', () => {
+  it('emblem renders the official starkicon asset (placeholder retired)', () => {
     const mark = readRenderer('components/StarkMark.tsx')
     assert.ok(mark.includes('StarkMark'), 'StarkMark component must exist')
-    assert.ok(mark.includes('<img'), 'asset slot must render the official image when provided')
-    assert.ok(mark.includes('stark-mark__fallback'), 'a temporary stand-in must cover the missing asset')
-    assert.ok(mark.includes('official emblem asset'), 'slot must document the official-asset contract')
+    assert.ok(mark.includes('<img'), 'StarkMark must render the official image')
+    assert.ok(mark.includes('STARK_ICON_URL') || mark.includes('starkicon.png'), 'StarkMark must render the real starkicon asset')
+    assert.ok(!mark.includes('stark-mark__fallback'), 'CSS placeholder must no longer be rendered in production branding')
+    assert.ok(mark.includes('official starkicon'), 'component must document the official-asset contract')
     const css = readRenderer('components/StarkMark.css')
-    assert.ok(css.includes('var(--stark-lime)'), 'stand-in must use lime')
-    assert.ok(css.includes('var(--stark-magenta)'), 'stand-in must use magenta, never mint')
-    assert.ok(css.includes('linear-gradient'), 'stand-in must show both accents side by side, not mostly lime')
+    assert.ok(!css.includes('stark-mark__fallback'), 'placeholder fallback CSS must be removed')
+    assert.ok(!css.includes('linear-gradient(135deg, var(--stark-lime)'), 'temporary gradient placeholder must be removed')
+    assert.ok(css.includes('object-fit: contain'), 'official asset must preserve aspect ratio')
   })
 
   it('idle UI shows both brand accents with magenta in AI roles', () => {

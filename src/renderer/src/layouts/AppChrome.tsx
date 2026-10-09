@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { StarkMark } from '../components/StarkMark'
+import { STARK_WORDMARK_URL } from '../components/brandAssets'
 import { StarkIcon } from '../components/icons/StarkIcon'
 import type { SessionChromeSession } from '../features/sessions/SessionPanel'
 import './AppChrome.css'
@@ -96,9 +97,9 @@ export function AppChrome({
       >
         <StarkIcon name="menu" size={17} />
       </button>
-      <span className="app-chrome__brand">
+      <span className="app-chrome__brand" aria-label="STARK">
         <StarkMark size="bar" />
-        <span className="app-chrome__wordmark">STARK</span>
+        <img className="app-chrome__wordmark" src={STARK_WORDMARK_URL} alt="STARK" />
       </span>
       <span className="app-chrome__divider" aria-hidden="true" />
       <span className="app-chrome__identity" title={workspacePath}>

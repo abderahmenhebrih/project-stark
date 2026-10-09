@@ -3,6 +3,7 @@ import type { ProviderConnectionStatus } from '../../../../shared/providers/type
 import { useApp } from '../../app/app-context'
 import { useAppInfo } from '../../hooks/useAppInfo'
 import { StarkIcon } from '../../components/icons/StarkIcon'
+import { STARK_FULL_LOGO_URL } from '../../components/brandAssets'
 import { AccountSection } from '../account/AccountSection'
 import { ProfileSection } from '../profile/ProfileSection'
 import { CAPABILITY_ORDER, capabilityLabel, legalModesFor, type CapabilityPanelAction, type CapabilityPanelState } from './capabilities-state'
@@ -988,8 +989,12 @@ export function StarkSettingsSurface(props: StarkSettingsSurfaceProps): ReactEle
             )}
             {section === 'about' && (
               <section aria-label="About STARK">
+                <img
+                  className="stark-settings__about-logo"
+                  src={STARK_FULL_LOGO_URL}
+                  alt="STARK"
+                />
                 <div className="session__settings-row">
-                  <span className="session__eyebrow">STARK</span>
                   <span className="session__provider-name">
                     {appInfo === null ? 'Starting…' : `v${appInfo.version} · ${appInfo.platform} · Electron ${appInfo.electron}`}
                   </span>

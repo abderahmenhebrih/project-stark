@@ -1,6 +1,6 @@
 import { useId, useState, type ChangeEvent, type FormEvent, type ReactElement } from 'react'
-import { APP_NAME } from '../../../../shared/constants'
 import { useApp } from '../../app/app-context'
+import { STARK_FULL_LOGO_URL } from '../../components/brandAssets'
 import './OnboardingPage.css'
 
 /**
@@ -46,7 +46,7 @@ export function OnboardingPage(): ReactElement {
   return (
     <main className="onboarding">
       <div className="onboarding__card">
-        <p className="onboarding__brand">{APP_NAME}</p>
+        <img className="onboarding__logo" src={STARK_FULL_LOGO_URL} alt="STARK" />
         <h1 className="onboarding__question">How should I call you?</h1>
         <form className="onboarding__form" onSubmit={handleSubmit} noValidate>
           <label className="onboarding__label" htmlFor={inputId}>

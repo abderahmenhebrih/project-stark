@@ -16,15 +16,16 @@
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: var(--stark-space-xs);
+  gap: 6px;
+  min-height: 0;
 }
 
 .app-chrome__wordmark {
-  font-family: var(--stark-font-mono);
-  font-weight: 700;
-  font-size: 12px;
-  letter-spacing: 0.3em;
-  color: var(--stark-text);
+  display: block;
+  height: 20px;
+  width: auto;
+  max-width: 110px;
+  object-fit: contain;
 }
 
 .app-chrome__divider {
