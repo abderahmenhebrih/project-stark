@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState, type ReactElement } from 'react'
-import type { ExtensionEntry } from '../../../../shared/extension-registry/types'
-import { listFeaturedExtensions, searchExtensionCatalog } from '../../lib/stark-api'
+import type { ExtensionEntry, InstalledExtensionEntry } from '../../../../shared/extension-registry/types'
+import { installExtension, listFeaturedExtensions, listInstalledExtensions, searchExtensionCatalog } from '../../lib/stark-api'
 import { StarkIcon } from '../../components/icons/StarkIcon'
 import './ExtensionsPanel.css'
 
@@ -62,22 +62,25 @@ function ExtensionIcon({ entry }: { readonly entry: ExtensionEntry }): ReactElem
 }
 
 /**
- * Extension catalog browser (display only).
+ * Extension catalog browser with safe installation (store only).
  *
- * The panel never touches the registry: every keystroke debounces
- * 300ms into the main-owned catalog bridge (fixed Open VSX origin,
- * 10s timeout, zero retries, max 20 results), with stale responses
- * discarded by monotonic request ids. Empty queries show the popular
- * catalog; failures show calm copy plus a user-initiated Retry only.
- * All registry text renders as plain React text. Rows carry a
- * "Catalog only" badge — browsing is real, everything executable
- * lands in a later step.
+ * The panel never touches the registry or the filesystem: keystrokes
+ * debounce 300ms into the main-owned catalog bridge (fixed Open VSX
+ * origin, 10s timeout, zero retries, max 20 results), with stale
+ * responses discarded by monotonic request ids. Install buttons send
+ * normalized identity only; download, validation, extraction, and
+ * storage are main-owned and bounded, and installed packages stay
+ * inert files (never activated or executed). All registry text
+ * renders as plain React text.
  */
 export function ExtensionsPanel(): ReactElement {
   const [input, setInput] = useState('')
   const [state, dispatch] = useReducer(catalogReducer, undefined, initialCatalogState)
   const { entries, loading, error, loadedQuery } = state
   const requestIdRef = useRef(0)
+  const [installingIds, setInstallingIds] = useState<readonly string[]>([])
+  const [failedIds, setFailedIds] = useState<readonly string[]>([])
+  const [installedByKey, setInstalledByKey] = useState<Readonly<Record<string, InstalledExtensionEntry>>>({})
 
   useEffect(() => {
     const trimmed = input.trim()
@@ -124,6 +127,102 @@ export function ExtensionsPanel(): ReactElement {
       clearTimeout(timer)
     }
   }, [input])
+
+  useEffect(() => {
+    let cancelled = false
+    listInstalledExtensions().then(
+      (installed) => {
+        if (cancelled) {
+          return
+        }
+        const next: Record<string, InstalledExtensionEntry> = {}
+        for (const item of installed) {
+          next[`${item.namespace}.${item.name}@${item.version}`] = item
+        }
+        setInstalledByKey(next)
+      },
+      () => {
+        // Installed state stays empty; catalog rows remain installable.
+      }
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  function refreshInstalled(): void {
+    listInstalledExtensions().then(
+      (installed) => {
+        const next: Record<string, InstalledExtensionEntry> = {}
+        for (const item of installed) {
+          next[`${item.namespace}.${item.name}@${item.version}`] = item
+        }
+        setInstalledByKey(next)
+      },
+      () => {
+        // Keep the last known installed set on refresh failure.
+      }
+    )
+  }
+
+  function handleInstall(entry: ExtensionEntry): void {
+    if (installingIds.includes(entry.id)) {
+      return
+    }
+    setFailedIds((ids) => ids.filter((id) => id !== entry.id))
+    setInstallingIds((ids) => (ids.includes(entry.id) ? ids : [...ids, entry.id]))
+    installExtension({ namespace: entry.namespace, name: entry.name, version: entry.version }).then(
+      () => {
+        setInstallingIds((ids) => ids.filter((id) => id !== entry.id))
+        refreshInstalled()
+      },
+      () => {
+        setInstallingIds((ids) => ids.filter((id) => id !== entry.id))
+        setFailedIds((ids) => (ids.includes(entry.id) ? ids : [...ids, entry.id]))
+      }
+    )
+  }
+
+  function installKey(entry: ExtensionEntry): string {
+    return `${entry.namespace}.${entry.name}@${entry.version}`
+  }
+
+  function renderInstallAction(entry: ExtensionEntry): ReactElement {
+    if (installedByKey[installKey(entry)] !== undefined) {
+      return (
+        <button className="extensions__installed" type="button" disabled aria-label={`${entry.displayName} installed`}>
+          Installed
+        </button>
+      )
+    }
+    if (installingIds.includes(entry.id)) {
+      return (
+        <button className="extensions__install" type="button" disabled aria-label={`Installing ${entry.displayName}`}>
+          Installing…
+        </button>
+      )
+    }
+    if (failedIds.includes(entry.id)) {
+      return (
+        <span className="extensions__install-failed">
+          <span className="extensions__install-failed-copy">Install failed</span>
+          <button className="extensions__retry" type="button" onClick={() => handleInstall(entry)}>
+            Retry
+          </button>
+        </span>
+      )
+    }
+    return (
+      <button
+        className="extensions__install"
+        type="button"
+        onClick={() => handleInstall(entry)}
+        aria-label={`Install ${entry.displayName}`}
+      >
+        Install
+      </button>
+    )
+  }
 
   function handleRetry(): void {
     const requestId = requestIdRef.current + 1
@@ -202,12 +301,33 @@ export function ExtensionsPanel(): ReactElement {
                   {entry.version} · {formatDownloads(entry.downloadCount)} downloads
                   {entry.rating !== null && ` · ★ ${entry.rating.toFixed(1)}`}
                 </p>
+                <div className="extensions__actions">{renderInstallAction(entry)}</div>
               </div>
             </li>
           ))}
         </ul>
       )}
-      <p className="extensions__footnote">Browsing only — setup flows land after STARK v1.</p>
+      {Object.values(installedByKey).length > 0 && (
+        <>
+          <p className="extensions__group-name">Installed</p>
+          <ul className="extensions__list" aria-label="Installed extensions">
+            {Object.values(installedByKey).map((item) => (
+              <li key={`${item.namespace}.${item.name}@${item.version}`} className="extensions__installed-row">
+                <span className="extensions__icon-fallback" aria-hidden="true">
+                  <StarkIcon name="extensions" size={16} />
+                </span>
+                <span className="extensions__installed-details">
+                  <span className="extensions__installed-name">{item.displayName}</span>
+                  <span className="extensions__installed-meta">
+                    {item.namespace} · {item.version}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <p className="extensions__footnote">Installed packages stay inert — nothing runs yet.</p>
       <p className="extensions__group-name">Built-in</p>
       <ul className="extensions__list">
         {BUILT_IN.map((name) => (

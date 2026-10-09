@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog } from 'electron'
+import { join } from 'node:path'
 import { IPC_CHANNELS } from '../shared/constants'
 import type { CloudAccountStatus } from '../shared/cloud-account/types'
 import type { ProjectRuntimeUpdatedEvent } from '../shared/project-runtime/types'
@@ -10,6 +11,11 @@ import { StarkDatabase } from './database/database'
 import { resolveDatabaseFile } from './database/paths'
 import { DiagnosticLogger } from './diagnostics/diagnostic-logger'
 import { redactForLog } from './diagnostics/diagnostic-redaction'
+import {
+  cleanupStaleInstallStaging,
+  EXTENSION_INSTALL_DIR_NAME,
+  ExtensionInstallService
+} from './extension-install/extension-install-service'
 import { registerIpcHandlers } from './ipc'
 import { createTerminalEventSink } from './ipc/terminal'
 import { applyContentSecurityPolicy } from './security/session'
@@ -283,6 +289,14 @@ void app.whenReady().then(() => {
     fatalPresenter.presentFatal('local-data')
     return
   }
+  // Extension-install crash safety: drop only STARK-owned stale
+  // staging/temp names under <userData>/extensions (bounded, never
+  // throws). Nothing is installed or executed at startup.
+  try {
+    cleanupStaleInstallStaging(app.getPath('userData'))
+  } catch {
+    // Best effort: startup must never break on staging cleanup.
+  }
   // Services are constructed from initialized infrastructure first, then
   // handed explicitly to the IPC layer — no database-backed handler
   // exists before its dependencies do.
@@ -380,6 +394,9 @@ void app.whenReady().then(() => {
     workspaceFileWriteService: services.workspaceFileWriteService,
     workspaceSearchService: services.workspaceSearchService,
     extensionRegistryService: services.extensionRegistryService,
+    extensionInstallService: new ExtensionInstallService(
+      join(app.getPath('userData'), EXTENSION_INSTALL_DIR_NAME)
+    ),
     changeTransactionService: services.changeTransactionService,
     terminalService: services.terminalService,
     terminalManager,

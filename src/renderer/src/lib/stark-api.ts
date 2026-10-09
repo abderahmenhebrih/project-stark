@@ -8,7 +8,12 @@ import type {
   WorkspaceTextFileWriteResult
 } from '../../../shared/workspace-files/types'
 import type { WorkspaceSearchRequest, WorkspaceSearchResult } from '../../../shared/workspace-search/types'
-import type { ExtensionSearchRequest, ExtensionSearchResult } from '../../../shared/extension-registry/types'
+import type {
+  ExtensionInstallIdentity,
+  ExtensionSearchRequest,
+  ExtensionSearchResult,
+  InstalledExtensionEntry
+} from '../../../shared/extension-registry/types'
 
 /**
  * Typed accessor for the preload bridge.
@@ -105,6 +110,28 @@ export function listFeaturedExtensions(): Promise<ExtensionSearchResult> {
   const api = getStarkApi()?.extensions.listFeatured
   if (api === undefined) {
     return Promise.reject(new Error('Extension catalog is unavailable.'))
+  }
+  return api()
+}
+
+/**
+ * Typed extension-install callers (store only, never execute).
+ *
+ * The panel supplies normalized identity only; download, paths, and
+ * validation are main-owned through the fixed preload bridge.
+ */
+export function installExtension(identity: ExtensionInstallIdentity): Promise<InstalledExtensionEntry> {
+  const api = getStarkApi()?.extensions.install
+  if (api === undefined) {
+    return Promise.reject(new Error('Extension installation is unavailable.'))
+  }
+  return api(identity)
+}
+
+export function listInstalledExtensions(): Promise<readonly InstalledExtensionEntry[]> {
+  const api = getStarkApi()?.extensions.listInstalled
+  if (api === undefined) {
+    return Promise.reject(new Error('Extension installation is unavailable.'))
   }
   return api()
 }

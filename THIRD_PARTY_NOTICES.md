@@ -43,3 +43,22 @@ STARK's own application license is unchanged by these notices.
   non-boxed renditions, chosen over the boxed official-logo variants.
 - **STARK application license:** unchanged. These notices cover only
   the listed icon assets.
+
+---
+
+## yauzl ZIP reader (MIT)
+
+- **Source project:** yauzl — a Node.js ZIP reader with lazy entry
+  access used only to inspect and stream validated VSIX archives.
+- **Repository:** https://github.com/thejoshwolfe/yauzl
+- **License:** MIT License. The full license text ships in the
+  installed package (`node_modules/yauzl/LICENSE`).
+- **How the library is used:** declared as a direct runtime dependency
+  (`yauzl`, MIT) plus type declarations (`@types/yauzl`, dev only).
+  The main-process extension installer opens downloaded VSIX files
+  with lazy entries, validates every entry name/mode/size before
+  extracting, and streams file bytes through hard caps. No archive
+  is ever trusted: traversal, absolute, drive-letter, symlink, and
+  oversize entries are rejected.
+- **STARK application license:** unchanged. This notice covers only
+  the listed library.

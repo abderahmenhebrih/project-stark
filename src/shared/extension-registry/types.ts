@@ -13,6 +13,8 @@
 /** One normalized catalog entry. Icon is a validated HTTPS URL or null. */
 export interface ExtensionEntry {
   readonly id: string
+  readonly namespace: string
+  readonly name: string
   readonly displayName: string
   readonly publisher: string
   readonly description: string
@@ -34,8 +36,29 @@ export interface ExtensionSearchResult {
   readonly truncated: boolean
 }
 
+/** Narrow install identity: normalized registry coordinates only, never a URL or path. */
+export interface ExtensionInstallIdentity {
+  readonly namespace: string
+  readonly name: string
+  readonly version: string
+}
+
+/** Install outcome: stored locally and inert (never activated). */
+export type ExtensionInstallStatus = 'installed' | 'already_installed'
+
+/** Normalized installed metadata. No absolute paths, no code, no raw manifest. */
+export interface InstalledExtensionEntry {
+  readonly namespace: string
+  readonly name: string
+  readonly displayName: string
+  readonly version: string
+  readonly status: ExtensionInstallStatus
+}
+
 /** Renderer-facing extension-catalog bridge (see StarkApi in shared/types). */
 export interface ExtensionsApi {
   search: (request: ExtensionSearchRequest) => Promise<ExtensionSearchResult>
   listFeatured: () => Promise<ExtensionSearchResult>
+  install: (identity: ExtensionInstallIdentity) => Promise<InstalledExtensionEntry>
+  listInstalled: () => Promise<readonly InstalledExtensionEntry[]>
 }

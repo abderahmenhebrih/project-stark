@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { IPC_CHANNELS } from '../../shared/constants'
 import { createServices } from '../application/create-services'
+import { ExtensionInstallService } from '../extension-install/extension-install-service'
 import { runMigrations, migrations } from '../database/migrations/index'
 import { ChangeSetRepository } from '../database/repositories/change-set-repository'
 import { ChangeTransactionRepository } from '../database/repositories/change-transaction-repository'
@@ -168,12 +172,15 @@ const EXPECTED_PRODUCTION_CHANNELS: readonly string[] = [
   IPC_CHANNELS.accountCancelSignIn,
   IPC_CHANNELS.accountSignOut,
   IPC_CHANNELS.extensionsSearch,
-  IPC_CHANNELS.extensionsListFeatured
+  IPC_CHANNELS.extensionsListFeatured,
+  IPC_CHANNELS.extensionsInstall,
+  IPC_CHANNELS.extensionsListInstalled
 ]
 
 describe('authoritative production IPC surface', () => {
   it('exposes exactly the production channel set — no more, no fewer', () => {
     const { db, services } = openProductionShapedServices()
+    const installRoot = mkdtempSync(join(tmpdir(), 'stark-ext-surface-'))
     try {
       const terminalManager = new TerminalManager(
         {
@@ -212,11 +219,13 @@ describe('authoritative production IPC surface', () => {
         usageService: services.usageService,
         cloudAccountService: services.cloudAccountService,
         extensionRegistryService: services.extensionRegistryService,
+        extensionInstallService: new ExtensionInstallService(installRoot),
         workspaces: new WorkspaceRepository(db),
         codingSessions: new CodingSessionRepository(db)
       }).map((binding) => binding.channel)
       assert.deepEqual([...channels].sort(), [...EXPECTED_PRODUCTION_CHANNELS].sort())
     } finally {
+      rmSync(installRoot, { recursive: true, force: true })
       db.close()
     }
   })
@@ -290,7 +299,13 @@ describe('authoritative production IPC surface', () => {
       'IPC_CHANNELS.accountSignOut',
       'IPC_CHANNELS.accountUpdated',
       'createAccountApi()',
-      'account: createAccountApi()'
+      'account: createAccountApi()',
+      'IPC_CHANNELS.extensionsSearch',
+      'IPC_CHANNELS.extensionsListFeatured',
+      'IPC_CHANNELS.extensionsInstall',
+      'IPC_CHANNELS.extensionsListInstalled',
+      'createExtensionsApi()',
+      'extensions: createExtensionsApi()'
     ]) {
       assert.ok(source.includes(expected), `preload must contain ${expected}`)
     }
@@ -304,5 +319,6 @@ describe('authoritative production IPC surface', () => {
     assert.ok(!source.includes("'stark:runtimes:"), 'preload must not hardcode runtime channel names')
     assert.ok(!source.includes("'stark:runtime:"), 'preload must not hardcode runtime event names')
     assert.ok(!source.includes("'stark:account:complete"), 'preload must not hardcode OAuth completion channels')
+    assert.ok(!source.includes("'stark:extensions:"), 'preload must not hardcode extension channel names')
   })
 })

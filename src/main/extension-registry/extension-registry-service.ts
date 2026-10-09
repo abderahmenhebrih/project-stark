@@ -120,6 +120,8 @@ export function normalizeExtensionHit(hit: unknown): ExtensionEntry | null {
     typeof files === 'object' && files !== null ? (files as Record<string, unknown>)['icon'] : null
   return {
     id: `${namespace}.${name}`,
+    namespace,
+    name,
     displayName: asText(record['displayName'], name, EXTENSION_REGISTRY_MAX_QUERY_LENGTH),
     publisher: asText(namespace, namespace, EXTENSION_REGISTRY_MAX_QUERY_LENGTH),
     description: asText(record['description'], 'No description provided.', EXTENSION_REGISTRY_MAX_DESCRIPTION_LENGTH),

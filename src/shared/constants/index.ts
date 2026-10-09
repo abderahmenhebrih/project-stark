@@ -100,7 +100,9 @@ export const IPC_CHANNELS = {
   accountSignOut: 'stark:account:sign-out',
   accountUpdated: 'stark:account:updated',
   extensionsSearch: 'stark:extensions:search',
-  extensionsListFeatured: 'stark:extensions:list-featured'
+  extensionsListFeatured: 'stark:extensions:list-featured',
+  extensionsInstall: 'stark:extensions:install',
+  extensionsListInstalled: 'stark:extensions:list-installed'
 } as const
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS]

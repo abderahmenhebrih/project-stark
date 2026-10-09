@@ -116,9 +116,11 @@ import type {
   StartSignInResult
 } from '../shared/cloud-account/types'
 import type {
+  ExtensionInstallIdentity,
   ExtensionSearchRequest,
   ExtensionSearchResult,
-  ExtensionsApi
+  ExtensionsApi,
+  InstalledExtensionEntry
 } from '../shared/extension-registry/types'
 import { isCloudAccountStatus } from '../shared/cloud-account/types'
 import type { AppInfo, StarkApi } from '../shared/types'
@@ -381,7 +383,11 @@ function createExtensionsApi(): ExtensionsApi {
     search: (request: ExtensionSearchRequest): Promise<ExtensionSearchResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.extensionsSearch, request) as Promise<ExtensionSearchResult>,
     listFeatured: (): Promise<ExtensionSearchResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.extensionsListFeatured) as Promise<ExtensionSearchResult>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsListFeatured) as Promise<ExtensionSearchResult>,
+    install: (identity: ExtensionInstallIdentity): Promise<InstalledExtensionEntry> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsInstall, identity) as Promise<InstalledExtensionEntry>,
+    listInstalled: (): Promise<readonly InstalledExtensionEntry[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsListInstalled) as Promise<readonly InstalledExtensionEntry[]>
   }
 }
 
