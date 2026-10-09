@@ -2,7 +2,7 @@ import type { BrowserWindowConstructorOptions } from 'electron'
 import { previewUrlForPort } from '../../shared/project-runtime/types'
 import { MAX_RUNTIME_PORT, MIN_RUNTIME_PORT } from './project-runtime-limits'
 
-/** Ephemeral partition scope for one runtime preview window. */
+/** Isolated per-runtime partition scope for one runtime preview window. */
 export function previewPartitionForRuntime(runtimeId: number): string {
   return `persist:stark-runtime-preview-${String(runtimeId)}`
 }
@@ -10,7 +10,8 @@ export function previewPartitionForRuntime(runtimeId: number): string {
 /**
  * Hardened BrowserWindow options for an isolated Live Preview.
  * No Node integration, no STARK preload, sandboxed, web security on,
- * ephemeral per-runtime session partition. The preview renderer has
+ * isolated per-runtime session partition (persist: per runtime id, never
+ * shared across runtimes). The preview renderer has
  * no bridge to credentials, the filesystem, or main-process APIs.
  */
 export function buildPreviewWindowOptions(runtimeId: number): BrowserWindowConstructorOptions {

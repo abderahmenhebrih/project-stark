@@ -25,7 +25,7 @@ const TOOL_TO_CAPABILITY: Readonly<Record<WorkerToolName, AgentCapability>> = {
 
 const KNOWN: ReadonlySet<string> = new Set<string>(WORKER_TOOLS)
 
-/** True for exactly the six known tools. */
+/** True for exactly the eight known tools. */
 export function isKnownWorkerTool(value: string): value is WorkerToolName {
   return KNOWN.has(value)
 }

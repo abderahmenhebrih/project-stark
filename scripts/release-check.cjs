@@ -71,7 +71,14 @@ function auditArtifactsAndDocs() {
   }
   const readiness = readFileSync(join(ROOT, 'docs/RELEASE_READINESS_V1.md'), 'utf8');
   if (!readiness.includes('v18')) fail('readiness doc must record schema v18');
-  if (!readiness.includes('NOT YET EXECUTED')) fail('readiness doc must record acceptance as NOT YET EXECUTED');
+  // Stage 31: accept the pre-acceptance record ("NOT YET EXECUTED") or the
+  // finalized Stage 31 outcome (acceptance executed, decision recorded).
+  // The gate previously required NOT YET EXECUTED forever, which made the
+  // final AF-01 regression unrunnable after acceptance docs were finalized.
+  const acceptanceRecorded =
+    readiness.includes('NOT YET EXECUTED') ||
+    (readiness.includes('Stage 31') && readiness.includes('ACCEPTANCE'));
+  if (!acceptanceRecorded) fail('readiness doc must record acceptance state (NOT YET EXECUTED or Stage 31 outcome)');
   process.stdout.write('[release:check] artifact/docs audit ok\n');
 }
 

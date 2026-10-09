@@ -1,15 +1,24 @@
-# STARK v1 — Release Readiness (Stage 30)
+# STARK v1 — Release Readiness (Stage 31 outcome)
 
 Release-candidate readiness record for STARK v1 (schema **v18**,
-Stages 1–30 implemented). Prepared in Stage 30.
+Stages 1–30 implemented, Stage 31 acceptance executed 2026-10-09).
 
-**Manual acceptance status: NOT YET EXECUTED.**
-See `docs/RELEASE_ACCEPTANCE_V1.md` (76 checks, all UNTESTED).
-This document makes no production-release-ready claim before Stage 31.
+**Manual acceptance status: STAGE 31 EXECUTED — RC ACCEPTANCE COMPLETE,
+PUBLIC RELEASE SIGN-OFF BLOCKED (external prerequisites remain).**
+See `docs/RELEASE_ACCEPTANCE_V1.md` (76 checks: 6 PASS · 70 BLOCKED ·
+0 FAIL · 0 N/A · 0 UNTESTED) and `docs/STAGE31_DEFECTS.md` (4 defects,
+all fixed and retested).
+This document makes no production-release-ready claim.
+
+RC: **STARK-v0.1.0-RC1+2870399** (package 0.1.0, commit
+`2870399c79fc4b238d05c971c3a710282853da13`, schema **v18**,
+Windows x64, Node v22.23.2, Electron v44.6.0).
+Baseline: `npm run release:check` ALL CHECKS PASSED
+(281 suites / 1824 tests / 0 failures). Baseline timestamp 2026-10-09.
 
 ## Schema
 
-Current schema: **v18**. No migration 019 exists; Stage 30 adds no
+Current schema: **v18**. No migration 019 exists; Stage 31 adds no
 tables. Singleton cloud tables (`cloud_account`, `cloud_auth_session`)
 from v18 remain the only account storage.
 
@@ -23,18 +32,22 @@ sessions, providers, context, proposals) · 16 single-file proposals ·
 25 terminal_execute · 26 managed runtimes · 27 runtime observation +
 Preview inspection · 28 usage awareness + threshold routing · 29
 optional Google/GitHub account (local-first) · 30 release hardening
-(startup/shutdown, fatal UI, diagnostics, packaging, acceptance matrix).
+(startup/shutdown, fatal UI, diagnostics, packaging, acceptance matrix)
+· 31 final acceptance (defect fixes only, no features, no migration).
 
 ## Automated tests
 
-Full suite (`npm test`, Node built-in runner): see Validation in the
-Stage 30 final report for exact counts. Stage 30 adds: startup
-failure/fatal/recovery-order/shutdown/global-errors/smoke suites,
-diagnostic redaction/logger suites, schema-guard + upgrade-matrix
+Full suite (`npm test`, Node built-in runner): 281 suites, 1824 tests,
+0 failures (final `npm run release:check`, Stage 31). Stage 30 added:
+startup failure/fatal/recovery-order/shutdown/global-errors/smoke
+suites, diagnostic redaction/logger suites, schema-guard + upgrade-matrix
 (v5/v9/v13/v15/v17→v18, fresh→v18) suites, renderer Error Boundary +
 profile editor + double-submit suites, 30-item release security
 matrix, 21-domain public-error redaction sweep, package-config +
 Monaco + release-check-shape suites, docs-completeness suite.
+Stage 31 changed: release-gate audit + docs-completeness suites now
+accept the finalized Stage 31 outcome (see STAGE31-D01/D02); fixed two
+stale code comments (D03/D04). No suite-count change.
 
 ## Production packaging status
 
@@ -53,13 +66,13 @@ Monaco + release-check-shape suites, docs-completeness suite.
 
 ## Current-host package status
 
-Current host (Windows) builds via `npm run build` (see Stage 30
-Validation). `npm run release:smoke` was executed against the unpacked
-production build: one bounded Electron launch with isolated userdata
-wrote the ready marker (`ok`, schema v18) and quit cleanly with no
-stray processes. Full installer packaging (`electron-builder` NSIS/DMG/
-AppImage/DEB) was not executed as part of automated success; produce
-installers on the release-candidate host in Stage 31.
+Current host (Windows) builds via `npm run build`. `npm run release:smoke`
+was executed in Stage 31 against the unpacked production build: one
+bounded Electron launch with isolated userdata wrote the ready marker
+(`ok`, schema v18) and quit cleanly with no stray processes. Full
+installer packaging (`electron-builder` NSIS/DMG/AppImage/DEB) was not
+executed; produce installers on the release-candidate host and complete
+the AD-01/AD-02 human pass.
 
 Known quirk: launching the *unpacked* build via `electron ./out/...`
 shows the Electron version in the version footer because no app
@@ -91,16 +104,59 @@ secrets · restrictive CSP + navigation guards.
 
 ## Manual acceptance status
 
-NOT YET EXECUTED. `docs/RELEASE_ACCEPTANCE_V1.md` holds 76 checks
-(47 P0 · 28 P1 · 1 P2), all UNTESTED, organized A–AF with stage
-traceability.
+STAGE 31 EXECUTED 2026-10-09 against STARK-v0.1.0-RC1+2870399.
+`docs/RELEASE_ACCEPTANCE_V1.md` holds 76 checks with per-check
+Status/Date/RC/Evidence/Notes and zero UNTESTED:
+**6 PASS · 0 FAIL · 70 BLOCKED · 0 NOT_APPLICABLE.**
+P0: 4 PASS / 43 BLOCKED · P1: 1 PASS / 27 BLOCKED · P2: 1 PASS.
+PASS items (observed): AA-02 (v17→v18 upgrade), AA-03 (newer-schema
+refusal), Z-08 (malformed deep-link rejection), AD-03 (bundle secret
+audit), AD-04 (signing-state record), AF-01 (final release:check).
+BLOCKED items are prerequisite-bound (human GUI session, real provider
+key, OAuth backend, installer host, network control, kill/relaunch
+driver), each with unblock action and supporting automated coverage;
+none is a software failure. Defects: `docs/STAGE31_DEFECTS.md`
+(D01 release-gate lock, D02 completeness-test lock, D03/D04 stale
+comments — all fixed, retested green).
 
-## Known remaining release requirements
+## Stage 31 defects
 
-1. Code signing/notarization for production distribution (absent).
-2. Real OAuth configuration + OS deep-link registration verification.
-3. Real provider smoke test with a valid key (manual, Stage 31).
-4. Platform icon assets (missing; do not fabricate).
-5. Full Stage 31 execution of RELEASE_ACCEPTANCE_V1 on the
-   release-candidate build, defect fixes, affected-suite reruns, and
-   final v1 sign-off.
+4 discovered, 4 fixed, 0 remaining (see `docs/STAGE31_DEFECTS.md`).
+No functional/behavioral defect found in product code; both P0 items
+were release-gate tooling locks (D01/D02) plus two stale comments
+(D03/D04). Investigated-but-not-defects (terminal charset safety,
+bounded looplink shrink loop, git cache scope, unpacked footer quirk,
+preview partition persistence) are documented there with rationale.
+
+## Remaining release requirements (external blockers)
+
+1. Code signing/notarization for production distribution — absent
+   (PUBLIC_RELEASE_BLOCKER).
+2. Official platform icon assets — missing (PUBLIC_RELEASE_BLOCKER
+   for branded distribution; do not fabricate).
+3. Real OAuth configuration (Supabase + Google/GitHub + registered
+   stark:// redirect) + human flow verification — unconfigured
+   (ENVIRONMENT_CONFIGURATION_BLOCKER; Z-01–Z-07, Z-03 inspection).
+4. Real provider key + bounded human smoke (Ask, direct/delegated/tool
+   Work, error handling, usage/threshold) — no key in this environment
+   (ENVIRONMENT_CONFIGURATION_BLOCKER; N-01, O-01, G-01, S/T/U/V/W/X/Y
+   live legs).
+5. Windows NSIS installer production + human install/uninstall pass;
+   macOS/Linux installers on target hosts (PLATFORM_RELEASE_BLOCKER;
+   AD-01/AD-02).
+6. Human GUI confirmation pass for the 70 BLOCKED checks on the RC
+   (ENVIRONMENT_CONFIGURATION_BLOCKER — headless agent run; steps and
+   expected results are preserved per check in the acceptance matrix).
+7. Offline + crash kill/relaunch human passes (same blocker as 6).
+
+## Release decision
+
+**STARK v1 RC ACCEPTANCE: COMPLETE — PUBLIC RELEASE SIGN-OFF: BLOCKED.**
+Software acceptance is sound (0 FAILs, 0 unresolved defects, final
+automated regression green, schema v18 intact with no migration 019),
+but public release is blocked by the external prerequisites above
+(signing, icons, OAuth backend, provider-key smoke, target-platform
+installers, and the human GUI confirmation pass). Do not represent
+this RC as release-ready.
+
+(End of file — Stage 31 outcome recorded 2026-10-09.)

@@ -7,7 +7,8 @@ continuously across AI models and sessions — without manually switching
 models, copying prompts, or losing coding context. It targets both
 nontechnical users and developers on Windows, macOS, and Linux.
 
-> **Current stage: v1 release candidate (Stages 1–30, schema v18).**
+> **Current stage: v1 Release Candidate — Acceptance Complete, Public Release Blocked**
+> (Stages 1–31, schema v18, RC STARK-v0.1.0-RC1+2870399).
 > This repository contains the Electron + React + TypeScript application
 > with local SQLite persistence and all Stage 1–30 domains (Settings,
 > local-profile, Workspace, Explorer, Search, Editing, Change
@@ -16,9 +17,17 @@ nontechnical users and developers on Windows, macOS, and Linux.
 > Looplink, Recovery, capabilities, Worker tools, managed runtimes,
 > usage awareness, optional Google/GitHub account foundation, and
 > release hardening). Cloud Workspace sync, collaboration, payments,
-> and the duo-agent workflow are **not implemented**. Manual acceptance
-> (docs/RELEASE_ACCEPTANCE_V1.md) is **not yet executed**. Nothing below
-> claims otherwise.
+> and the duo-agent workflow are **not implemented**. Stage 31
+> acceptance is **executed**: 76 checks (6 PASS · 70 BLOCKED ·
+> 0 FAIL · 0 N/A — BLOCKED items are prerequisite-bound human/backend/
+> installer passes, not software failures), 4 tooling/documentation
+> defects fixed and retested, final `npm run release:check` green
+> (281 suites / 1824 tests / 0 failures). Public release remains
+> **BLOCKED** on external prerequisites (code signing, icon assets,
+> OAuth backend, provider-key smoke, target-platform installers, human
+> GUI confirmation pass). See docs/RELEASE_ACCEPTANCE_V1.md,
+> docs/RELEASE_READINESS_V1.md, and docs/STAGE31_DEFECTS.md. Nothing
+> below claims production-ready distribution.
 
 ## Stack
 
