@@ -102,7 +102,11 @@ export const IPC_CHANNELS = {
   extensionsSearch: 'stark:extensions:search',
   extensionsListFeatured: 'stark:extensions:list-featured',
   extensionsInstall: 'stark:extensions:install',
-  extensionsListInstalled: 'stark:extensions:list-installed'
+  extensionsListInstalled: 'stark:extensions:list-installed',
+  extensionsUninstall: 'stark:extensions:uninstall',
+  extensionsHostStatus: 'stark:extensions:host-status',
+  extensionsHostStart: 'stark:extensions:host-start',
+  extensionsHostStop: 'stark:extensions:host-stop'
 } as const
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS]

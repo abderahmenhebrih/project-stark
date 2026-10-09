@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog } from 'electron'
+import { app, BrowserWindow, dialog, utilityProcess } from 'electron'
 import { join } from 'node:path'
 import { IPC_CHANNELS } from '../shared/constants'
 import type { CloudAccountStatus } from '../shared/cloud-account/types'
@@ -16,6 +16,7 @@ import {
   EXTENSION_INSTALL_DIR_NAME,
   ExtensionInstallService
 } from './extension-install/extension-install-service'
+import { ExtensionHostManager, type ExtensionHostLauncher } from './extension-host/extension-host-manager'
 import { registerIpcHandlers } from './ipc'
 import { createTerminalEventSink } from './ipc/terminal'
 import { applyContentSecurityPolicy } from './security/session'
@@ -380,6 +381,23 @@ void app.whenReady().then(() => {
     })
   })
   terminalManager = new TerminalManager(createNodePtyFactory(), createTerminalEventSink())
+  // Extension Host foundation: isolated utility process running
+  // STARK-owned bootstrap only. Never autostarted; the renderer may
+  // start/stop it explicitly through narrow IPC. No extension code
+  // is ever loaded here.
+  const extensionHostLauncher: ExtensionHostLauncher = {
+    fork: (modulePath, options) => utilityProcess.fork(modulePath, [], options)
+  }
+  const extensionHostManager = new ExtensionHostManager({
+    bootstrapPath: join(__dirname, 'extension-host-bootstrap.js'),
+    userDataDir: app.getPath('userData'),
+    launcher: extensionHostLauncher,
+    onLog: (message: string) => {
+      if (!app.isPackaged) {
+        console.log(`[STARK] ${message}`)
+      }
+    }
+  })
   shutdownRuntimes = () => {
     try {
       void services.projectRuntimeService?.shutdownAll(Date.now())
@@ -397,6 +415,7 @@ void app.whenReady().then(() => {
     extensionInstallService: new ExtensionInstallService(
       join(app.getPath('userData'), EXTENSION_INSTALL_DIR_NAME)
     ),
+    extensionHostManager,
     changeTransactionService: services.changeTransactionService,
     terminalService: services.terminalService,
     terminalManager,

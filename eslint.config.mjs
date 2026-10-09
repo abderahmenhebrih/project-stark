@@ -34,7 +34,7 @@ export default tseslint.config(
     }
   },
   {
-    files: ['src/main/**/*.ts', 'src/preload/**/*.ts', 'electron.vite.config.ts', 'eslint.config.mjs'],
+    files: ['src/main/**/*.ts', 'src/main/extension-host/bootstrap.js', 'src/preload/**/*.ts', 'electron.vite.config.ts', 'eslint.config.mjs'],
     languageOptions: {
       globals: {
         ...globals.node

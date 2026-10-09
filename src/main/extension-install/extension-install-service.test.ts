@@ -537,3 +537,255 @@ describe('startup staging cleanup', () => {
     }
   })
 })
+
+/* Uninstall fixtures: crafted on-disk installs (no network). */
+function craftInstalled(
+  root: string,
+  namespace: string,
+  name: string,
+  version: string,
+  manifest: Record<string, unknown> | null = null
+): string {
+  const versionDir = join(root, `${namespace}.${name}`, version)
+  mkdirSync(join(versionDir, 'extension'), { recursive: true })
+  writeFileSync(join(versionDir, 'extension', 'package.json'), JSON.stringify({ name, publisher: namespace, version }))
+  writeFileSync(
+    join(versionDir, 'stark-install.json'),
+    JSON.stringify(
+      manifest ?? {
+        namespace,
+        name,
+        displayName: name,
+        version,
+        sha256: '0'.repeat(64),
+        installedAt: '2026-01-01T00:00:00.000Z',
+        source: 'open-vsx'
+      }
+    )
+  )
+  return versionDir
+}
+
+describe('safe uninstall', () => {
+  it('removes the exact version and prunes only the emptied parent', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-uninstall-'))
+    try {
+      craftInstalled(dir, 'esbenp', 'prettier-vscode', '10.4.0')
+      craftInstalled(dir, 'esbenp', 'prettier-vscode', '10.3.0')
+      craftInstalled(dir, 'other', 'tool', '1.0.0')
+      writeFileSync(join(dir, 'notes.txt'), 'keep')
+      const service = new ExtensionInstallService(dir)
+      const result = await service.uninstall({ namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0' })
+      assert.deepEqual(result, { namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0', status: 'uninstalled' })
+      assert.ok(!existsSync(join(dir, 'esbenp.prettier-vscode', '10.4.0')))
+      assert.ok(existsSync(join(dir, 'esbenp.prettier-vscode', '10.3.0', 'stark-install.json')))
+      assert.ok(existsSync(join(dir, 'other.tool', '1.0.0', 'stark-install.json')))
+      assert.ok(existsSync(join(dir, 'notes.txt')))
+      assert.ok(existsSync(join(dir, 'esbenp.prettier-vscode')))
+      const listed = await service.listInstalled()
+      assert.equal(listed.length, 2)
+      const second = await service.uninstall({ namespace: 'esbenp', name: 'prettier-vscode', version: '10.3.0' })
+      assert.equal(second.status, 'uninstalled')
+      assert.ok(!existsSync(join(dir, 'esbenp.prettier-vscode')))
+      assert.ok(existsSync(dir))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects traversal and malformed identities without touching disk', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-uninstall-bad-'))
+    try {
+      craftInstalled(dir, 'esbenp', 'prettier-vscode', '10.4.0')
+      const before = readdirSync(dir).sort()
+      const service = new ExtensionInstallService(dir)
+      for (const bad of [
+        null,
+        {},
+        { namespace: 'esbenp', name: 'prettier-vscode' },
+        { namespace: '../evil', name: 'x', version: '1' },
+        { namespace: 'esbenp', name: 'x', version: '../../1' },
+        { namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0', path: '/tmp/x' },
+        { namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0', url: 'https://evil.example/' }
+      ]) {
+        await assert.rejects(service.uninstall(bad), /not valid|not safe|We couldn’t install this extension\./)
+      }
+      assert.deepEqual(readdirSync(dir).sort(), before)
+      assert.ok(existsSync(join(dir, 'esbenp.prettier-vscode', '10.4.0', 'stark-install.json')))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('fails closed on missing, malformed, or mismatched metadata', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-uninstall-meta-'))
+    try {
+      const service = new ExtensionInstallService(dir)
+      craftInstalled(dir, 'esbenp', 'prettier-vscode', '10.4.0')
+      await assert.rejects(service.uninstall({ namespace: 'esbenp', name: 'missing', version: '1.0.0' }), /not safe/)
+      const broken = join(dir, 'broken.tool', '1.0.0')
+      mkdirSync(join(broken, 'extension'), { recursive: true })
+      writeFileSync(join(broken, 'stark-install.json'), '{not json')
+      await assert.rejects(service.uninstall({ namespace: 'broken', name: 'tool', version: '1.0.0' }), /not safe/)
+      assert.ok(existsSync(join(broken, 'stark-install.json')))
+      const tampered = join(dir, 'esbenp.prettier-vscode', '10.4.0', 'stark-install.json')
+      writeFileSync(
+        tampered,
+        JSON.stringify({ namespace: 'evil', name: 'fork', version: '9.9.9', source: 'open-vsx' })
+      )
+      await assert.rejects(
+        service.uninstall({ namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0' }),
+        /not safe/
+      )
+      assert.ok(existsSync(tampered))
+      const wrongSource = join(dir, 'esbenp.prettier-vscode', '10.4.0', 'stark-install.json')
+      writeFileSync(
+        wrongSource,
+        JSON.stringify({ namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0', source: 'other' })
+      )
+      await assert.rejects(
+        service.uninstall({ namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0' }),
+        /not safe/
+      )
+      assert.ok(existsSync(wrongSource))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('never follows symlinks and ignores package scripts entirely', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-uninstall-link-'))
+    try {
+      const versionDir = craftInstalled(dir, 'esbenp', 'prettier-vscode', '10.4.0')
+      writeFileSync(
+        join(versionDir, 'extension', 'package.json'),
+        JSON.stringify({
+          name: 'prettier-vscode',
+          publisher: 'esbenp',
+          version: '10.4.0',
+          scripts: { postinstall: 'touch PWNED', postuninstall: 'touch PWNED' },
+          activationEvents: ['*']
+        })
+      )
+      const outside = join(dir, 'outside')
+      mkdirSync(outside, { recursive: true })
+      writeFileSync(join(outside, 'victim.txt'), 'keep')
+      const { symlinkSync } = await import('node:fs')
+      let linked = false
+      try {
+        symlinkSync(outside, join(versionDir, 'extension', 'linked'), 'junction')
+        linked = true
+      } catch {
+        console.warn('skipped: symlink case needs link privileges')
+      }
+      const service = new ExtensionInstallService(dir)
+      if (linked) {
+        await assert.rejects(
+          service.uninstall({ namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0' }),
+          /not safe/
+        )
+        assert.ok(existsSync(join(outside, 'victim.txt')))
+        assert.ok(existsSync(versionDir))
+      }
+      assert.ok(!existsSync(join(versionDir, 'PWNED')))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves neighboring userData files untouched', async () => {
+    const userData = mkdtempSync(join(tmpdir(), 'stark-ext-uninstall-neighbor-'))
+    try {
+      const root = join(userData, 'extensions')
+      craftInstalled(root, 'esbenp', 'prettier-vscode', '10.4.0')
+      writeFileSync(join(userData, 'workspace.db'), 'workspace-bytes')
+      writeFileSync(join(userData, 'settings.json'), '{"theme":"dark"}')
+      const beforeDb = readFileSync(join(userData, 'workspace.db'), 'utf8')
+      const service = new ExtensionInstallService(root)
+      const result = await service.uninstall({ namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0' })
+      assert.equal(result.status, 'uninstalled')
+      assert.equal(readFileSync(join(userData, 'workspace.db'), 'utf8'), beforeDb)
+      assert.ok(existsSync(join(userData, 'settings.json')))
+      assert.ok(existsSync(root))
+    } finally {
+      rmSync(userData, { recursive: true, force: true })
+    }
+  })
+
+  it('dedups concurrent uninstalls and refuses install races', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-uninstall-race-'))
+    try {
+      craftInstalled(dir, 'esbenp', 'prettier-vscode', '10.4.0')
+      const service = new ExtensionInstallService(dir)
+      const identity = { namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0' }
+      const [first, second] = await Promise.all([service.uninstall(identity), service.uninstall(identity)])
+      assert.equal(first.status, 'uninstalled')
+      assert.equal(second.status, 'uninstalled')
+      assert.ok(!existsSync(join(dir, 'esbenp.prettier-vscode')))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('uninstall during an in-flight install reports install_in_progress', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-uninstall-flight-'))
+    try {
+      let releaseMetadata = (): void => {}
+      const gate = new Promise<void>((resolve) => {
+        releaseMetadata = resolve
+      })
+      const service = new ExtensionInstallService(dir, (async (url: string) => {
+        if (url.includes('/file/')) {
+          throw new Error('unreachable in this test')
+        }
+        await gate
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          json: async (): Promise<unknown> => ({ files: { download: 'https://open-vsx.org/api/a/b/1/file/x.vsix' } }),
+          body: null
+        }
+      }) as never)
+      const identity = { namespace: 'esbenp', name: 'prettier-vscode', version: '12.4.0' }
+      const installing = service.install(identity)
+      const refused = await service.uninstall(identity)
+      assert.deepEqual(refused, { namespace: 'esbenp', name: 'prettier-vscode', version: '12.4.0', status: 'install_in_progress' })
+      releaseMetadata()
+      await assert.rejects(installing)
+      assert.ok(!existsSync(join(dir, 'esbenp.prettier-vscode')))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('uses only Node filesystem APIs with bounded enumeration', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join: joinPath } = await import('node:path')
+    const source = readFileSync(joinPath(process.cwd(), 'src', 'main', 'extension-install', 'extension-install-service.ts'), 'utf8')
+    for (const forbidden of ['shell:true', 'taskkill', 'powershell', 'cmd.exe', 'rm -rf', 'spawn(', 'exec(']) {
+      assert.ok(!source.includes(forbidden), `service must not contain ${forbidden}`)
+    }
+    assert.ok(source.includes('EXTENSION_UNINSTALL_MAX_ENTRIES'), 'uninstall must enforce an entry cap')
+  })
+})
+
+describe('startup staging cleanup', () => {
+  it('removes only exact installer-owned names, bounded, never throws', () => {
+    const userData = mkdtempSync(join(tmpdir(), 'stark-ext-clean-'))
+    try {
+      const staging = join(userData, 'extensions', '.staging')
+      mkdirSync(staging, { recursive: true })
+      mkdirSync(join(staging, `.stark-ext-staging-${'a'.repeat(32)}`))
+      mkdirSync(join(staging, 'other-dir'))
+      writeFileSync(join(staging, 'keep.txt'), 'x')
+      const removed = cleanupStaleInstallStaging(userData)
+      assert.equal(removed, 1)
+      assert.ok(existsSync(join(staging, 'other-dir')))
+      assert.ok(existsSync(join(staging, 'keep.txt')))
+      assert.equal(cleanupStaleInstallStaging(join(userData, 'missing')), 0)
+    } finally {
+      rmSync(userData, { recursive: true, force: true })
+    }
+  })
+})

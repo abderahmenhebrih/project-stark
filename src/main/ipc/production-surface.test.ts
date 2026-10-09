@@ -28,6 +28,7 @@ import { TerminalManager } from '../terminal/terminal-manager'
 import type { CredentialProtector } from '../ai/credential-protector'
 import type { AiProviderAdapter, ProviderGenerateRequest, ProviderGenerateResult } from '../ai/provider-adapter'
 import { ProviderRegistry } from '../ai/provider-adapter'
+import { ExtensionHostManager } from '../extension-host/extension-host-manager'
 import type { ProviderModel } from '../../shared/providers/types'
 import { createIpcBindings } from './index'
 
@@ -174,7 +175,11 @@ const EXPECTED_PRODUCTION_CHANNELS: readonly string[] = [
   IPC_CHANNELS.extensionsSearch,
   IPC_CHANNELS.extensionsListFeatured,
   IPC_CHANNELS.extensionsInstall,
-  IPC_CHANNELS.extensionsListInstalled
+  IPC_CHANNELS.extensionsListInstalled,
+  IPC_CHANNELS.extensionsUninstall,
+  IPC_CHANNELS.extensionsHostStatus,
+  IPC_CHANNELS.extensionsHostStart,
+  IPC_CHANNELS.extensionsHostStop
 ]
 
 describe('authoritative production IPC surface', () => {
@@ -220,6 +225,15 @@ describe('authoritative production IPC surface', () => {
         cloudAccountService: services.cloudAccountService,
         extensionRegistryService: services.extensionRegistryService,
         extensionInstallService: new ExtensionInstallService(installRoot),
+        extensionHostManager: new ExtensionHostManager({
+          bootstrapPath: join(installRoot, 'extension-host-bootstrap.js'),
+          userDataDir: installRoot,
+          launcher: {
+            fork: () => {
+              throw new Error('spawn must not run in surface tests')
+            }
+          }
+        }),
         workspaces: new WorkspaceRepository(db),
         codingSessions: new CodingSessionRepository(db)
       }).map((binding) => binding.channel)
@@ -304,8 +318,14 @@ describe('authoritative production IPC surface', () => {
       'IPC_CHANNELS.extensionsListFeatured',
       'IPC_CHANNELS.extensionsInstall',
       'IPC_CHANNELS.extensionsListInstalled',
+      'IPC_CHANNELS.extensionsUninstall',
+      'IPC_CHANNELS.extensionsHostStatus',
+      'IPC_CHANNELS.extensionsHostStart',
+      'IPC_CHANNELS.extensionsHostStop',
       'createExtensionsApi()',
-      'extensions: createExtensionsApi()'
+      'extensions: createExtensionsApi()',
+      'createExtensionHostApi()',
+      'extensionHost: createExtensionHostApi()'
     ]) {
       assert.ok(source.includes(expected), `preload must contain ${expected}`)
     }

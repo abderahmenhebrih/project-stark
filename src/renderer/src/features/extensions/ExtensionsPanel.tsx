@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useRef, useState, type ReactElement } from 'react'
 import type { ExtensionEntry, InstalledExtensionEntry } from '../../../../shared/extension-registry/types'
-import { installExtension, listFeaturedExtensions, listInstalledExtensions, searchExtensionCatalog } from '../../lib/stark-api'
+import { getExtensionHostStatus, installExtension, listFeaturedExtensions, listInstalledExtensions, searchExtensionCatalog, startExtensionHost, stopExtensionHost, uninstallExtension } from '../../lib/stark-api'
+import type { ExtensionHostState } from '../../../../shared/extension-host/types'
 import { StarkIcon } from '../../components/icons/StarkIcon'
 import './ExtensionsPanel.css'
 
@@ -81,6 +82,15 @@ export function ExtensionsPanel(): ReactElement {
   const [installingIds, setInstallingIds] = useState<readonly string[]>([])
   const [failedIds, setFailedIds] = useState<readonly string[]>([])
   const [installedByKey, setInstalledByKey] = useState<Readonly<Record<string, InstalledExtensionEntry>>>({})
+  const [confirmingKey, setConfirmingKey] = useState<string | null>(null)
+  const [uninstallingKeys, setUninstallingKeys] = useState<readonly string[]>([])
+  const [uninstallFailedKeys, setUninstallFailedKeys] = useState<readonly string[]>([])
+  const [hostState, setHostState] = useState<ExtensionHostState>('stopped')
+  const [hostBusy, setHostBusy] = useState(false)
+
+  function installedKeyOf(namespace: string, name: string, version: string): string {
+    return `${namespace}.${name}@${version}`
+  }
 
   useEffect(() => {
     const trimmed = input.trim()
@@ -165,6 +175,53 @@ export function ExtensionsPanel(): ReactElement {
     )
   }
 
+  function refreshHostStatus(): void {
+    getExtensionHostStatus().then(
+      (status) => setHostState(status.state),
+      () => {
+        // Keep the last known host state on refresh failure.
+      }
+    )
+  }
+
+  useEffect(() => {
+    refreshHostStatus()
+  }, [])
+
+  function handleStartHost(): void {
+    if (hostBusy) {
+      return
+    }
+    setHostBusy(true)
+    startExtensionHost().then(
+      (status) => {
+        setHostState(status.state)
+        setHostBusy(false)
+      },
+      () => {
+        setHostBusy(false)
+        refreshHostStatus()
+      }
+    )
+  }
+
+  function handleStopHost(): void {
+    if (hostBusy) {
+      return
+    }
+    setHostBusy(true)
+    stopExtensionHost().then(
+      (status) => {
+        setHostState(status.state)
+        setHostBusy(false)
+      },
+      () => {
+        setHostBusy(false)
+        refreshHostStatus()
+      }
+    )
+  }
+
   function handleInstall(entry: ExtensionEntry): void {
     if (installingIds.includes(entry.id)) {
       return
@@ -184,7 +241,7 @@ export function ExtensionsPanel(): ReactElement {
   }
 
   function installKey(entry: ExtensionEntry): string {
-    return `${entry.namespace}.${entry.name}@${entry.version}`
+    return installedKeyOf(entry.namespace, entry.name, entry.version)
   }
 
   function renderInstallAction(entry: ExtensionEntry): ReactElement {
@@ -221,6 +278,92 @@ export function ExtensionsPanel(): ReactElement {
       >
         Install
       </button>
+    )
+  }
+
+  function handleUninstallRequest(item: InstalledExtensionEntry): void {
+    setUninstallFailedKeys((keys) => keys.filter((key) => key !== installedKeyOf(item.namespace, item.name, item.version)))
+    setConfirmingKey(installedKeyOf(item.namespace, item.name, item.version))
+  }
+
+  function handleUninstallCancel(): void {
+    setConfirmingKey(null)
+  }
+
+  function handleUninstallConfirm(item: InstalledExtensionEntry): void {
+    const key = installedKeyOf(item.namespace, item.name, item.version)
+    if (uninstallingKeys.includes(key)) {
+      return
+    }
+    setConfirmingKey(null)
+    setUninstallingKeys((keys) => (keys.includes(key) ? keys : [...keys, key]))
+    uninstallExtension({ namespace: item.namespace, name: item.name, version: item.version }).then(
+      () => {
+        setUninstallingKeys((keys) => keys.filter((other) => other !== key))
+        refreshInstalled()
+      },
+      () => {
+        setUninstallingKeys((keys) => keys.filter((other) => other !== key))
+        setUninstallFailedKeys((keys) => (keys.includes(key) ? keys : [...keys, key]))
+      }
+    )
+  }
+
+  function renderInstalledRow(item: InstalledExtensionEntry): ReactElement {
+    const key = installedKeyOf(item.namespace, item.name, item.version)
+    return (
+      <li key={key} className="extensions__installed-row">
+        <span className="extensions__icon-fallback" aria-hidden="true">
+          <StarkIcon name="extensions" size={16} />
+        </span>
+        <span className="extensions__installed-details">
+          <span className="extensions__installed-name">{item.displayName}</span>
+          <span className="extensions__installed-meta">
+            {item.namespace} · {item.version}
+          </span>
+        </span>
+        {uninstallingKeys.includes(key) ? (
+          <button className="extensions__uninstall" type="button" disabled aria-label={`Uninstalling ${item.displayName}`}>
+            Uninstalling…
+          </button>
+        ) : confirmingKey === key ? (
+          <span className="extensions__confirm">
+            <span className="extensions__confirm-copy">
+              Uninstall {item.displayName}? This removes the extension package from STARK. It does not modify your
+              project files.
+            </span>
+            <span className="extensions__confirm-actions">
+              <button className="extensions__secondary" type="button" onClick={handleUninstallCancel}>
+                Cancel
+              </button>
+              <button
+                className="extensions__uninstall"
+                type="button"
+                onClick={() => handleUninstallConfirm(item)}
+                aria-label={`Confirm uninstall of ${item.displayName}`}
+              >
+                Uninstall
+              </button>
+            </span>
+          </span>
+        ) : uninstallFailedKeys.includes(key) ? (
+          <span className="extensions__install-failed">
+            <span className="extensions__install-failed-copy">Uninstall failed</span>
+            <button className="extensions__retry" type="button" onClick={() => handleUninstallRequest(item)}>
+              Retry
+            </button>
+          </span>
+        ) : (
+          <button
+            className="extensions__uninstall"
+            type="button"
+            onClick={() => handleUninstallRequest(item)}
+            aria-label={`Uninstall ${item.displayName}`}
+          >
+            Uninstall
+          </button>
+        )}
+      </li>
     )
   }
 
@@ -311,19 +454,7 @@ export function ExtensionsPanel(): ReactElement {
         <>
           <p className="extensions__group-name">Installed</p>
           <ul className="extensions__list" aria-label="Installed extensions">
-            {Object.values(installedByKey).map((item) => (
-              <li key={`${item.namespace}.${item.name}@${item.version}`} className="extensions__installed-row">
-                <span className="extensions__icon-fallback" aria-hidden="true">
-                  <StarkIcon name="extensions" size={16} />
-                </span>
-                <span className="extensions__installed-details">
-                  <span className="extensions__installed-name">{item.displayName}</span>
-                  <span className="extensions__installed-meta">
-                    {item.namespace} · {item.version}
-                  </span>
-                </span>
-              </li>
-            ))}
+            {Object.values(installedByKey).map((item) => renderInstalledRow(item))}
           </ul>
         </>
       )}
@@ -336,6 +467,34 @@ export function ExtensionsPanel(): ReactElement {
           </li>
         ))}
       </ul>
+      <p className="extensions__group-name">Extension Host</p>
+      <p className="extensions__body">Developer foundation preview. Installed extensions cannot run yet.</p>
+      <div className="extensions__host-row">
+        <span className="extensions__host-status" role="status">
+          Status: {hostState}
+        </span>
+        {hostState === 'ready' ? (
+          <button
+            className="extensions__secondary"
+            type="button"
+            onClick={handleStopHost}
+            disabled={hostBusy}
+            aria-label="Stop Extension Host"
+          >
+            {hostBusy ? 'Stopping…' : 'Stop host'}
+          </button>
+        ) : (
+          <button
+            className="extensions__secondary"
+            type="button"
+            onClick={handleStartHost}
+            disabled={hostBusy}
+            aria-label="Start Extension Host"
+          >
+            {hostBusy ? 'Starting…' : 'Start host'}
+          </button>
+        )}
+      </div>
     </section>
   )
 }

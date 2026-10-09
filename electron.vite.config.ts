@@ -5,10 +5,13 @@ import react from '@vitejs/plugin-react'
 /**
  * electron-vite build configuration.
  *
- * Three independent bundles are produced:
+ * Four artifacts are produced:
  * - main:    Electron main process      (src/main/index.ts)
  * - preload: secure context bridge      (src/preload/index.ts)
  * - renderer: React application         (src/renderer/index.html)
+ * - extension-host bootstrap: STARK-owned plain-JS host entry,
+ *   copied verbatim to out/main by scripts/copy-extension-host-bootstrap.cjs
+ *   (never bundled, so shipped bytes equal audited source).
  *
  * The renderer bundle is framework code only — it never receives
  * direct Node.js access. All privileged operations must cross the

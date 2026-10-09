@@ -35,6 +35,7 @@ import type { SettingsApi } from '../settings/types'
 import type { TerminalApi } from '../terminal/types'
 import type { GitApi } from '../git/types'
 import type { ExtensionsApi } from '../extension-registry/types'
+import type { ExtensionHostApi } from '../extension-host/types'
 import type { WorkspaceApi } from '../workspace/types'
 
 /**
@@ -68,6 +69,7 @@ export interface StarkApi {
   usage: UsageApi
   account: CloudAccountApi
   extensions: ExtensionsApi
+  extensionHost: ExtensionHostApi
 }
 
 /** Lifecycle status shown by the development shell. */

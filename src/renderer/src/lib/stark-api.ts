@@ -12,8 +12,10 @@ import type {
   ExtensionInstallIdentity,
   ExtensionSearchRequest,
   ExtensionSearchResult,
-  InstalledExtensionEntry
+  InstalledExtensionEntry,
+  UninstalledExtensionEntry
 } from '../../../shared/extension-registry/types'
+import type { ExtensionHostStatus } from '../../../shared/extension-host/types'
 
 /**
  * Typed accessor for the preload bridge.
@@ -132,6 +134,42 @@ export function listInstalledExtensions(): Promise<readonly InstalledExtensionEn
   const api = getStarkApi()?.extensions.listInstalled
   if (api === undefined) {
     return Promise.reject(new Error('Extension installation is unavailable.'))
+  }
+  return api()
+}
+
+export function uninstallExtension(identity: ExtensionInstallIdentity): Promise<UninstalledExtensionEntry> {
+  const api = getStarkApi()?.extensions.uninstall
+  if (api === undefined) {
+    return Promise.reject(new Error('Extension installation is unavailable.'))
+  }
+  return api(identity)
+}
+
+/**
+ * Typed Extension Host controls (foundation only: status text in,
+ * start/stop out). No process details ever reach the renderer.
+ */
+export function getExtensionHostStatus(): Promise<ExtensionHostStatus> {
+  const api = getStarkApi()?.extensionHost.hostStatus
+  if (api === undefined) {
+    return Promise.reject(new Error('Extension Host is unavailable.'))
+  }
+  return api()
+}
+
+export function startExtensionHost(): Promise<ExtensionHostStatus> {
+  const api = getStarkApi()?.extensionHost.startHost
+  if (api === undefined) {
+    return Promise.reject(new Error('Extension Host is unavailable.'))
+  }
+  return api()
+}
+
+export function stopExtensionHost(): Promise<ExtensionHostStatus> {
+  const api = getStarkApi()?.extensionHost.stopHost
+  if (api === undefined) {
+    return Promise.reject(new Error('Extension Host is unavailable.'))
   }
   return api()
 }

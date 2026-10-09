@@ -120,8 +120,10 @@ import type {
   ExtensionSearchRequest,
   ExtensionSearchResult,
   ExtensionsApi,
-  InstalledExtensionEntry
+  InstalledExtensionEntry,
+  UninstalledExtensionEntry
 } from '../shared/extension-registry/types'
+import type { ExtensionHostStatus, ExtensionHostApi } from '../shared/extension-host/types'
 import { isCloudAccountStatus } from '../shared/cloud-account/types'
 import type { AppInfo, StarkApi } from '../shared/types'
 
@@ -387,11 +389,25 @@ function createExtensionsApi(): ExtensionsApi {
     install: (identity: ExtensionInstallIdentity): Promise<InstalledExtensionEntry> =>
       ipcRenderer.invoke(IPC_CHANNELS.extensionsInstall, identity) as Promise<InstalledExtensionEntry>,
     listInstalled: (): Promise<readonly InstalledExtensionEntry[]> =>
-      ipcRenderer.invoke(IPC_CHANNELS.extensionsListInstalled) as Promise<readonly InstalledExtensionEntry[]>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsListInstalled) as Promise<readonly InstalledExtensionEntry[]>,
+    uninstall: (identity: ExtensionInstallIdentity): Promise<UninstalledExtensionEntry> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsUninstall, identity) as Promise<UninstalledExtensionEntry>
   }
 }
 
-function createAccountApi(): CloudAccountApi {  return {
+function createExtensionHostApi(): ExtensionHostApi {
+  return {
+    hostStatus: (): Promise<ExtensionHostStatus> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsHostStatus) as Promise<ExtensionHostStatus>,
+    startHost: (): Promise<ExtensionHostStatus> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsHostStart) as Promise<ExtensionHostStatus>,
+    stopHost: (): Promise<ExtensionHostStatus> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsHostStop) as Promise<ExtensionHostStatus>
+  }
+}
+
+function createAccountApi(): CloudAccountApi {
+  return {
     getStatus: (): Promise<CloudAccountStatus> =>
       ipcRenderer.invoke(IPC_CHANNELS.accountGetStatus, {}) as Promise<CloudAccountStatus>,
     startSignIn: (request: StartSignInRequest): Promise<StartSignInResult> =>
@@ -487,7 +503,8 @@ const starkApi: StarkApi = {
   runtimes: createRuntimesApi(),
   usage: createUsageApi(),
   account: createAccountApi(),
-  extensions: createExtensionsApi()
+  extensions: createExtensionsApi(),
+  extensionHost: createExtensionHostApi()
 }
 
 contextBridge.exposeInMainWorld('stark', starkApi)

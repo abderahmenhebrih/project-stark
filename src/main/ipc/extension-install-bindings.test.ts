@@ -13,13 +13,13 @@ function openService(): { dir: string; service: ExtensionInstallService } {
 }
 
 describe('extension install IPC bindings', () => {
-  it('exposes exactly install and list-installed', () => {
+  it('exposes exactly install, list-installed, and uninstall', () => {
     const { dir, service } = openService()
     try {
       const bindings = createExtensionInstallBindings(service)
       assert.deepEqual(
         bindings.map((binding) => binding.channel).sort(),
-        ['stark:extensions:install', 'stark:extensions:list-installed'].sort()
+        ['stark:extensions:install', 'stark:extensions:list-installed', 'stark:extensions:uninstall'].sort()
       )
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -64,6 +64,33 @@ describe('extension install IPC bindings', () => {
     }
   })
 
+  it('validates uninstall identity strictly with no path authority', async () => {
+    const { dir, service } = openService()
+    try {
+      const bindings = createExtensionInstallBindings(service)
+      const uninstall = bindings.find((binding) => binding.channel === 'stark:extensions:uninstall')
+      assert.ok(uninstall !== undefined)
+      for (const bad of [
+        null,
+        {},
+        { namespace: 'a', name: 'b' },
+        { namespace: '../evil', name: 'b', version: '1' },
+        { namespace: 'a', name: 'b', version: '1', path: '/tmp/x' },
+        { namespace: 'a', name: 'b', version: '1', directory: 'C:\\x' },
+        'x',
+        42
+      ]) {
+        await assert.rejects(uninstall.invoke(bad), /not valid|not safe|We couldn’t install this extension\./)
+      }
+      await assert.rejects(
+        uninstall.invoke({ namespace: 'nobody', name: 'nothing', version: '1.0.0' }),
+        /not safe|We couldn’t install this extension\./
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('maps install failures to public copy without internals', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'stark-ext-install-map-'))
     try {
@@ -92,7 +119,7 @@ describe('extension install IPC bindings', () => {
     const { dir, service } = openService()
     try {
       const channels = createExtensionInstallBindings(service).map((binding) => binding.channel)
-      for (const forbidden of ['generic', 'download', 'unzip', 'write', 'fetch', 'proxy', 'exec', 'shell', 'vsix']) {
+      for (const forbidden of ['generic', 'download', 'unzip', 'write', 'fetch', 'proxy', 'exec', 'shell', 'vsix', 'delete', 'removePath', 'rmdir']) {
         for (const channel of channels) {
           assert.ok(!channel.includes(forbidden), `${channel} must not contain ${forbidden}`)
         }

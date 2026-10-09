@@ -55,10 +55,22 @@ export interface InstalledExtensionEntry {
   readonly status: ExtensionInstallStatus
 }
 
+/** Uninstall outcome: removed locally, or refused while installing. */
+export type ExtensionUninstallStatus = 'uninstalled' | 'install_in_progress'
+
+/** Normalized uninstall result. No paths, no filesystem details. */
+export interface UninstalledExtensionEntry {
+  readonly namespace: string
+  readonly name: string
+  readonly version: string
+  readonly status: ExtensionUninstallStatus
+}
+
 /** Renderer-facing extension-catalog bridge (see StarkApi in shared/types). */
 export interface ExtensionsApi {
   search: (request: ExtensionSearchRequest) => Promise<ExtensionSearchResult>
   listFeatured: () => Promise<ExtensionSearchResult>
   install: (identity: ExtensionInstallIdentity) => Promise<InstalledExtensionEntry>
   listInstalled: () => Promise<readonly InstalledExtensionEntry[]>
+  uninstall: (identity: ExtensionInstallIdentity) => Promise<UninstalledExtensionEntry>
 }

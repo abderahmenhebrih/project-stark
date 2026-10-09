@@ -33,6 +33,7 @@ import type { WorkspaceFilesService } from '../workspace-files/workspace-files-s
 import type { WorkspaceSearchService } from '../workspace-search/workspace-search-service'
 import type { ExtensionRegistryService } from '../extension-registry/extension-registry-service'
 import type { ExtensionInstallService } from '../extension-install/extension-install-service'
+import type { ExtensionHostManager } from '../extension-host/extension-host-manager'
 import { getAppInfo } from '../services/app-info'
 import type { IpcBinding } from './binding'
 import { createAiBindings } from './ai'
@@ -59,6 +60,7 @@ import { createWorkspaceFilesBindings } from './workspace-files'
 import { createWorkspaceSearchBindings } from './workspace-search'
 import { createExtensionsBindings } from './extensions'
 import { createExtensionInstallBindings } from './extension-install'
+import { createExtensionHostBindings } from './extension-host'
 import { createAccountBindings } from './account'
 
 /**
@@ -99,6 +101,8 @@ export interface IpcDependencies {
   readonly extensionRegistryService?: ExtensionRegistryService
   /** Extension installer (store only). Optional in older harnesses; absent means no install channels. */
   readonly extensionInstallService?: ExtensionInstallService
+  /** Extension Host broker (foundation only). Optional in older harnesses; absent means no host channels. */
+  readonly extensionHostManager?: ExtensionHostManager
   readonly changeTransactionService: ChangeTransactionService
   readonly terminalService: TerminalService
   readonly terminalManager: TerminalManager
@@ -197,6 +201,9 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
   }
   if (deps.extensionInstallService !== undefined) {
     bindings.push(...createExtensionInstallBindings(deps.extensionInstallService))
+  }
+  if (deps.extensionHostManager !== undefined) {
+    bindings.push(...createExtensionHostBindings(deps.extensionHostManager))
   }
   if (deps.cloudAccountService !== undefined) {
     bindings.push(...createAccountBindings(deps.cloudAccountService))

@@ -1,14 +1,15 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { createWriteStream, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { join, resolve, sep } from 'node:path'
+import { createWriteStream, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { join, relative, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Transform } from 'node:stream'
 import * as yauzl from 'yauzl'
-import type { InstalledExtensionEntry } from '../../shared/extension-registry/types'
+import type { InstalledExtensionEntry, UninstalledExtensionEntry } from '../../shared/extension-registry/types'
 import { ExtensionInstallError, InvalidExtensionInstallRequestError } from './errors'
 
 /**
- * Main-owned extension installer (download + validate + store only).
+ * Main-owned extension installer (download + validate + store only)
+ * with safe uninstall.
  *
  * The renderer supplies normalized identity (namespace/name/version);
  * everything else — download URL, destination paths, temp names,
@@ -16,8 +17,10 @@ import { ExtensionInstallError, InvalidExtensionInstallRequestError } from './er
  * package download per install, both single-attempt and bounded.
  * Archives extract through the vetted yauzl reader with per-entry
  * validation and hard caps; manifests are parsed as data only and
- * must match the requested identity. Installed packages are inert
- * files: nothing here loads, spawns, imports, or executes them.
+ * must match the requested identity. Uninstall removes only the
+ * exact verified version directory (plus its parent when left
+ * empty) through a bounded two-phase plan. Installed packages are
+ * inert files: nothing here loads, spawns, imports, or executes them.
  */
 
 /** Single-attempt network bound per request (metadata + package). */
@@ -49,6 +52,9 @@ export const EXTENSION_INSTALL_MAX_MANIFEST_BYTES = 1024 * 1024
 
 /** Maximum installed entries surfaced by listInstalled. */
 export const EXTENSION_INSTALL_MAX_LISTED = 512
+
+/** Maximum filesystem entries enumerated during one uninstall. */
+export const EXTENSION_UNINSTALL_MAX_ENTRIES = 20_000
 
 /** Maximum stale staging/temp entries removed per startup pass. */
 export const EXTENSION_INSTALL_MAX_CLEANUP = 32
@@ -190,6 +196,7 @@ export class ExtensionInstallService {
   private readonly installRoot: string
   private readonly fetchImpl: InstallFetch
   private readonly inFlight = new Map<string, Promise<InstalledExtensionEntry>>()
+  private readonly uninstallInFlight = new Map<string, Promise<UninstalledExtensionEntry>>()
 
   /**
    * @param installRoot main-owned `<userData>/extensions` directory
@@ -206,6 +213,9 @@ export class ExtensionInstallService {
   async install(rawIdentity: unknown): Promise<InstalledExtensionEntry> {
     const identity = validatedInstallIdentity(rawIdentity)
     const key = `${identity.namespace}.${identity.name}@${identity.version}`
+    if (this.uninstallInFlight.has(key)) {
+      throw new ExtensionInstallError('Uninstall in progress.')
+    }
     const existing = this.inFlight.get(key)
     if (existing !== undefined) {
       return existing
@@ -219,6 +229,89 @@ export class ExtensionInstallService {
         this.inFlight.delete(key)
       }
     }
+  }
+
+  /**
+   * Removes one installed version by identity. Refuses while the same
+   * identity is installing; duplicate concurrent uninstalls share one
+   * flight. Only the exact verified version directory is removed —
+   * never the store root, never siblings, never anything outside the
+   * install root. Manifests stay data only; nothing executes.
+   */
+  async uninstall(rawIdentity: unknown): Promise<UninstalledExtensionEntry> {
+    const identity = validatedInstallIdentity(rawIdentity)
+    const key = `${identity.namespace}.${identity.name}@${identity.version}`
+    if (this.inFlight.has(key)) {
+      return { namespace: identity.namespace, name: identity.name, version: identity.version, status: 'install_in_progress' }
+    }
+    const existing = this.uninstallInFlight.get(key)
+    if (existing !== undefined) {
+      return existing
+    }
+    const flight = this.runUninstall(identity)
+    this.uninstallInFlight.set(key, flight)
+    try {
+      return await flight
+    } finally {
+      if (this.uninstallInFlight.get(key) === flight) {
+        this.uninstallInFlight.delete(key)
+      }
+    }
+  }
+
+  private async runUninstall(identity: ValidatedInstallIdentity): Promise<UninstalledExtensionEntry> {
+    const root = resolve(this.installRoot)
+    const packageDir = join(root, this.installDirName(identity))
+    const versionDir = join(packageDir, identity.version)
+    // Containment: the target must be exactly <root>/<ns.name>/<version>.
+    // Identity parts carry no separators (validated), so this also
+    // proves the target stays strictly beneath the install root.
+    const expected = join(this.installDirName(identity), identity.version)
+    if (relative(root, versionDir) !== expected) {
+      throw new ExtensionInstallError('Uninstall target is not safe.')
+    }
+    const record = this.readInstallRecord(versionDir)
+    if (
+      record === null ||
+      record['namespace'] !== identity.namespace ||
+      record['name'] !== identity.name ||
+      record['version'] !== identity.version ||
+      record['source'] !== 'open-vsx'
+    ) {
+      throw new ExtensionInstallError('Uninstall target is not safe.')
+    }
+    const plan = collectRemovalPlan(versionDir)
+    for (const file of plan.files) {
+      unlinkSync(file)
+    }
+    for (const dir of plan.dirs) {
+      rmdirSync(dir)
+    }
+    try {
+      if (readdirSync(packageDir).length === 0) {
+        rmdirSync(packageDir)
+      }
+    } catch {
+      // Best effort: a raced sibling install keeps its parent.
+    }
+    return { namespace: identity.namespace, name: identity.name, version: identity.version, status: 'uninstalled' }
+  }
+
+  private readInstallRecord(versionDir: string): Record<string, unknown> | null {
+    const manifestPath = join(versionDir, EXTENSION_INSTALL_MANIFEST_NAME)
+    let parsed: unknown
+    try {
+      if (statSync(manifestPath).size > EXTENSION_INSTALL_MAX_MANIFEST_BYTES) {
+        return null
+      }
+      parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as unknown
+    } catch {
+      return null
+    }
+    if (typeof parsed !== 'object' || parsed === null) {
+      return null
+    }
+    return parsed as Record<string, unknown>
   }
 
   /** Lists installed extensions from on-disk metadata (no paths leak). */
@@ -519,6 +612,58 @@ export function readExtensionManifest(stagingDir: string, identity: ValidatedIns
 const UNIX_IFMT = 0o170000
 const UNIX_IFREG = 0o100000
 const UNIX_IFDIR = 0o040000
+
+interface RemovalPlan {
+  readonly files: readonly string[]
+  readonly dirs: readonly string[]
+}
+
+/**
+ * Two-phase safe removal plan: enumerates the exact version tree with
+ * lstat (never following links), failing closed on symlinks, special
+ * entries, or counts beyond the defensive cap. Callers delete files
+ * first, then directories deepest-first. Nothing outside versionDir
+ * is ever listed.
+ */
+export function collectRemovalPlan(versionDir: string): RemovalPlan {
+  const files: string[] = []
+  const dirs: string[] = []
+  let seen = 0
+  const stack: string[] = [versionDir]
+  while (stack.length > 0) {
+    const current = stack.pop() as string
+    let entries: string[]
+    try {
+      entries = readdirSync(current)
+    } catch {
+      throw new ExtensionInstallError('Uninstall target is not safe.')
+    }
+    dirs.push(current)
+    for (const name of entries) {
+      seen += 1
+      if (seen > EXTENSION_UNINSTALL_MAX_ENTRIES) {
+        throw new ExtensionInstallError('Uninstall target is not safe.')
+      }
+      const full = join(current, name)
+      let stats
+      try {
+        stats = lstatSync(full)
+      } catch {
+        throw new ExtensionInstallError('Uninstall target is not safe.')
+      }
+      if (stats.isSymbolicLink() || (!stats.isFile() && !stats.isDirectory())) {
+        throw new ExtensionInstallError('Uninstall target is not safe.')
+      }
+      if (stats.isDirectory()) {
+        stack.push(full)
+      } else {
+        files.push(full)
+      }
+    }
+  }
+  dirs.sort((a, b) => b.length - a.length)
+  return { files, dirs }
+}
 
 /**
  * Per-entry archive validation (pure on the name; mode checked by the

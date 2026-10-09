@@ -1,5 +1,5 @@
 import { IPC_CHANNELS } from '../../shared/constants'
-import type { InstalledExtensionEntry } from '../../shared/extension-registry/types'
+import type { InstalledExtensionEntry, UninstalledExtensionEntry } from '../../shared/extension-registry/types'
 import { InvalidExtensionInstallRequestError, toPublicExtensionInstallError } from '../extension-install/errors'
 import { validatedInstallIdentity } from '../extension-install/extension-install-service'
 import type { ExtensionInstallService } from '../extension-install/extension-install-service'
@@ -28,10 +28,11 @@ function requireEmpty(payload: unknown): void {
 
 /**
  * Extension-install IPC bindings (store only, never execute): exactly
- * two invoke channels (install, list-installed). The renderer supplies
- * normalized identity only — destinations, URLs, and paths are all
- * main-derived. No generic download/unzip/write surface. Registration
- * through handleSecureIpc happens in ./index.ts.
+ * three invoke channels (install, list-installed, uninstall). The
+ * renderer supplies normalized identity only — destinations, URLs,
+ * and paths are all main-derived. No generic download/unzip/write
+ * or delete surface. Registration through handleSecureIpc happens in
+ * ./index.ts.
  */
 export function createExtensionInstallBindings(service: ExtensionInstallService): readonly IpcBinding[] {
   return [
@@ -53,6 +54,16 @@ export function createExtensionInstallBindings(service: ExtensionInstallService)
             requireEmpty(payload)
           })
           .then(() => service.listInstalled())
+          .catch((error: unknown) => {
+            throw toPublicExtensionInstallError(error)
+          })
+    },
+    {
+      channel: IPC_CHANNELS.extensionsUninstall,
+      invoke: (payload): Promise<UninstalledExtensionEntry> =>
+        Promise.resolve()
+          .then(() => readIdentity(payload))
+          .then((identity) => service.uninstall(identity))
           .catch((error: unknown) => {
             throw toPublicExtensionInstallError(error)
           })

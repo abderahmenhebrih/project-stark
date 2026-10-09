@@ -4,14 +4,15 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
 /**
- * EXTENSIONS STEP 2 — safe installation, store only.
+ * EXTENSIONS STEP 3 — safe uninstall.
  *
- * Static guarantees: Install buttons send normalized identity only
- * through the main-owned bridge, rows show Installing/Installed/Retry
- * states plus an INSTALLED section, and no activation, host, download,
- * or execution surface exists anywhere. Renderer-only assertions; the
- * install service, bindings, and preload contract are covered
- * main-side.
+ * Static guarantees: uninstall requires explicit inline confirmation,
+ * sends normalized identity only through the main-owned bridge, shows
+ * Uninstalling/failed states with user-initiated retry, and refreshes
+ * the INSTALLED section. No update/enable/disable/run surface, no
+ * activation, no host, no execution anywhere. Renderer-only
+ * assertions; the removal service, bindings, and preload contract are
+ * covered main-side.
  */
 function readSource(...parts: string[]): string {
   const file = join(process.cwd(), ...parts)
@@ -53,6 +54,21 @@ describe('extensions install surface', () => {
     assert.ok(panel.includes('nothing runs yet'), 'installed packages must read as inert')
   })
 
+  it('uninstall requires confirmation and sends identity only', () => {
+    const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
+    assert.ok(panel.includes('uninstallExtension({ namespace: item.namespace, name: item.name, version: item.version })'), 'uninstall must send identity only')
+    assert.ok(panel.includes('Uninstall {item.displayName}?'), 'confirmation must name the extension')
+    assert.ok(panel.includes('It does not modify your'), 'confirmation must promise project safety')
+    assert.ok(panel.includes('handleUninstallCancel'), 'confirmation must offer Cancel')
+    assert.ok(panel.includes('Uninstalling…'), 'removal progress must exist')
+    assert.ok(panel.includes('Uninstall failed'), 'removal failure copy must exist')
+    assert.ok(panel.includes('handleUninstallConfirm'), 'confirm must run the removal explicitly')
+    assert.ok(panel.includes('uninstallingKeys.includes(key)'), 'duplicate clicks must reuse in-progress state')
+    assert.ok(panel.includes('refreshInstalled'), 'installed state must refresh after removal')
+    const api = readRenderer('lib/stark-api.ts')
+    assert.ok(api.includes('uninstallExtension'), 'uninstall bridge helper must exist')
+  })
+
   it('search behavior and inert rendering are preserved', () => {
     const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
     assert.ok(panel.includes('CATALOG_DEBOUNCE_MS = 300'), 'debounce must stay exactly 300ms')
@@ -64,13 +80,26 @@ describe('extensions install surface', () => {
     }
   })
 
-  it('no activation, host, or execution surface exists', () => {
+  it('no activation, host execution, or update surface exists', () => {
     const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
-    for (const forbidden of ['>Enable<', '>Disable<', '>Run<', '.vsix', 'activationEvents', 'postinstall', 'child_process', 'require(', 'import(']) {
+    for (const forbidden of ['>Enable<', '>Disable<', '>Run<', '>Update<', 'Enable extensions', 'auto-update', 'Auto-update', '.vsix', 'activationEvents', 'postinstall', 'deactivate', 'child_process', 'require(', 'import(']) {
       assert.ok(!panel.includes(forbidden), `panel must not contain ${forbidden}`)
     }
     const api = readRenderer('lib/stark-api.ts')
     assert.ok(!api.includes('vsix'), 'bridge helpers must not handle archives')
+  })
+
+  it('host foundation UI shows status with start/stop only', () => {
+    const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
+    assert.ok(panel.includes('Extension Host'), 'host block must be present')
+    assert.ok(panel.includes('Status: {hostState}'), 'status text must render')
+    assert.ok(panel.includes('Start host') && panel.includes('Stop host'), 'start/stop controls must exist')
+    assert.ok(panel.includes('cannot run yet'), 'panel must not imply extensions can run')
+    assert.ok(!panel.includes('Enable extensions'), 'must never be labeled Enable extensions')
+    const api = readRenderer('lib/stark-api.ts')
+    for (const helper of ['getExtensionHostStatus', 'startExtensionHost', 'stopExtensionHost']) {
+      assert.ok(api.includes(helper), `bridge must expose ${helper}`)
+    }
   })
 
   it('only normalized shapes cross the bridge', () => {
@@ -81,7 +110,7 @@ describe('extensions install surface', () => {
     assert.ok(!types.includes('downloadUrl') && !types.includes('vsix') && !types.includes('installPath'), 'paths and archives must not exist in the contract')
   })
 
-  it('only the four catalog channels exist; schema stays v18', () => {
+  it('only the extension channels exist; schema stays v18', () => {
     for (const file of ['features/extensions/ExtensionsPanel.tsx', 'lib/stark-api.ts']) {
       const source = readRenderer(file)
       assert.ok(!source.includes('ipcRenderer'), `${file} must not touch IPC directly`)
@@ -92,7 +121,11 @@ describe('extensions install surface', () => {
       "extensionsSearch: 'stark:extensions:search'",
       "extensionsListFeatured: 'stark:extensions:list-featured'",
       "extensionsInstall: 'stark:extensions:install'",
-      "extensionsListInstalled: 'stark:extensions:list-installed'"
+      "extensionsListInstalled: 'stark:extensions:list-installed'",
+      "extensionsUninstall: 'stark:extensions:uninstall'",
+      "extensionsHostStatus: 'stark:extensions:host-status'",
+      "extensionsHostStart: 'stark:extensions:host-start'",
+      "extensionsHostStop: 'stark:extensions:host-stop'"
     ]) {
       assert.ok(constants.includes(channel), `${channel} must be narrowly scoped`)
     }
