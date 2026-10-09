@@ -22,6 +22,7 @@ import type { LooplinkService } from '../looplink/looplink-service'
 import { InvalidSessionMessageError, SessionMessageTooLargeError, SessionNotFoundError, SessionWorkspaceMismatchError, SessionWorkspaceUnavailableError } from '../sessions/errors'
 import { validateUserMessageContent } from '../sessions/message-validation'
 import { PendingApprovalBlockedError } from '../worker-tools/worker-tool-errors'
+import type { AiUsageDeps } from '../usage/ai-usage-tracker'
 
 const encoder = new TextEncoder()
 
@@ -69,6 +70,13 @@ export interface AiCompletionServiceOptions {
    * AI operations while approval waits.
    */
   readonly pendingApprovals?: { hasPending(sessionId: number): boolean }
+  /**
+   * Stage 28 local usage awareness (optional). When present, every
+   * outbound provider call is recorded in the local usage ledger
+   * through the central tracker. Absent means legacy untracked
+   * behavior — existing harnesses keep working.
+   */
+  readonly usage?: AiUsageDeps
 }
 
 /**
@@ -86,6 +94,7 @@ export class AiCompletionService {
   private readonly guard: AiOperationGuard
   private readonly looplink: { readonly service: LooplinkService; readonly store: LooplinkRepository } | undefined
   private readonly pendingApprovals: { hasPending(sessionId: number): boolean } | undefined
+  private readonly usage: AiUsageDeps | undefined
 
   constructor(
     private readonly workspaces: WorkspaceRepository,
@@ -99,6 +108,40 @@ export class AiCompletionService {
     this.guard = options?.operationGuard ?? new AiOperationGuard()
     this.looplink = options?.looplink
     this.pendingApprovals = options?.pendingApprovals
+    this.usage = options?.usage
+  }
+
+  /**
+   * Stage 28 central tracking boundary: every outbound provider
+   * invocation in this service passes through here. Records one
+   * local usage event (or invokes directly when usage awareness is
+   * absent in older harnesses). Telemetry never retries the call.
+   */
+  private trackCall<T>(
+    meta: {
+      operation: 'ask' | 'recovery_ask'
+      workspaceId: number
+      sessionId: number
+    },
+    providerId: string,
+    model: string,
+    invoke: () => Promise<T>
+  ): Promise<T> {
+    if (this.usage === undefined) {
+      return invoke()
+    }
+    return this.usage.tracker.track(
+      {
+        operation: meta.operation,
+        role: meta.operation === 'ask' ? 'ask' : 'recovery',
+        providerId,
+        model,
+        workspaceId: meta.workspaceId,
+        sessionId: meta.sessionId,
+        runId: null
+      },
+      invoke
+    )
   }
 
   async generateResponse(payload: unknown): Promise<AiGenerateResult> {
@@ -140,9 +183,9 @@ export class AiCompletionService {
     if (adapter === undefined) {
       throw new UnknownProviderError()
     }
-    this.guard.acquire(sessionId)
+      this.guard.acquire(sessionId)
     try {
-      return await this.generateWithAdapter(workspaceId, sessionId, latest.id, providerId, adapter, model, null)
+      return await this.generateWithAdapter(workspaceId, sessionId, latest.id, providerId, adapter, model, null, 'ask')
     } finally {
       this.guard.release(sessionId)
     }
@@ -196,6 +239,7 @@ export class AiCompletionService {
         resolved.adapter,
         resolved.model,
         options?.excludeDuplicateText ?? null,
+        'recovery_ask',
         resolved.apiKey
       )
     } finally {
@@ -270,14 +314,21 @@ export class AiCompletionService {
               withAttachments[withAttachments.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
             ]
       let raw: string
+      // Bound capture for the tracking closure (preserves adapter `this`).
+      const generateRecoveryText = resolved.adapter.generateText.bind(resolved.adapter)
       try {
-        const result = await resolved.adapter.generateText({
-          apiKey: resolved.apiKey,
-          model: resolved.model,
-          instructions: STAGE_14_FIXED_INSTRUCTIONS,
-          messages: providerMessages,
-          maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
-        })
+        const result = await this.trackCall(
+          { operation: 'recovery_ask', workspaceId, sessionId },
+          resolved.adapter.id,
+          resolved.model,
+          () => generateRecoveryText({
+            apiKey: resolved.apiKey,
+            model: resolved.model,
+            instructions: STAGE_14_FIXED_INSTRUCTIONS,
+            messages: providerMessages,
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+          })
+        )
         raw = result.text
       } finally {
         void resolved.apiKey
@@ -297,6 +348,7 @@ export class AiCompletionService {
     adapter: NonNullable<ReturnType<ProviderRegistry['get']>>,
     model: string,
     excludeDuplicateText: string | null,
+    operation: 'ask' | 'recovery_ask',
     preResolvedApiKey?: string
   ): Promise<AiGenerateResult> {
       const context = this.loadContext(sessionId)
@@ -330,15 +382,22 @@ export class AiCompletionService {
               withAttachments[withAttachments.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
             ]
       const apiKey = preResolvedApiKey ?? (await this.providerService.decryptCredentialForUse(providerId))
+      // Bound capture for the tracking closure (preserves adapter `this`).
+      const generateText = adapter.generateText.bind(adapter)
       let text: string
       try {
-        const result = await adapter.generateText({
-          apiKey,
+        const result = await this.trackCall(
+          { operation, workspaceId, sessionId },
+          adapter.id,
           model,
-          instructions: STAGE_14_FIXED_INSTRUCTIONS,
-          messages: providerMessages,
-          maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
-        })
+          () => generateText({
+            apiKey,
+            model,
+            instructions: STAGE_14_FIXED_INSTRUCTIONS,
+            messages: providerMessages,
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+          })
+        )
         text = result.text
       } finally {
         void apiKey

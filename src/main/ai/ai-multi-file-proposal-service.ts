@@ -47,6 +47,7 @@ import type { AiProviderService } from './ai-provider-service'
 import { AiOperationGuard } from './ai-operation-guard'
 import { PendingApprovalBlockedError } from '../worker-tools/worker-tool-errors'
 import type { ProviderRegistry } from './provider-adapter'
+import type { AiUsageDeps } from '../usage/ai-usage-tracker'
 import { formatProviderContext } from '../session-context/session-context-service'
 
 const encoder = new TextEncoder()
@@ -135,6 +136,13 @@ export interface AiMultiFileProposalServiceOptions {
   readonly operationGuard?: AiOperationGuard
   /** Stage 23 approval gate (optional): unresolved approvals block new proposals. */
   readonly pendingApprovals?: { hasPending(sessionId: number): boolean }
+  /**
+   * Stage 28 local usage awareness (optional). When present, the
+   * single structured provider call is recorded in the local usage
+   * ledger (tracked, never threshold-routed). Absent means legacy
+   * untracked behavior.
+   */
+  readonly usage?: AiUsageDeps
 }
 
 /**
@@ -149,6 +157,7 @@ export class AiMultiFileProposalService {
   private readonly now: () => number
   private readonly guard: AiOperationGuard
   private readonly pendingApprovals: { hasPending(sessionId: number): boolean } | undefined
+  private readonly usage: AiUsageDeps | undefined
 
   constructor(
     private readonly workspaces: WorkspaceRepository,
@@ -163,6 +172,27 @@ export class AiMultiFileProposalService {
     this.now = options?.now ?? Date.now
     this.guard = options?.operationGuard ?? new AiOperationGuard()
     this.pendingApprovals = options?.pendingApprovals
+    this.usage = options?.usage
+  }
+
+  /**
+   * Stage 28 central tracking boundary: the single structured
+   * proposal call passes through here (tracked, never
+   * threshold-routed). Telemetry never retries the call.
+   */
+  private trackCall<T>(
+    meta: { workspaceId: number; sessionId: number },
+    providerId: string,
+    model: string,
+    invoke: () => Promise<T>
+  ): Promise<T> {
+    if (this.usage === undefined) {
+      return invoke()
+    }
+    return this.usage.tracker.track(
+      { operation: 'multi_proposal', role: 'proposal', providerId, model, workspaceId: meta.workspaceId, sessionId: meta.sessionId, runId: null },
+      invoke
+    )
   }
 
   async proposeChangeSet(payload: unknown): Promise<AiChangeSetProposalResult> {
@@ -261,6 +291,10 @@ export class AiMultiFileProposalService {
     if (typeof adapter.generateStructured !== 'function') {
       throw new ProviderStructuredOutputUnsupportedError()
     }
+    // Captured after the guard so the tracking closure keeps the
+    // narrowed function type (narrowing is lost inside closures).
+    // Bound to preserve adapter `this`.
+    const generateStructured = adapter.generateStructured.bind(adapter)
 
     const context = this.loadContext(sessionId)
     const trailing = context[context.length - 1]
@@ -280,15 +314,20 @@ export class AiMultiFileProposalService {
     const apiKey = await this.providerService.decryptCredentialForUse(providerId)
     let outputText: string
     try {
-      const result = await adapter.generateStructured({
-        apiKey,
+      const result = await this.trackCall(
+        { workspaceId, sessionId },
+        adapter.id,
         model,
-        instructions: STAGE_17_FIXED_MULTI_FILE_INSTRUCTIONS,
-        messages: providerMessages,
-        maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
-        schemaName: CHANGE_SET_SCHEMA_NAME,
-        schema: buildChangeSetJsonSchema(targets.length)
-      })
+        () => generateStructured({
+          apiKey,
+          model,
+          instructions: STAGE_17_FIXED_MULTI_FILE_INSTRUCTIONS,
+          messages: providerMessages,
+          maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+          schemaName: CHANGE_SET_SCHEMA_NAME,
+          schema: buildChangeSetJsonSchema(targets.length)
+        })
+      )
       outputText = result.outputText
     } finally {
       void apiKey

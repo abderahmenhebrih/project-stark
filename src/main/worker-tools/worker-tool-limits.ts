@@ -44,3 +44,21 @@ export const MAX_WORKER_PROPOSAL_TOTAL_BYTES = 192 * 1024
 
 /** Lazy approval expiry (15 minutes, no background jobs). */
 export const APPROVAL_MAX_AGE_MS = 15 * 60 * 1000
+
+/** Largest serialized Worker runtime observation, exact UTF-8 bytes (64 KiB, newest logs preferred). */
+export const MAX_WORKER_RUNTIME_OBSERVATION_BYTES = 64 * 1024
+
+/** Single bounded hidden Preview load deadline, in milliseconds (one attempt, no retry). */
+export const MAX_PREVIEW_INSPECTION_LOAD_MS = 10_000
+
+/** Most rendered elements returned by one Preview inspection. */
+export const MAX_PREVIEW_INSPECTION_ELEMENTS = 100
+
+/** Largest Preview visible text, exact UTF-8 bytes (32 KiB, UTF-8-safe truncation). */
+export const MAX_PREVIEW_VISIBLE_TEXT_BYTES = 32 * 1024
+
+/** Longest per-element Preview text, Unicode code points. */
+export const MAX_PREVIEW_ELEMENT_TEXT_CODEPOINTS = 300
+
+/** Largest serialized Preview inspection result, exact UTF-8 bytes (64 KiB). */
+export const MAX_PREVIEW_INSPECTION_RESULT_BYTES = 64 * 1024

@@ -17,7 +17,9 @@ export const CAPABILITY_ORDER: readonly AgentCapability[] = [
   'workspace.search',
   'git.read',
   'change.propose',
-  'terminal.execute'
+  'terminal.execute',
+  'runtime.observe',
+  'preview.inspect'
 ]
 
 export function capabilityLabel(capability: AgentCapability): string {
@@ -32,6 +34,21 @@ export function capabilityLabel(capability: AgentCapability): string {
       return 'Change proposal'
     case 'terminal.execute':
       return 'Terminal execute'
+    case 'runtime.observe':
+      return 'Runtime observation'
+    case 'preview.inspect':
+      return 'Live Preview inspection'
+  }
+}
+
+export function capabilityDescription(capability: AgentCapability): string {
+  switch (capability) {
+    case 'runtime.observe':
+      return 'Allows the Worker to inspect the managed runtime\u2019s status and bounded stdout/stderr logs.'
+    case 'preview.inspect':
+      return 'Allows the Worker to inspect bounded rendered content from STARK\u2019s local Live Preview. It does not allow clicking, typing, form submission, or DOM modification.'
+    default:
+      return ''
   }
 }
 
@@ -52,7 +69,9 @@ export function emptyCapabilityDraft(): CapabilityDraft {
       'workspace.search': 'deny',
       'git.read': 'deny',
       'change.propose': 'deny',
-      'terminal.execute': 'deny'
+      'terminal.execute': 'deny',
+      'runtime.observe': 'deny',
+      'preview.inspect': 'deny'
     }
   }
 }
@@ -63,7 +82,9 @@ export function capabilityDraftFromConfig(config: WorkspaceCapabilityConfig): Ca
     'workspace.search': 'deny',
     'git.read': 'deny',
     'change.propose': 'deny',
-    'terminal.execute': 'deny'
+    'terminal.execute': 'deny',
+    'runtime.observe': 'deny',
+    'preview.inspect': 'deny'
   }
   for (const policy of config.policies) {
     modes[policy.capability] = policy.mode

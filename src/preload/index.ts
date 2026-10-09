@@ -94,6 +94,21 @@ import type {
   WorkerToolApproval,
   WorkerToolsApi
 } from '../shared/worker-tools/types'
+import type {
+  UpdateUsageConfigRequest,
+  UsageApi,
+  UsageConfig,
+  UsageSummary
+} from '../shared/usage/types'
+import type {
+  GetActiveRuntimeRequest,
+  ListRecentRuntimesRequest,
+  ProjectRuntimeSummary,
+  ProjectRuntimeUpdatedEvent,
+  ProjectRuntimeUpdatedListener,
+  ProjectRuntimesApi,
+  RuntimeRefRequest
+} from '../shared/project-runtime/types'
 import type { AppInfo, StarkApi } from '../shared/types'
 
 /**
@@ -258,6 +273,17 @@ function createRecoveryApi(): RecoveryApi {
   }
 }
 
+function createUsageApi(): UsageApi {
+  return {
+    getConfig: (): Promise<UsageConfig> =>
+      ipcRenderer.invoke(IPC_CHANNELS.usageGetConfig) as Promise<UsageConfig>,
+    updateConfig: (config: UpdateUsageConfigRequest): Promise<UsageConfig> =>
+      ipcRenderer.invoke(IPC_CHANNELS.usageUpdateConfig, config) as Promise<UsageConfig>,
+    getSummary: (): Promise<UsageSummary> =>
+      ipcRenderer.invoke(IPC_CHANNELS.usageGetSummary) as Promise<UsageSummary>
+  }
+}
+
 function createCapabilitiesApi(): CapabilitiesApi {
   return {
     getWorkspaceConfig: (request: GetWorkspaceCapabilityConfigRequest): Promise<WorkspaceCapabilityConfig> =>
@@ -265,6 +291,18 @@ function createCapabilitiesApi(): CapabilitiesApi {
     updateWorkspaceConfig: (config: UpdateWorkspaceCapabilityConfigRequest): Promise<WorkspaceCapabilityConfig> =>
       ipcRenderer.invoke(IPC_CHANNELS.capabilitiesUpdateWorkspaceConfig, config) as Promise<WorkspaceCapabilityConfig>
   }
+}
+
+function isProjectRuntimeUpdatedEvent(value: unknown): value is ProjectRuntimeUpdatedEvent {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+  const record = value as Record<string, unknown>
+  const runtime = record['runtime']
+  return (
+    typeof record['workspaceId'] === 'number' &&
+    (runtime === null || (typeof runtime === 'object' && runtime !== null && typeof (runtime as Record<string, unknown>)['id'] === 'number'))
+  )
 }
 
 function createWorkerToolsApi(): WorkerToolsApi {
@@ -275,6 +313,32 @@ function createWorkerToolsApi(): WorkerToolsApi {
       ipcRenderer.invoke(IPC_CHANNELS.workerToolsApproveAndResume, request) as Promise<WorkRecoveryResult>,
     denyAndResume: (request: DecideApprovalRequest): Promise<WorkRecoveryResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.workerToolsDenyAndResume, request) as Promise<WorkRecoveryResult>
+  }
+}
+
+function createRuntimesApi(): ProjectRuntimesApi {
+  return {
+    getActive: (request: GetActiveRuntimeRequest): Promise<ProjectRuntimeSummary | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.runtimesGetActive, request) as Promise<ProjectRuntimeSummary | null>,
+    listRecent: (request: ListRecentRuntimesRequest): Promise<readonly ProjectRuntimeSummary[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.runtimesListRecent, request) as Promise<readonly ProjectRuntimeSummary[]>,
+    stop: (request: RuntimeRefRequest): Promise<ProjectRuntimeSummary> =>
+      ipcRenderer.invoke(IPC_CHANNELS.runtimesStop, request) as Promise<ProjectRuntimeSummary>,
+    openPreview: (request: RuntimeRefRequest): Promise<ProjectRuntimeSummary> =>
+      ipcRenderer.invoke(IPC_CHANNELS.runtimesOpenPreview, request) as Promise<ProjectRuntimeSummary>,
+    reloadPreview: (request: RuntimeRefRequest): Promise<ProjectRuntimeSummary> =>
+      ipcRenderer.invoke(IPC_CHANNELS.runtimesReloadPreview, request) as Promise<ProjectRuntimeSummary>,
+    onUpdated: (listener: ProjectRuntimeUpdatedListener): (() => void) => {
+      const handler = (_event: unknown, payload: unknown): void => {
+        if (isProjectRuntimeUpdatedEvent(payload)) {
+          listener(payload)
+        }
+      }
+      ipcRenderer.on(IPC_CHANNELS.runtimeUpdated, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.runtimeUpdated, handler)
+      }
+    }
   }
 }
 
@@ -369,7 +433,9 @@ const starkApi: StarkApi = {
   looplink: createLooplinkApi(),
   recovery: createRecoveryApi(),
   capabilities: createCapabilitiesApi(),
-  workerTools: createWorkerToolsApi()
+  workerTools: createWorkerToolsApi(),
+  runtimes: createRuntimesApi(),
+  usage: createUsageApi()
 }
 
 contextBridge.exposeInMainWorld('stark', starkApi)

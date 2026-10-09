@@ -81,22 +81,22 @@ function seedV13(db: DatabaseSync): void {
 }
 
 describe('migration 14 (worker command executions)', () => {
-  it('fresh DB migrates to v14', () => {
+  it('fresh DB migrates to v17', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 14)
-      assert.equal(getUserVersion(db), 14)
+      assert.equal(runMigrations(db, migrations), 17)
+      assert.equal(getUserVersion(db), 17)
     } finally {
       db.close()
     }
   })
 
-  it('v13 database upgrades to v14', () => {
+  it('v13 database upgrades to v17', () => {
     const db = openFresh()
     try {
       seedV13(db)
-      assert.equal(runMigrations(db, migrations), 14)
-      assert.equal(getUserVersion(db), 14)
+      assert.equal(runMigrations(db, migrations), 17)
+      assert.equal(getUserVersion(db), 17)
     } finally {
       db.close()
     }
@@ -106,7 +106,7 @@ describe('migration 14 (worker command executions)', () => {
     const db = openFresh()
     try {
       seedV13(db)
-      assert.equal(runMigrations(db, migrations), 14)
+      assert.equal(runMigrations(db, migrations), 17)
       for (const table of [
         'key_value',
         'workspaces',
@@ -119,7 +119,6 @@ describe('migration 14 (worker command executions)', () => {
         'looplink_handoffs',
         'ai_recovery_settings',
         'workspace_agent_settings',
-        'workspace_capability_policies',
         'orchestration_runs',
         'worker_tool_approvals',
         'worker_tool_events',
@@ -128,6 +127,20 @@ describe('migration 14 (worker command executions)', () => {
         const count: unknown = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()
         assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }), table)
       }
+      // Stage 27 backfills two default-deny observation policies alongside
+      // the one seeded v13 row; the original row is preserved verbatim.
+      // Raw rows use null prototypes, so compare serialized forms.
+      const policies = db
+        .prepare('SELECT capability, mode FROM workspace_capability_policies WHERE workspace_id = 1 ORDER BY capability')
+        .all() as { capability: string; mode: string }[]
+      assert.equal(
+        JSON.stringify(policies),
+        JSON.stringify([
+          { capability: 'preview.inspect', mode: 'deny' },
+          { capability: 'runtime.observe', mode: 'deny' },
+          { capability: 'terminal.execute', mode: 'ask' }
+        ])
+      )
     } finally {
       db.close()
     }
@@ -185,11 +198,11 @@ describe('migration 14 (worker command executions)', () => {
     }
   })
 
-  it('rerunning v14 is idempotent', () => {
+  it('rerunning v17 is idempotent', () => {
     const db = openFresh()
     try {
       runMigrations(db, migrations)
-      assert.equal(runMigrations(db, migrations), 14)
+      assert.equal(runMigrations(db, migrations), 17)
     } finally {
       db.close()
     }
@@ -218,7 +231,7 @@ describe('migration 14 (worker command executions)', () => {
   it('migration 14 is registered after migration 13', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     )
     assert.equal(migration014WorkerCommandExecutions.version, 14)
   })

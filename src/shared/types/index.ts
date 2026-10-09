@@ -26,6 +26,8 @@ import type { HeartApi } from '../heart/types'
 import type { LooplinkApi } from '../looplink/types'
 import type { RecoveryApi } from '../recovery/types'
 import type { CapabilitiesApi } from '../capabilities/types'
+import type { UsageApi } from '../usage/types'
+import type { ProjectRuntimesApi } from '../project-runtime/types'
 import type { WorkerToolsApi } from '../worker-tools/types'
 import type { OrchestrationApi } from '../orchestration/types'
 import type { SettingsApi } from '../settings/types'
@@ -60,6 +62,8 @@ export interface StarkApi {
   recovery: RecoveryApi
   capabilities: CapabilitiesApi
   workerTools: WorkerToolsApi
+  runtimes: ProjectRuntimesApi
+  usage: UsageApi
 }
 
 /** Lifecycle status shown by the development shell. */

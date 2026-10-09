@@ -60,8 +60,8 @@ describe('migration 7 (change sets)', () => {
   it('fresh DB migrates to v7', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 14)
-      assert.equal(getUserVersion(db), 14)
+      assert.equal(runMigrations(db, migrations), 17)
+      assert.equal(getUserVersion(db), 17)
     } finally {
       db.close()
     }
@@ -71,8 +71,8 @@ describe('migration 7 (change sets)', () => {
     const db = openFresh()
     try {
       seedV6(db)
-      assert.equal(runMigrations(db, migrations), 14)
-      assert.equal(getUserVersion(db), 14)
+      assert.equal(runMigrations(db, migrations), 17)
+      assert.equal(getUserVersion(db), 17)
     } finally {
       db.close()
     }
@@ -82,7 +82,7 @@ describe('migration 7 (change sets)', () => {
     const db = openFresh()
     try {
       seedV6(db)
-      assert.equal(runMigrations(db, migrations), 14)
+      assert.equal(runMigrations(db, migrations), 17)
       for (const table of [
         'key_value',
         'workspaces',
@@ -137,7 +137,7 @@ describe('migration 7 (change sets)', () => {
     const db = openFresh()
     try {
       seedV6(db)
-      assert.equal(runMigrations(db, migrations), 14)
+      assert.equal(runMigrations(db, migrations), 17)
       const count: unknown = db.prepare("SELECT COUNT(*) AS n FROM change_transactions WHERE status = 'pending'").get()
       assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }))
       const sets: unknown = db.prepare('SELECT COUNT(*) AS n FROM change_sets').get()
@@ -153,7 +153,7 @@ describe('migration 7 (change sets)', () => {
       runMigrations(db, migrations)
       db.exec("INSERT INTO workspaces (root_path, display_name, created_at, last_opened_at) VALUES ('w', 'w', 1, 1)")
       db.exec("INSERT INTO change_sets (workspace_id, kind, summary, created_at, updated_at) VALUES (1, 'ai_multi_file_proposal', 's', 1, 1)")
-      assert.equal(runMigrations(db, migrations), 14)
+      assert.equal(runMigrations(db, migrations), 17)
       const count: unknown = db.prepare('SELECT COUNT(*) AS n FROM change_sets').get()
       assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }))
     } finally {
@@ -196,7 +196,7 @@ describe('migration 7 (change sets)', () => {
   it('migration 7 is registered after migration 6', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     )
     assert.equal(migration007ChangeSets.version, 7)
   })

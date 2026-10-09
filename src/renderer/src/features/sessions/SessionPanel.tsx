@@ -76,7 +76,19 @@ import {
   denyWorkerApproval,
   getPendingWorkerApproval
 } from '../../lib/worker-tools-api'
+import {
+  getActiveRuntime,
+  listRecentRuntimes,
+  openRuntimePreview,
+  reloadRuntimePreview,
+  stopRuntime,
+  subscribeRuntimeUpdates
+} from '../../lib/runtimes-api'
+import type { ProjectRuntimeSummary } from '../../../../shared/project-runtime/types'
+import { PREVIEW_TRUNCATION_NOTICE, initialRuntimePanelState, runtimePanelReducer, runtimeStatusLabel } from './runtime-state'
 import type { WorkerToolApproval } from '../../../../shared/worker-tools/types'
+import { getUsageConfig, getUsageSummary, saveUsageConfig } from '../../lib/usage-api'
+import { USAGE_ROUTE_KEYS, formatUsageThreshold, initialUsagePanelState, usagePanelReducer, usageRouteLabel } from './usage-state'
 import { getWorkspaceCapabilityConfig, saveWorkspaceCapabilityConfig } from '../../lib/capabilities-api'
 import {
   CAPABILITY_ORDER,
@@ -226,6 +238,14 @@ export function SessionPanel({
   }))
   const [capabilities, capabilitiesDispatch] = useReducer(capabilityPanelReducer, workspaceId, (id) => ({
     ...initialCapabilityPanelState(),
+    workspaceId: id
+  }))
+  const [usage, usageDispatch] = useReducer(usagePanelReducer, workspaceId, (id) => ({
+    ...initialUsagePanelState(),
+    workspaceId: id
+  }))
+  const [runtime, runtimeDispatch] = useReducer(runtimePanelReducer, workspaceId, (id) => ({
+    ...initialRuntimePanelState(),
     workspaceId: id
   }))
   const [pendingApproval, setPendingApproval] = useState<WorkerToolApproval | null>(null)
@@ -401,6 +421,95 @@ export function SessionPanel({
       })
     }
   }
+
+  function parseOptionalCount(text: string, what: string): number | null {
+    const trimmed = text.trim()
+    if (trimmed === '') {
+      return null
+    }
+    if (!/^[0-9]+$/.test(trimmed)) {
+      throw new Error(`The usage routing ${what} must be a whole number or empty.`)
+    }
+    const value = Number(trimmed)
+    if (!Number.isSafeInteger(value)) {
+      throw new Error(`The usage routing ${what} is invalid.`)
+    }
+    return value
+  }
+
+  async function refreshUsageConfig(targetWorkspaceId: number): Promise<void> {
+    usageDispatch({ type: 'config-loading', workspaceId: targetWorkspaceId })
+    try {
+      const config = await getUsageConfig()
+      usageDispatch({ type: 'config-loaded', workspaceId: targetWorkspaceId, config })
+    } catch (error: unknown) {
+      usageDispatch({
+        type: 'config-failed',
+        workspaceId: targetWorkspaceId,
+        message: error instanceof Error && error.message !== '' ? error.message : 'We couldn’t load the usage configuration.'
+      })
+    }
+  }
+
+  async function refreshUsageSummary(targetWorkspaceId: number): Promise<void> {
+    usageDispatch({ type: 'summary-loading', workspaceId: targetWorkspaceId })
+    try {
+      const summary = await getUsageSummary()
+      usageDispatch({ type: 'summary-loaded', workspaceId: targetWorkspaceId, summary })
+    } catch (error: unknown) {
+      usageDispatch({
+        type: 'summary-failed',
+        workspaceId: targetWorkspaceId,
+        message: error instanceof Error && error.message !== '' ? error.message : 'We couldn’t load the local usage summary.'
+      })
+    }
+  }
+
+  async function handleSaveUsage(): Promise<void> {
+    if (usage.saving) {
+      return
+    }
+    const draft = usage.draft
+    usageDispatch({ type: 'save-started', workspaceId })
+    try {
+      const limits = draft.limits.map((entry) => {
+        if (entry.model.trim() === '') {
+          throw new Error('Each usage routing limit needs a model.')
+        }
+        const maxCalls24h = parseOptionalCount(entry.maxCalls, 'call limit')
+        const maxTotalTokens24h = parseOptionalCount(entry.maxTokens, 'token limit')
+        const switchText = entry.switchAt.trim()
+        if (!/^[0-9]+$/.test(switchText)) {
+          throw new Error('The usage routing switch percentage must be a whole number from 1 to 100.')
+        }
+        return {
+          providerId: entry.providerId,
+          model: entry.model.trim(),
+          maxCalls24h,
+          maxTotalTokens24h,
+          switchAtPercent: Number(switchText)
+        }
+      })
+      const config = await saveUsageConfig({
+        heartThresholdRoutingEnabled: draft.thresholdRoutingEnabled,
+        limits,
+        alternates: USAGE_ROUTE_KEYS.filter((routeKey) => draft.alternates[routeKey].model.trim() !== '').map(
+          (routeKey) => ({
+            routeKey,
+            providerId: draft.alternates[routeKey].providerId,
+            model: draft.alternates[routeKey].model.trim()
+          })
+        )
+      })
+      usageDispatch({ type: 'save-succeeded', workspaceId, config })
+    } catch (error: unknown) {
+      usageDispatch({
+        type: 'save-failed',
+        workspaceId,
+        message: error instanceof Error && error.message !== '' ? error.message : 'We couldn’t save the usage routing configuration.'
+      })
+    }
+  }
   // Workspace activation: reset identity, load recent sessions and the
   // provider state once. (Composer, key input, and drafts start empty
   // because the panel remounts per workspace.)
@@ -413,9 +522,12 @@ export function SessionPanel({
     heartDispatch({ type: 'workspace-changed', workspaceId })
     recoveryDispatch({ type: 'workspace-changed', workspaceId })
     capabilitiesDispatch({ type: 'workspace-changed', workspaceId })
+    usageDispatch({ type: 'workspace-changed', workspaceId })
     void refreshHeartConfig(workspaceId)
     void refreshRecoveryConfig(workspaceId)
     void refreshCapabilityConfig(workspaceId)
+    void refreshUsageConfig(workspaceId)
+    void refreshUsageSummary(workspaceId)
     sessionsRequestRef.current = 0
     messagesRequestRef.current = 0
     generationRequestRef.current = 0
@@ -505,6 +617,22 @@ export function SessionPanel({
     void loadPendingApproval(selectedSessionId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, selectedSessionId])
+
+  // Managed project runtimes are workspace-scoped and live outside any
+  // single session: load explicitly on mount and reflect main-pushed
+  // updates with no polling and no timers.
+  useEffect(() => {
+    void loadActiveRuntime()
+    void loadRecentRuntimes()
+    const unsubscribe = subscribeRuntimeUpdates((event) => {
+      if (event.workspaceId !== workspaceId) {
+        return
+      }
+      runtimeDispatch({ type: 'updated', workspaceId, active: event.runtime })
+    })
+    return unsubscribe
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId])
 
   async function runGeneration(sessionId: number): Promise<void> {
     if (state.generating) {
@@ -852,7 +980,6 @@ export function SessionPanel({
       })
     }
   }
-
   /** Loads the pending Worker approval for a session. Explicit and bounded. */
   async function loadPendingApproval(sessionId: number): Promise<void> {
     try {
@@ -864,12 +991,97 @@ export function SessionPanel({
     }
   }
 
+  /** Loads the active managed runtime for the workspace. Explicit and bounded. */
+  async function loadActiveRuntime(): Promise<void> {
+    try {
+      const found = await getActiveRuntime({ workspaceId })
+      runtimeDispatch({ type: 'active-loaded', workspaceId, active: found })
+    } catch (error: unknown) {
+      runtimeDispatch({
+        type: 'action-failed',
+        workspaceId,
+        message: error instanceof Error && error.message !== '' ? error.message : 'We couldn’t load the project runtime.'
+      })
+    }
+  }
+
+  /** Loads recent runtime history for the workspace. Explicit and bounded. */
+  async function loadRecentRuntimes(): Promise<void> {
+    try {
+      const found = await listRecentRuntimes({ workspaceId })
+      runtimeDispatch({ type: 'history-loaded', workspaceId, history: found })
+    } catch (error: unknown) {
+      runtimeDispatch({
+        type: 'action-failed',
+        workspaceId,
+        message: error instanceof Error && error.message !== '' ? error.message : 'We couldn’t load the project runtime.'
+      })
+    }
+  }
+
+  /** Explicit human Stop: terminates exactly the tracked runtime tree. No AI approval involved. */
+  async function handleStopRuntime(runtimeId: number): Promise<void> {
+    if (runtime.acting) {
+      return
+    }
+    runtimeDispatch({ type: 'action-started', workspaceId })
+    try {
+      const stopped = await stopRuntime({ workspaceId, runtimeId })
+      runtimeDispatch({ type: 'action-succeeded', workspaceId, active: stopped.status === 'stopped' ? null : stopped })
+      void loadRecentRuntimes()
+      void loadActiveRuntime()
+    } catch (error: unknown) {
+      runtimeDispatch({
+        type: 'action-failed',
+        workspaceId,
+        message: error instanceof Error && error.message !== '' ? error.message : 'We couldn’t stop the project runtime.'
+      })
+    }
+  }
+
+  /** Opens the isolated Live Preview for a running runtime. Main derives the URL. */
+  async function handleOpenPreview(runtimeId: number): Promise<void> {
+    if (runtime.acting) {
+      return
+    }
+    runtimeDispatch({ type: 'action-started', workspaceId })
+    try {
+      const current = await openRuntimePreview({ workspaceId, runtimeId })
+      runtimeDispatch({ type: 'action-succeeded', workspaceId, active: current })
+    } catch (error: unknown) {
+      runtimeDispatch({
+        type: 'action-failed',
+        workspaceId,
+        message: error instanceof Error && error.message !== '' ? error.message : 'We couldn’t open the live preview.'
+      })
+    }
+  }
+
+  /** Reloads the open preview window. No URL is ever submitted. */
+  async function handleReloadPreview(runtimeId: number): Promise<void> {
+    if (runtime.acting) {
+      return
+    }
+    runtimeDispatch({ type: 'action-started', workspaceId })
+    try {
+      const current = await reloadRuntimePreview({ workspaceId, runtimeId })
+      runtimeDispatch({ type: 'action-succeeded', workspaceId, active: current })
+    } catch (error: unknown) {
+      runtimeDispatch({
+        type: 'action-failed',
+        workspaceId,
+        message: error instanceof Error && error.message !== '' ? error.message : 'We couldn’t reload the live preview.'
+      })
+    }
+  }
+
   async function handleApprovalDecision(approved: boolean): Promise<void> {
     if (state.selectedSessionId === null || pendingApproval === null || approvalActing) {
       return
     }
     const sessionId = state.selectedSessionId
     const approvalId = pendingApproval.id
+    const wasRuntimeStart = pendingApproval.toolName === 'runtime_start'
     setApprovalActing(true)
     setApprovalError(null)
     try {
@@ -877,6 +1089,10 @@ export function SessionPanel({
         ? await approveWorkerApproval({ workspaceId, sessionId, approvalId })
         : await denyWorkerApproval({ workspaceId, sessionId, approvalId })
       await handleToolResumeOutcome(outcome, sessionId)
+      if (wasRuntimeStart) {
+        void loadActiveRuntime()
+        void loadRecentRuntimes()
+      }
     } catch (error: unknown) {
       setApprovalError(error instanceof Error && error.message !== '' ? error.message : 'We couldn’t resolve this approval.')
     } finally {
@@ -1427,6 +1643,31 @@ export function SessionPanel({
               Capability: Terminal command
             </p>
           )}
+          {pendingApproval.toolName === 'runtime_start' && (
+            <p className="session__hint" role="note">
+              Capability: Project runtime
+            </p>
+          )}
+          {pendingApproval.toolName === 'runtime_observe' && (
+            <p className="session__hint" role="note">
+              Capability: Runtime observation
+            </p>
+          )}
+          {pendingApproval.toolName === 'preview_inspect' && (
+            <p className="session__hint" role="note">
+              Capability: Live Preview inspection
+            </p>
+          )}
+          {pendingApproval.toolName === 'runtime_observe' && (
+            <p className="session__hint" role="note">
+              Action: Observe managed runtime
+            </p>
+          )}
+          {pendingApproval.toolName === 'preview_inspect' && (
+            <p className="session__hint" role="note">
+              Action: Inspect rendered Live Preview
+            </p>
+          )}
           <p className="session__hint" role="note">
             {pendingApproval.summary}
           </p>
@@ -1435,8 +1676,24 @@ export function SessionPanel({
               ? 'Approval creates a reviewable proposal only. Files will not change until you review and Accept them.'
               : pendingApproval.toolName === 'terminal_execute'
                 ? 'This exact command will run with your user account from the Workspace root. It may modify files, start subprocesses, or access the network.'
-                : 'This approval applies only to this exact action.'}
+                : pendingApproval.toolName === 'runtime_start'
+                  ? 'This exact command will run with your user account from the Workspace root and may modify files, start subprocesses, or access the network.'
+                  : pendingApproval.toolName === 'runtime_observe'
+                    ? 'This approval allows STARK Worker to read the current managed runtime state and bounded logs once. This approval does not allow STARK Worker to stop, restart, or modify the runtime.'
+                    : pendingApproval.toolName === 'preview_inspect'
+                      ? 'STARK Worker may inspect bounded rendered content from this local Preview once. STARK does not click, type, submit forms, or modify the DOM. If needed, STARK may load this approved local Preview path in an isolated inspection window.'
+                      : 'This approval applies only to this exact action.'}
           </p>
+          {pendingApproval.toolName === 'runtime_start' && (
+            <>
+              <p className="session__hint" role="note">
+                This runtime may remain active for up to 30 minutes.
+              </p>
+              <p className="session__hint" role="note">
+                This approval applies only to this exact program, arguments, and preview port.
+              </p>
+            </>
+          )}
           {pendingApproval.toolName === 'terminal_execute' && (
             <p className="session__hint" role="note">
               This approval applies only to this exact program and argument list.
@@ -1465,6 +1722,103 @@ export function SessionPanel({
           {approvalError !== null && (
             <p className="session__error" role="alert">
               {approvalError}
+            </p>
+          )}
+        </div>
+      )}
+      {(runtime.active !== null || runtime.history.length > 0) && (
+        <div className="session__recovery" aria-label="Project runtime">
+          <p className="session__status" role="status">
+            Project runtime{runtime.active !== null ? ` · ${runtimeStatusLabel(runtime.active.status)}` : ''}
+          </p>
+          {runtime.active !== null && (
+            <>
+              <p className="session__hint" role="note">
+                Command: {runtime.active.program}{runtime.active.args.length > 0 ? ` ${runtime.active.args.join(' ')}` : ''}
+              </p>
+              <p className="session__hint" role="note">
+                Preview: {runtime.active.previewUrl}
+              </p>
+              <p className="session__hint" role="note">
+                Started: {formatTime(runtime.active.startedAt ?? runtime.active.createdAt)} · Maximum runtime: 30 minutes.
+              </p>
+              <div className="session__settings-row">
+                <button
+                  className="explorer__secondary"
+                  type="button"
+                  onClick={() => void handleOpenPreview(runtime.active?.id ?? 0)}
+                  disabled={runtime.acting || runtime.active.status !== 'running'}
+                  aria-label="Open preview"
+                >
+                  Open Preview
+                </button>
+                <button
+                  className="explorer__secondary"
+                  type="button"
+                  onClick={() => void handleReloadPreview(runtime.active?.id ?? 0)}
+                  disabled={runtime.acting || runtime.active.status !== 'running'}
+                  aria-label="Reload preview"
+                >
+                  Reload Preview
+                </button>
+                <button
+                  className="explorer__secondary"
+                  type="button"
+                  onClick={() => void handleStopRuntime(runtime.active?.id ?? 0)}
+                  disabled={runtime.acting || (runtime.active.status !== 'running' && runtime.active.status !== 'starting')}
+                  aria-label="Stop runtime"
+                >
+                  Stop Runtime
+                </button>
+              </div>
+              {(runtime.active.stdoutTail !== '' || runtime.active.stderrTail !== '') && (
+                <>
+                  <p className="session__eyebrow">Runtime output</p>
+                  {runtime.active.stdoutTail !== '' && (
+                    <pre className="session__hint" aria-label="Runtime stdout">{runtime.active.stdoutTail}</pre>
+                  )}
+                  {runtime.active.stderrTail !== '' && (
+                    <pre className="session__hint" aria-label="Runtime stderr">{runtime.active.stderrTail}</pre>
+                  )}
+                  {runtime.active.logsTruncated && (
+                    <p className="session__hint" role="note">
+                      Older runtime output was omitted.
+                    </p>
+                  )}
+                </>
+              )}
+              <details aria-label="Worker observation details">
+                <summary className="session__eyebrow">Worker observation details</summary>
+                <p className="session__hint" role="note">
+                  Runtime observation: Observed runtime state and bounded logs appear in Work run details as inert text.
+                </p>
+                <p className="session__hint" role="note">
+                  Live Preview inspection: Page title, loopback URL, rendered text, and bounded element list appear in Work run details as inert text. No input values are shown.
+                </p>
+                <p className="session__hint" role="note">
+                  {PREVIEW_TRUNCATION_NOTICE}
+                </p>
+              </details>
+            </>
+          )}
+          {runtime.history.length > 0 && (
+            <>
+              <p className="session__eyebrow">Recent runtimes</p>
+              <ul className="session__context-list">
+                {runtime.history.map((entry: ProjectRuntimeSummary) => (
+                  <li key={entry.id}>
+                    <span className="session__hint">
+                      {entry.program} · port {entry.previewPort} · {runtimeStatusLabel(entry.status)}
+                      {entry.stopReason !== null ? ` · ${entry.stopReason}` : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {runtime.error !== null && (
+            <p className="session__error" role="alert">
+              {runtime.error}
             </p>
           )}
         </div>
@@ -1926,6 +2280,265 @@ export function SessionPanel({
             </button>
           </div>
           <div className="session__settings-row">
+            <span className="session__eyebrow">Usage &amp; Threshold Routing</span>
+            <span className="session__hint">{usage.draft.thresholdRoutingEnabled ? 'On' : 'Off'}</span>
+          </div>
+          <p className="session__hint" role="note">
+            STARK tracks only provider calls made by STARK. It does not query provider billing or quota APIs and
+            cannot see usage generated outside STARK.
+          </p>
+          <p className="session__hint" role="note">
+            Token counts are shown only when the provider reports them.
+          </p>
+          <div className="session__composer-row" role="group" aria-label="Threshold routing">
+            <button
+              className="explorer__secondary"
+              type="button"
+              onClick={() => usageDispatch({ type: 'routing-toggled', workspaceId, enabled: false })}
+              aria-pressed={!usage.draft.thresholdRoutingEnabled}
+            >
+              Off
+            </button>
+            <button
+              className="explorer__secondary"
+              type="button"
+              onClick={() => usageDispatch({ type: 'routing-toggled', workspaceId, enabled: true })}
+              aria-pressed={usage.draft.thresholdRoutingEnabled}
+            >
+              On
+            </button>
+          </div>
+          <p className="session__hint" role="note">
+            When a base Heart model reaches your local routing threshold, STARK may use the configured alternate
+            before making the provider call.
+          </p>
+          <p className="session__hint" role="note">
+            This does not retry failed models and is not a provider quota guarantee.
+          </p>
+          <p className="session__hint" role="note">
+            If no alternate is configured, STARK continues using the normal Heart route.
+          </p>
+          <div className="session__settings-row">
+            <span className="session__eyebrow">Local usage — last 24 hours</span>
+            <button
+              className="explorer__secondary"
+              type="button"
+              onClick={() => void refreshUsageSummary(workspaceId)}
+              disabled={usage.summaryLoading}
+              aria-label="Refresh usage"
+            >
+              {usage.summaryLoading ? 'Refreshing…' : 'Refresh usage'}
+            </button>
+          </div>
+          {usage.summary !== null && (
+            <ul className="session__context-list" aria-label="Local usage summary">
+              {usage.summary.models.map((entry) => (
+                <li key={`${entry.providerId}/${entry.model}`}>
+                  <p className="session__hint" role="note">
+                    {entry.providerId} / {entry.model} · {entry.calls24h} calls ·{' '}
+                    {entry.tokenTelemetryComplete && entry.totalTokens24h !== null
+                      ? `${entry.totalTokens24h} tokens`
+                      : 'Token telemetry incomplete'}{' '}
+                    · {entry.rateLimitFailures24h} rate-limit failures · {formatUsageThreshold(entry)} ·{' '}
+                    {entry.thresholdReached ? 'Threshold reached' : 'Below threshold'}
+                  </p>
+                  {!entry.tokenTelemetryComplete && (
+                    <p className="session__hint" role="note">
+                      Token threshold cannot be evaluated completely because this provider/model did not report token
+                      usage for every observed call.
+                    </p>
+                  )}
+                </li>
+              ))}
+              {usage.summary.truncated && (
+                <li>
+                  <p className="session__hint" role="note">
+                    Showing the first {usage.summary.models.length} provider/model rows.
+                  </p>
+                </li>
+              )}
+            </ul>
+          )}
+          {usage.summaryError !== null && (
+            <p className="session__error" role="alert">
+              {usage.summaryError}
+            </p>
+          )}
+          <div className="session__settings-row">
+            <span className="session__eyebrow">Local routing thresholds</span>
+            <button
+              className="explorer__secondary"
+              type="button"
+              onClick={() => usageDispatch({ type: 'limit-added', workspaceId })}
+              aria-label="Add usage limit"
+            >
+              Add limit
+            </button>
+          </div>
+          {usage.draft.limits.map((entry, index) => (
+            <div key={index}>
+              <div className="session__settings-row">
+                <select
+                  className="session__select"
+                  value={entry.providerId}
+                  onChange={(event) =>
+                    usageDispatch({
+                      type: 'limit-edited',
+                      workspaceId,
+                      index,
+                      limit: { ...entry, providerId: event.target.value }
+                    })
+                  }
+                  aria-label={`Usage limit ${index + 1} provider`}
+                >
+                  <option value="openai">openai</option>
+                </select>
+                <input
+                  className="session__field"
+                  value={entry.model}
+                  onChange={(event) =>
+                    usageDispatch({
+                      type: 'limit-edited',
+                      workspaceId,
+                      index,
+                      limit: { ...entry, model: event.target.value }
+                    })
+                  }
+                  placeholder="Model…"
+                  aria-label={`Usage limit ${index + 1} model`}
+                  list="usage-model-options"
+                />
+                <button
+                  className="explorer__secondary"
+                  type="button"
+                  onClick={() => usageDispatch({ type: 'limit-removed', workspaceId, index })}
+                  aria-label={`Remove usage limit ${index + 1}`}
+                >
+                  Remove
+                </button>
+              </div>
+              <div className="session__settings-row">
+                <input
+                  className="session__field"
+                  value={entry.maxCalls}
+                  onChange={(event) =>
+                    usageDispatch({
+                      type: 'limit-edited',
+                      workspaceId,
+                      index,
+                      limit: { ...entry, maxCalls: event.target.value }
+                    })
+                  }
+                  placeholder="Max STARK calls / 24h…"
+                  aria-label={`Usage limit ${index + 1} max calls`}
+                />
+                <input
+                  className="session__field"
+                  value={entry.maxTokens}
+                  onChange={(event) =>
+                    usageDispatch({
+                      type: 'limit-edited',
+                      workspaceId,
+                      index,
+                      limit: { ...entry, maxTokens: event.target.value }
+                    })
+                  }
+                  placeholder="Max reported tokens / 24h…"
+                  aria-label={`Usage limit ${index + 1} max tokens`}
+                />
+                <input
+                  className="session__field"
+                  value={entry.switchAt}
+                  onChange={(event) =>
+                    usageDispatch({
+                      type: 'limit-edited',
+                      workspaceId,
+                      index,
+                      limit: { ...entry, switchAt: event.target.value }
+                    })
+                  }
+                  placeholder="Switch at %…"
+                  aria-label={`Usage limit ${index + 1} switch percent`}
+                />
+              </div>
+            </div>
+          ))}
+          <div className="session__settings-row">
+            <span className="session__eyebrow">Threshold alternates</span>
+          </div>
+          {USAGE_ROUTE_KEYS.map((routeKey) => (
+            <div key={routeKey}>
+              <p className="session__eyebrow">{usageRouteLabel(routeKey)}</p>
+              <div className="session__settings-row">
+                <select
+                  className="session__select"
+                  value={usage.draft.alternates[routeKey].providerId}
+                  onChange={(event) =>
+                    usageDispatch({
+                      type: 'alternate-edited',
+                      workspaceId,
+                      routeKey,
+                      alternate: { ...usage.draft.alternates[routeKey], providerId: event.target.value }
+                    })
+                  }
+                  aria-label={`${usageRouteLabel(routeKey)} alternate provider`}
+                >
+                  <option value="openai">openai</option>
+                </select>
+                <input
+                  className="session__field"
+                  value={usage.draft.alternates[routeKey].model}
+                  onChange={(event) =>
+                    usageDispatch({
+                      type: 'alternate-edited',
+                      workspaceId,
+                      routeKey,
+                      alternate: { ...usage.draft.alternates[routeKey], model: event.target.value }
+                    })
+                  }
+                  placeholder={`${usageRouteLabel(routeKey)} alternate model…`}
+                  aria-label={`${usageRouteLabel(routeKey)} alternate model`}
+                  list="usage-model-options"
+                />
+              </div>
+            </div>
+          ))}
+          <datalist id="usage-model-options">
+            {provider.models.map((entry) => (
+              <option key={entry.id} value={entry.id} />
+            ))}
+          </datalist>
+          {usage.loading && (
+            <p className="session__status" role="status">
+              Loading usage…
+            </p>
+          )}
+          {usage.loadError !== null && (
+            <p className="session__error" role="alert">
+              {usage.loadError}
+            </p>
+          )}
+          {usage.saveError !== null && (
+            <p className="session__error" role="alert">
+              {usage.saveError}
+            </p>
+          )}
+          {usage.notice !== null && (
+            <p className="session__status" role="status">
+              {usage.notice}
+            </p>
+          )}
+          <div className="session__settings-row">
+            <button
+              className="explorer__primary"
+              type="button"
+              onClick={() => void handleSaveUsage()}
+              disabled={usage.saving}
+            >
+              {usage.saving ? 'Saving…' : 'Save usage routing'}
+            </button>
+          </div>
+          <div className="session__settings-row">
             <span className="session__eyebrow">Agent Permissions</span>
             <span className="session__hint">{capabilities.draft.enabled ? 'Enabled' : 'Disabled'}</span>
           </div>
@@ -1980,6 +2593,16 @@ export function SessionPanel({
                 {capability === 'change.propose' && (
                   <p className="session__hint" role="note">
                     Allowing proposals does not allow STARK to apply them. File changes still require review and Accept.
+                  </p>
+                )}
+                {capability === 'runtime.observe' && (
+                  <p className="session__hint" role="note">
+                    Allows the Worker to inspect the managed runtime&apos;s status and bounded stdout/stderr logs.
+                  </p>
+                )}
+                {capability === 'preview.inspect' && (
+                  <p className="session__hint" role="note">
+                    Allows the Worker to inspect bounded rendered content from STARK&apos;s local Live Preview. It does not allow clicking, typing, form submission, or DOM modification.
                   </p>
                 )}
               </div>
@@ -2294,6 +2917,15 @@ export function SessionPanel({
                     </li>
                   ))}
                 </ul>
+                {work.run.usageRouteDecisions.map((decision, index) => (
+                  <p className="session__hint" role="note" key={`${decision.role}-${decision.routeKey}-${String(index)}`}>
+                    {decision.decision === 'threshold_alternate'
+                      ? `${decision.role === 'brain' ? 'Brain' : 'Worker'} — Configured: ${decision.baseProviderId} / ${decision.baseModel} — Threshold route: ${decision.selectedProviderId} / ${decision.selectedModel} — Reason: Local call threshold reached`
+                      : decision.decision === 'threshold_reached_no_alternate'
+                        ? 'Local threshold reached; normal Heart route used because no alternate is configured.'
+                        : null}
+                  </p>
+                ))}
               </div>
             )}
             <textarea

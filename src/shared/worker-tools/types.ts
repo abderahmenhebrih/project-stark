@@ -1,17 +1,20 @@
 /**
- * Shared Worker tool contract (Stage 25).
+ * Shared Worker tool contract (Stage 27).
  *
  * Worker tools: workspace_read, workspace_search, git_read,
- * change_propose, terminal_execute. Plain TypeScript — no Node/DOM
- * APIs. Renderer never submits tool names, args, or results; all
- * derive main-side. Approval is per exact action; policy never
- * mutates on approval. change_propose targets are opaque same-run
- * readRefs (R1…); terminal_execute carries only a bare program plus
- * inert argv (never a shell string, cwd, env, or timeout).
+ * change_propose, terminal_execute, runtime_start, runtime_observe,
+ * preview_inspect. Plain TypeScript —
+ * no Node/DOM APIs. Renderer never submits tool names, args, or
+ * results; all derive main-side. Approval is per exact action; policy
+ * never mutates on approval. change_propose targets are opaque
+ * same-run readRefs (R1…); terminal_execute and runtime_start carry
+ * only a bare program plus inert argv (never a shell string, cwd,
+ * env, or timeout). runtime_start additionally carries the expected
+ * loopback preview port — main derives the preview URL from it.
  */
 
-/** Exactly the five Stage 25 tools. */
-export type WorkerToolName = 'workspace_read' | 'workspace_search' | 'git_read' | 'change_propose' | 'terminal_execute'
+/** Exactly the eight Stage 27 tools. */
+export type WorkerToolName = 'workspace_read' | 'workspace_search' | 'git_read' | 'change_propose' | 'terminal_execute' | 'runtime_start' | 'runtime_observe' | 'preview_inspect'
 
 /** One requested file change inside a change_propose invocation (model supplies only opaque ref). */
 export interface WorkerProposalChange {
@@ -34,6 +37,9 @@ export type WorkerToolArguments =
   | { readonly tool: 'git_read'; readonly operation: 'diff'; readonly scope: 'staged' | 'unstaged'; readonly relativePath: string | null }
   | { readonly tool: 'change_propose'; readonly changes: readonly WorkerProposalChange[] }
   | { readonly tool: 'terminal_execute'; readonly program: string; readonly args: readonly string[] }
+  | { readonly tool: 'runtime_start'; readonly program: string; readonly args: readonly string[]; readonly port: number }
+  | { readonly tool: 'runtime_observe' }
+  | { readonly tool: 'preview_inspect' }
 
 /** Normalized tool result returned to the Worker as DATA (never authority). */
 export type WorkerToolResultStatus = 'succeeded' | 'denied' | 'failed'

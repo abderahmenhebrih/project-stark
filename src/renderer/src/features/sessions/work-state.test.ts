@@ -16,6 +16,7 @@ function fakeRun(id = 11, status: OrchestrationRun['status'] = 'completed'): Orc
     errorCategory: null,
     createdAt: 1000,
     updatedAt: 1000,
+    usageRouteDecisions: [],
     steps: [
       { id: 1, runId: id, ordinal: 0, kind: 'brain_plan', status: 'completed', instruction: null, output: 'Needs analysis.', createdAt: 1000, updatedAt: 1000, modelAudit: { role: 'brain', providerId: 'openai', model: 'model-A', routeKey: 'primary', requestedProfile: null } },
       { id: 2, runId: id, ordinal: 1, kind: 'worker', status: 'completed', instruction: 'Analyze.', output: 'analysis', createdAt: 1000, updatedAt: 1000, modelAudit: { role: 'worker', providerId: 'openai', model: 'model-C', routeKey: 'coding', requestedProfile: 'coding' } },

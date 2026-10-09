@@ -12,7 +12,10 @@ import { HeartRepository } from '../heart/heart-repository'
 import { LooplinkRepository } from '../looplink/looplink-repository'
 import { RecoveryRepository } from '../recovery/recovery-repository'
 import { CapabilityRepository } from '../capabilities/capability-repository'
+import { WorkerCommandRepository } from '../worker-tools/worker-command-repository'
+import { ProjectRuntimeRepository } from '../project-runtime/project-runtime-repository'
 import { WorkerToolRepository } from '../worker-tools/worker-tool-repository'
+import { AiUsageRepository } from '../usage/ai-usage-repository'
 import { KeyValueRepository } from '../database/repositories/key-value-repository'
 import { OrchestrationRepository } from '../database/repositories/orchestration-repository'
 import { WorkspaceRepository } from '../database/repositories/workspace-repository'
@@ -76,6 +79,9 @@ function openProductionShapedServices(): { db: DatabaseSync; services: ReturnTyp
         recoveryStore: new RecoveryRepository(db),
         capabilityStore: new CapabilityRepository(db),
         workerToolStore: new WorkerToolRepository(db),
+        workerCommandStore: new WorkerCommandRepository(db),
+        runtimeStore: new ProjectRuntimeRepository(db),
+        usageStore: new AiUsageRepository(db),
         codingSessions: new CodingSessionRepository(db),
         aiProviders: new AiProviderRepository(db)
       },
@@ -146,7 +152,15 @@ const EXPECTED_PRODUCTION_CHANNELS: readonly string[] = [
   IPC_CHANNELS.capabilitiesUpdateWorkspaceConfig,
   IPC_CHANNELS.workerToolsGetPendingApproval,
   IPC_CHANNELS.workerToolsApproveAndResume,
-  IPC_CHANNELS.workerToolsDenyAndResume
+  IPC_CHANNELS.workerToolsDenyAndResume,
+  IPC_CHANNELS.runtimesGetActive,
+  IPC_CHANNELS.runtimesListRecent,
+  IPC_CHANNELS.runtimesStop,
+  IPC_CHANNELS.runtimesOpenPreview,
+  IPC_CHANNELS.runtimesReloadPreview,
+  IPC_CHANNELS.usageGetConfig,
+  IPC_CHANNELS.usageUpdateConfig,
+  IPC_CHANNELS.usageGetSummary
 ]
 
 describe('authoritative production IPC surface', () => {
@@ -186,6 +200,8 @@ describe('authoritative production IPC surface', () => {
         recoveryStore: services.recoveryStore,
         capabilityService: services.capabilityService,
         workerToolRunner: services.workerToolRunner,
+        projectRuntimeService: services.projectRuntimeService,
+        usageService: services.usageService,
         workspaces: new WorkspaceRepository(db),
         codingSessions: new CodingSessionRepository(db)
       }).map((binding) => binding.channel)
@@ -198,9 +214,9 @@ describe('authoritative production IPC surface', () => {
   it('accounts for every shipped IPC channel exactly once', () => {
     const all = new Set<string>(Object.values(IPC_CHANNELS))
     // Channels outside createIpcBindings by design: getAppInfo is
-    // registered directly, terminal data/exit are main-to-renderer
-    // events, never invoke bindings.
-    for (const standalone of [IPC_CHANNELS.getAppInfo, IPC_CHANNELS.terminalData, IPC_CHANNELS.terminalExit]) {
+    // registered directly, terminal data/exit and runtime updates are
+    // main-to-renderer events, never invoke bindings.
+    for (const standalone of [IPC_CHANNELS.getAppInfo, IPC_CHANNELS.terminalData, IPC_CHANNELS.terminalExit, IPC_CHANNELS.runtimeUpdated]) {
       assert.ok(all.delete(standalone), `${standalone} must exist`)
     }
     assert.deepEqual([...all].sort(), [...EXPECTED_PRODUCTION_CHANNELS].sort())
@@ -245,7 +261,19 @@ describe('authoritative production IPC surface', () => {
       'IPC_CHANNELS.workerToolsApproveAndResume',
       'IPC_CHANNELS.workerToolsDenyAndResume',
       'createWorkerToolsApi()',
-      'workerTools: createWorkerToolsApi()'
+      'workerTools: createWorkerToolsApi()',
+      'IPC_CHANNELS.runtimesGetActive',
+      'IPC_CHANNELS.runtimesListRecent',
+      'IPC_CHANNELS.runtimesStop',
+      'IPC_CHANNELS.runtimesOpenPreview',
+      'IPC_CHANNELS.runtimesReloadPreview',
+      'createRuntimesApi()',
+      'runtimes: createRuntimesApi()',
+      'IPC_CHANNELS.usageGetConfig',
+      'IPC_CHANNELS.usageUpdateConfig',
+      'IPC_CHANNELS.usageGetSummary',
+      'createUsageApi()',
+      'usage: createUsageApi()'
     ]) {
       assert.ok(source.includes(expected), `preload must contain ${expected}`)
     }
@@ -256,5 +284,7 @@ describe('authoritative production IPC surface', () => {
     assert.ok(!source.includes("'stark:recovery:"), 'preload must not hardcode recovery channel names')
     assert.ok(!source.includes("'stark:capabilities:"), 'preload must not hardcode capability channel names')
     assert.ok(!source.includes("'stark:worker-tools:"), 'preload must not hardcode worker-tool channel names')
+    assert.ok(!source.includes("'stark:runtimes:"), 'preload must not hardcode runtime channel names')
+    assert.ok(!source.includes("'stark:runtime:"), 'preload must not hardcode runtime event names')
   })
 })

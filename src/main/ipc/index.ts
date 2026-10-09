@@ -8,6 +8,8 @@ import type { LooplinkService } from '../looplink/looplink-service'
 import type { RecoveryService } from '../recovery/recovery-service'
 import type { CapabilityService } from '../capabilities/capability-service'
 import type { WorkerToolRunner } from '../worker-tools/worker-tool-runner'
+import type { ProjectRuntimeService } from '../project-runtime/project-runtime-service'
+import type { AiUsageService } from '../usage/ai-usage-service'
 import type { AiRecoveryCoordinator } from '../recovery/recovery-coordinator'
 import type { RecoveryRepository } from '../recovery/recovery-repository'
 import type { WorkspaceRepository } from '../database/repositories/workspace-repository'
@@ -33,6 +35,8 @@ import type { IpcBinding } from './binding'
 import { createAiBindings } from './ai'
 import { createCapabilityBindings } from './capabilities'
 import { createWorkerToolBindings } from './worker-tools'
+import { createUsageBindings } from './usage'
+import { createRuntimeBindings } from './runtimes'
 import { createChangeSetBindings } from './change-sets'
 import { createHeartBindings } from './heart'
 import { createLooplinkBindings } from './looplink'
@@ -112,6 +116,10 @@ export interface IpcDependencies {
   readonly capabilityService?: CapabilityService
   /** Stage 23 worker tools. Optional; absent means no approval channels and legacy Work. */
   readonly workerToolRunner?: WorkerToolRunner
+  /** Stage 26 managed project runtimes. Optional; absent means no runtime channels. */
+  readonly projectRuntimeService?: ProjectRuntimeService
+  /** Stage 28 local usage awareness. Optional; absent means no usage channels. */
+  readonly usageService?: AiUsageService
   readonly workspaces?: WorkspaceRepository
   readonly codingSessions?: CodingSessionRepository
 }
@@ -165,6 +173,12 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
   }
   if (deps.workerToolRunner !== undefined) {
     bindings.push(...createWorkerToolBindings(deps.workerToolRunner))
+  }
+  if (deps.projectRuntimeService !== undefined) {
+    bindings.push(...createRuntimeBindings(deps.projectRuntimeService))
+  }
+  if (deps.usageService !== undefined) {
+    bindings.push(...createUsageBindings(deps.usageService, deps.heartService))
   }
   return bindings
 }

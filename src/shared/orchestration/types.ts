@@ -64,6 +64,11 @@ export interface OrchestrationRun {
   readonly createdAt: number
   readonly updatedAt: number
   readonly steps: readonly OrchestrationStep[]
+  /**
+   * Stage 28 Heart usage-routing explanation (empty for runs that
+   * predate threshold routing — historical details omit it).
+   */
+  readonly usageRouteDecisions: readonly import('../usage/types').UsageRouteDecision[]
 }
 
 /** Reference to one persisted run. */

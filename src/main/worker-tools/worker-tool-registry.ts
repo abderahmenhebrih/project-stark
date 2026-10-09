@@ -2,25 +2,30 @@ import type { AgentCapability } from '../../shared/capabilities/types'
 import type { WorkerToolName } from '../../shared/worker-tools/types'
 
 /**
- * Static Worker tool registry (Stage 25): exactly five tools —
+ * Static Worker tool registry (Stage 27): exactly eight tools —
  * three read-only, one reviewable-proposal, one exact-approval
- * terminal command — mapped to Stage 22 capabilities. Main-owned —
- * never from renderer, provider, or Brain/Worker output.
+ * terminal command, one managed-runtime start, two read-only
+ * observations (runtime state/logs, rendered Preview snapshot) —
+ * mapped to Stage 27 capabilities. Main-owned — never from
+ * renderer, provider, or Brain/Worker output.
  */
 
-export const WORKER_TOOLS: readonly WorkerToolName[] = ['workspace_read', 'workspace_search', 'git_read', 'change_propose', 'terminal_execute']
+export const WORKER_TOOLS: readonly WorkerToolName[] = ['workspace_read', 'workspace_search', 'git_read', 'change_propose', 'terminal_execute', 'runtime_start', 'runtime_observe', 'preview_inspect']
 
 const TOOL_TO_CAPABILITY: Readonly<Record<WorkerToolName, AgentCapability>> = {
   workspace_read: 'workspace.read',
   workspace_search: 'workspace.search',
   git_read: 'git.read',
   change_propose: 'change.propose',
-  terminal_execute: 'terminal.execute'
+  terminal_execute: 'terminal.execute',
+  runtime_start: 'terminal.execute',
+  runtime_observe: 'runtime.observe',
+  preview_inspect: 'preview.inspect'
 }
 
 const KNOWN: ReadonlySet<string> = new Set<string>(WORKER_TOOLS)
 
-/** True for exactly the five known tools. */
+/** True for exactly the six known tools. */
 export function isKnownWorkerTool(value: string): value is WorkerToolName {
   return KNOWN.has(value)
 }
@@ -105,6 +110,40 @@ export function workerToolSchemas(): { readonly name: WorkerToolName; readonly d
           args: { type: 'array', maxItems: 32, items: { type: 'string' } }
         }
       }
+    },
+    {
+      name: 'runtime_start',
+      description: 'Start one managed long-lived project runtime (dev server) with human approval for the exact program, arguments, and loopback preview port. The runtime outlives the Work run until stopped or its lifetime ends.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['program', 'args', 'port'],
+        properties: {
+          program: { type: 'string' },
+          args: { type: 'array', maxItems: 32, items: { type: 'string' } },
+          port: { type: 'integer', minimum: 1024, maximum: 65535 }
+        }
+      }
+    },
+    {
+      name: 'runtime_observe',
+      description: 'Inspect the current managed runtime state and bounded stdout/stderr logs (read-only). No start, stop, reload, or lifetime change.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: [],
+        properties: {}
+      }
+    },
+    {
+      name: 'preview_inspect',
+      description: 'Inspect a bounded read-only snapshot of the managed local Live Preview (rendered text and elements). No click, type, submit, navigation, or DOM modification.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: [],
+        properties: {}
+      }
     }
   ]
 }
@@ -133,6 +172,15 @@ export function approvalSummaryFor(tool: WorkerToolName, args: Record<string, un
   }
   if (tool === 'terminal_execute') {
     return `Run command: ${String(args['program'] ?? '')}`
+  }
+  if (tool === 'runtime_start') {
+    return `Start project runtime: ${String(args['program'] ?? '')}`
+  }
+  if (tool === 'runtime_observe') {
+    return 'Observe managed runtime'
+  }
+  if (tool === 'preview_inspect') {
+    return 'Inspect rendered Live Preview'
   }
   const operation = args['operation']
   if (operation === 'status') {

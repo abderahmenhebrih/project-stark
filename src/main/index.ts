@@ -1,4 +1,6 @@
 import { app, BrowserWindow } from 'electron'
+import { IPC_CHANNELS } from '../shared/constants'
+import type { ProjectRuntimeUpdatedEvent } from '../shared/project-runtime/types'
 import { setStarkAiDiagEnabled } from './ai/ai-provider-service'
 import { createOpenAiClient } from './ai/openai-adapter'
 import { createServices } from './application/create-services'
@@ -26,6 +28,13 @@ const starkDatabase = new StarkDatabase()
  * orphan shells remain. No agent authority flows through this manager.
  */
 let terminalManager: TerminalManager | null = null
+
+/**
+ * Bounded managed-runtime shutdown hook, installed once services are
+ * constructed. Stops exact runtime trees created by this process and
+ * persists their final state before the database connection closes.
+ */
+let shutdownRuntimes: (() => void) | null = null
 
 function shutdownTerminals(): void {
   try {
@@ -132,6 +141,8 @@ void app.whenReady().then(() => {
     capabilityStore: starkDatabase.getCapabilities(),
     workerToolStore: starkDatabase.getWorkerTools(),
     workerCommandStore: starkDatabase.getWorkerCommands(),
+    runtimeStore: starkDatabase.getProjectRuntimes(),
+    usageStore: starkDatabase.getUsage(),
     codingSessions: starkDatabase.getCodingSessions(),
     aiProviders: starkDatabase.getAiProviders()
   })
@@ -179,7 +190,46 @@ void app.whenReady().then(() => {
   } catch {
     // Best effort: a failed recovery mark must never block startup.
   }
+  // Crash recovery for managed project runtimes (Stage 26): leftover
+  // starting/running sessions become interrupted with no relaunch, no
+  // PID kills, and no auto-restart. Parked runs linked to those
+  // sessions fail with safe copy.
+  try {
+    services.projectRuntimeService?.recoverAtStartup(Date.now())
+  } catch {
+    // Best effort: a failed recovery mark must never block startup.
+  }
+  // Local usage telemetry cleanup (Stage 28): one bounded retention
+  // delete plus one bounded started→interrupted update. No provider
+  // calls, no retries, no timers. Interrupted attempts still count
+  // as locally initiated calls.
+  try {
+    services.usageService?.startupCleanup(Date.now())
+  } catch {
+    // Best effort: a failed usage cleanup must never block startup.
+  }
+  // Live runtime updates fan out to every open STARK renderer. Only
+  // trusted senders can invoke runtime IPC, and payloads are bounded
+  // renderer-safe summaries (no PID, env, or paths).
+  services.projectRuntimeService?.setUpdatedListener((event: ProjectRuntimeUpdatedEvent) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      try {
+        if (!window.isDestroyed()) {
+          window.webContents.send(IPC_CHANNELS.runtimeUpdated, event)
+        }
+      } catch {
+        // Best effort streaming: a destroyed renderer stops receiving.
+      }
+    }
+  })
   terminalManager = new TerminalManager(createNodePtyFactory(), createTerminalEventSink())
+  shutdownRuntimes = () => {
+    try {
+      void services.projectRuntimeService?.shutdownAll(Date.now())
+    } catch {
+      // Best effort during quit.
+    }
+  }
   registerIpcHandlers({    settingsService: services.settingsService,
     profileService: services.profileService,
     workspaceService: services.workspaceService,
@@ -205,6 +255,8 @@ void app.whenReady().then(() => {
     recoveryCoordinator: services.recoveryCoordinator,
     capabilityService: services.capabilityService,
     workerToolRunner: services.workerToolRunner,
+    projectRuntimeService: services.projectRuntimeService,
+    usageService: services.usageService,
     workspaces: starkDatabase.getWorkspaces(),
     codingSessions: starkDatabase.getCodingSessions()
   })
@@ -227,9 +279,17 @@ app.on('window-all-closed', () => {
 })
 
 // Close the SQLite connection cleanly during shutdown. Idempotent.
-// Terminals are terminated first with bounded cleanup so quit never
-// waits indefinitely on a shell process.
+// Managed runtimes stop first with bounded cleanup (their final state
+// persists to SQLite), then terminals, then the database connection, so
+// quit never waits indefinitely on a child process.
 app.on('before-quit', () => {
+  try {
+    shutdownRuntimes?.()
+  } catch {
+    // Best effort during quit.
+  } finally {
+    shutdownRuntimes = null
+  }
   shutdownTerminals()
   starkDatabase.close()
 })

@@ -1,5 +1,5 @@
 /**
- * Shared Agent Capability contract (Stage 22).
+ * Shared Agent Capability contract (Stage 27).
  *
  * ONE canonical contract for the renderer, preload, and main process.
  * Plain TypeScript only — no Node.js or DOM APIs.
@@ -12,13 +12,15 @@
  * authority.
  */
 
-/** Exactly the five Stage 22 capabilities. No more. */
+/** Exactly the seven Stage 27 capabilities. No more. */
 export type AgentCapability =
   | 'workspace.read'
   | 'workspace.search'
   | 'git.read'
   | 'change.propose'
   | 'terminal.execute'
+  | 'runtime.observe'
+  | 'preview.inspect'
 
 /** Policy modes. Terminal may use only deny/ask. */
 export type CapabilityPolicyMode = 'deny' | 'ask' | 'allow'

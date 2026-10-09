@@ -146,7 +146,7 @@ and `window.stark` have no database access and no generic SQL IPC exists.
   so the dev server and a raw `electron ./out/...` launch may use
   different roots; the dev/prod *filename* split above always applies.)
 - Migrations: ordered, validated, transactional, tracked with
-  `PRAGMA user_version`. Current schema version: **14**.
+  `PRAGMA user_version`. Current schema version: **17**.
 - Tables: `key_value(key TEXT PRIMARY KEY, value TEXT (JSON), updated_at INTEGER)`,
   `workspaces(id, root_path UNIQUE, display_name, created_at, last_opened_at)`
   plus a recency index, `change_transactions` + `change_transaction_files`,
@@ -156,7 +156,8 @@ and `window.stark` have no database access and no generic SQL IPC exists.
   `change_sets` + `change_set_items` (grouped-review linkage, cascades),
   `worker_tool_approvals` + `worker_tool_events` + `worker_tool_run_state`
   (exact approvals, immutable audit, bounded resume state),
-  `worker_command_executions` (at-most-once bounded command runs, UNIQUE approval).
+  `worker_command_executions` (at-most-once bounded command runs, UNIQUE approval),
+  `project_runtime_sessions` (at-most-once managed runtimes, UNIQUE approval, one active per Workspace).
 - Pragmas: `foreign_keys = ON`, `journal_mode = WAL`, `synchronous = NORMAL`,
   `busy_timeout = 5000`.
 - Tests: `npm test` (Node built-in runner, real SQLite, isolated
@@ -1038,6 +1039,110 @@ silently execute it. There is NO automatic terminal execution, ever.
   re-read); output never auto-Accepts anything. Schema is **v14**
   (`014-worker-command-executions.ts`, append-only; 001–013 untouched).
 
+## Managed Project Runtime Stage 26
+
+Stage 26 adds exactly one Worker-only tool — `runtime_start`
+(`terminal.execute`) — plus a managed project-runtime subsystem for bounded
+long-lived development servers (e.g. `npm run dev`). The Worker may REQUEST a
+start; it may NEVER silently start one, observe logs, or stop a runtime.
+Every start requires exact human approval; persistent Allow stays impossible
+without weakening Stage 25 terminal policy.
+
+- Request flow: strict `{program, args, port}` validation (Stage 25
+  program/argv rules verbatim; port integer 1024–65535; no command string,
+  cwd, env, host, URL, shell, or timeout) → `CapabilityGate`
+  (`worker`/`terminal.execute`, must be `requires_approval`; `allow` fails
+  closed) → one-active-runtime precheck (an active `starting`/`running`
+  session answers `runtime_already_active` with its ID and preview URL —
+  one tool call, no approval, no spawn) → exact approval binding
+  program/argv/port through deterministic JSON + SHA-256 → Approve →
+  gate recheck + atomic reserve-and-consume + active recheck in ONE
+  transaction as `starting` → spawn once → `running`. Crash between
+  reservation and spawn never auto-starts after restart.
+- Execution reuses Stage 25 process rules: bounded sanitized PATH
+  resolution (no Workspace/cwd precedence), argv semantics (`shell:false`),
+  Workspace-root cwd, sanitized allowlist environment (`CI=1`, no provider
+  secrets), stdin closed. No PTY, no human-terminal contact. Runtime
+  processes spawn detached so exact tree termination reaches dev-server
+  children (POSIX process-group signal, Windows `taskkill /PID <exact-pid>
+  /T` — never by name, never broadly, no persisted PIDs).
+- Lifetime: one 30-minute hard deadline per runtime (single timer, not
+  polling) → `timed_out`/`lifetime_limit`, no restart. Explicit human Stop
+  (IDs only, workspace-ownership checked, live-handle-only signalling,
+  bounded 5 s wait) → `stopped`/`user`. Natural exits record
+  `exited`/`process_exit` with no restart. Normal app shutdown stops every
+  live tree with a bounded global deadline (`stopped`/`app_shutdown`).
+  Startup marks leftover `starting`/`running` → `interrupted` with no
+  launch, no PID kill, no reconnect, failing parked runs with safe copy.
+- Logs: continuous stdout/stderr capture into a bounded 128 KiB rolling
+  tail (oldest dropped, newest kept, `logs_truncated`, overflow-safe total;
+  large logs never terminate the runtime), persisted coalesced (one timer
+  per runtime, ≥500 ms; flushed on transitions/exit/stop), normalized to
+  safe Unicode. Logs are untrusted human-visible DATA only — Stage 26
+  feeds nothing to Brain/Worker automatically and adds no Worker stop
+  tool (Stage 27 adds explicit bounded read-only observation).
+- Live Preview: an isolated `BrowserWindow` per runtime (no Node, no STARK
+  preload/bridge, sandboxed, `webSecurity`, ephemeral per-runtime session
+  partition), navigating only to main-derived `http://127.0.0.1:<port>/`
+  with same-loopback-origin allowlist (paths/queries fine; external hosts,
+  other ports, `localhost`-as-different-host, `file:`/`javascript:`/`data:`
+  denied), `window.open` denied, sensitive permissions denied. Closing the
+  preview never stops the runtime; reload is explicit (no polling, no
+  readiness probing — spawn success means running, not ready; Stage 27
+  adds explicit bounded read-only inspection with no click/type/submit,
+  no navigation, and no DOM mutation).
+- UI: workspace-scoped Runtime section (active card with status/command/
+  preview URL/started time/"Maximum runtime: 30 minutes.", Open/Reload/Stop
+  buttons, inert log tails with omission copy, 10-row history; no
+  countdowns), runtime approval variant (capability, exact program/argv/
+  preview/cwd, both warnings, Deny/Approve only), `stark:runtime:updated`
+  push events instead of polling. IPC adds only `get-active`/`list-recent`/
+  `stop`/`open-preview`/`reload-preview` (IDs only) — no start/spawn/kill/
+  URL surface. Runtimes outlive Work completion/failure by design; post-tool
+  recovery stays disabled; Looplink untouched by runtime state. Schema is
+  **v15** (`015-project-runtimes.ts`, append-only; 001–014 untouched).
+
+## Local Provider Usage Awareness + Bounded Heart Threshold Routing Stage 28
+
+Stage 28 observes — never bills. STARK counts only the provider calls
+STARK itself makes, using provider-reported token counts when
+available, and may switch once BEFORE a call to a user-configured
+alternate when a local 24-hour routing threshold is reached. There is
+no provider billing/quota API polling of any kind.
+
+- Local usage ledger: every outbound AI adapter invocation (Ask,
+  Brain plan, Worker turns, synthesis, single/multi proposals, all
+  Recovery variants, tool-runner follow-ups) passes through one
+  central tracker recording provider/model/operation/role, run
+  scope, success or safe failure category, reported tokens, and
+  latency. Reservation (`started`) precedes the single invocation;
+  telemetry failures never retry or duplicate model operations, and
+  startup marks leftovers `interrupted` with one bounded 31-day
+  retention delete. Token fields stay null unless reported — no
+  estimation, no pricing. Tables hold metadata/counters only.
+- Rolling 24-hour summaries per provider/model (calls including
+  started/success/failed/interrupted, successes, failures,
+  rate-limit failures, token sums, token-telemetry completeness)
+  over at most 100 pairs, plus configured limits and Heart
+  assignments. Token thresholds evaluate only on complete
+  telemetry; call thresholds always apply.
+- Heart threshold alternates: at most one alternate per route
+  (`brain.primary`, `worker.fixed/default/general/coding/reasoning/
+  fast`), validated against known providers and current Heart
+  bases, saved atomically with limits in one transaction. Routing
+  defaults OFF, so existing Work is unchanged until opt-in.
+- Route selection is frozen per run: Brain plan+synthesis share one
+  threshold-selected assignment from the Work-start snapshot;
+  Worker selection reuses the same snapshot after the plan;
+  approval resume never re-routes. Decisions persist per run role
+  (`base` / `threshold_alternate` /
+  `threshold_reached_no_alternate`, which never blocks) beside the
+  unchanged step-model audit. Recovery, Ask, and Propose calls are
+  tracked but never threshold-routed. Zero added provider calls;
+  Work ≤7 and Recovery bounds unchanged. IPC adds only
+  `stark:usage:get-config` / `update-config` / `get-summary`
+  (schema v16 → v17 adds usage tables).
+
 ## Current status
 
 - [x] Electron main process, preload bridge, React shell
@@ -1068,4 +1173,7 @@ silently execute it. There is NO automatic terminal execution, ever.
 - [x] Read-only Worker tools: first actual Worker tools (`workspace_read`, `workspace_search`, `git_read`) gated by CapabilityGate with exact per-action approval (pending/approved/denied/expired/consumed, 15-min lazy expiry, hash-verified single-use), max 4 tools and 5 Worker turns per run (max 7 provider calls: 1 plan + 5 worker + 1 synthesis), explicit bounded for-loop, Brain tool-free, guard released while waiting with pending-block on new ops, restart-safe persisted state (256 KiB, same Worker route), Looplink consumed only on final success, tool-enabled recovery disabled after first tool, no terminal/proposal tools, tool data never authority (schema v12 → v13 adds approval/event/state tables)
 - [x] Worker change proposals: exactly one additional Worker tool (`change_propose` → `change.propose`) creating reviewable proposals only from same-run successful `workspace_read` opaque refs (`R1…`, deterministic, restart-reconstructed; search/Git/Looplink/denied/foreign refs never authority), 1–5 targets with 64 KiB per file / 192 KiB total / 300-cp summaries, single → pending Stage 9 transaction and multi → Stage 17 Change Set via existing services (shared validation, stale protection, no-op dropping, disk unchanged, no creation, no Accept), Ask gives exact proposal-creation approval (paths + summaries + non-apply copy, hash-bound single-use, 15-min lazy expiry, stale rechecked on resume), zero new provider calls with 4-tool / 5-turn / 7-call bounds intact, proposals survive later run failure with recovery disabled after tools, existing Changes/Transaction/ChangeSet review reused, no new IPC/tables (schema stays v13)
 - [x] Worker terminal commands: exactly one additional Worker-only tool (`terminal_execute` → `terminal.execute`) running one bounded non-interactive external command per exact human approval — bare program + inert argv only (never a shell string, cwd, env, shell, stdin, or timeout; metacharacters stay data via argv execution), trusted Workspace-root cwd, sanitized allowlist environment (`CI=1`, no provider secrets injected), stdin closed, 60 s runtime cap with child-only termination, 64 KiB combined output cap with output-limit termination, nonzero exits reported as completed failures with no retry, persistent Allow forbidden and fails closed even when seeded (advertised on `ask` only), at-most-once reservation (approval consume + `launching` row in ONE transaction before spawn; crashes mark `interrupted` with no re-execution and no PID kills; parked runs fail with safe copy), counts toward the 4-tool budget with total Work calls still ≤7 and zero new provider calls, post-tool recovery disabled, Looplink pending-while-waiting/consumed-on-success, command side effects stale old `readRef`s without auto-Accept, human terminal stays a separate interactive PTY, Stage 8 remains the exclusive direct STARK writer (explicitly approved commands may still mutate files as external OS processes), no new IPC/preload execution API (schema v13 → v14 adds command executions)
+- [x] Managed project runtime: exactly one additional Worker-only tool (`runtime_start` → `terminal.execute`) starting one bounded long-lived dev server per exact human approval — program + argv (Stage 25 rules) + loopback preview port, one active runtime per Workspace (`runtime_already_active` without approval/spawn), Workspace-root cwd, sanitized environment, stdin closed, detached process-group/tree termination (POSIX group signal, Windows exact-PID `taskkill /T`, no names/scans/PIDs), 30-minute hard deadline, explicit human Stop, bounded app-shutdown cleanup, crash → `interrupted` with no relaunch/kill/reconnect, 128 KiB rolling log tails persisted for human display, isolated loopback-only Preview window (no preload/bridge, same-origin allowlist, popups/permissions denied, lifecycle separate from runtime), workspace Runtime UI with push updates (no polling/countdowns), runtime-scoped IPC reads/stop/preview only, outlives Work by design with recovery disabled, no Worker stop tool (schema v14 → v15 adds runtime sessions)
+- [x] Bounded Worker runtime observation + read-only Live Preview inspection: exactly two additional read-only Worker-only tools (`runtime_observe` → `runtime.observe`, `preview_inspect` → `preview.inspect`) with two new default-deny Workspace capabilities (Deny/Ask/Allow; existing five unchanged; v15 configs migrate withdeny backfill, no silent grants). `runtime_observe` (`{}` only, main derives the active `starting`/`running` runtime) returns a bounded normalized observation (runtimeId/state/program/args/previewUrl/previewPort/startedAt/maximumLifetimeMs plus stdout/stderr/totalOutputBytes/olderOutputOmitted, ≤64 KiB newest-preferred, no PID/paths/env/credentials, no start/stop/reload/lifetime change). `preview_inspect` (`{}` only, main derives the loopback target from the human Preview's current same-origin URL or `/`) returns a bounded structured textual snapshot (title/readyState/URL, ≤32 KiB visible text, ≤100 elements with 300-codepoint text, same-origin path-only hrefs, no input values/cookies/storage/scripts/outerHTML, ≤64 KiB total) via the single constant main-owned DOM script through either the visible page (read-only, never navigated/reloaded/focused) or one temporary hidden isolated inspector (same partition, no preload, popups/permissions denied, one 10 s load attempt, no retry/polling, destroyed immediately, runtime untouched). Ask binds exact `runtimeId` (observe) or `runtimeId` + frozen path (inspect); replaced/restarted runtimes fail safely with no retargeting. Observations are untrusted DATA with zero provider calls, create no `readRef`/proposal authority (only same-run `workspace_read` does), never auto-inject into Worker context, count toward the 4-tool budget (Work still ≤7 calls), disable recovery after use, and reuse existing approval/event IPC with no new channels (schema v15 → v16 backfills capability defaults only)
+- [x] Local provider usage awareness + bounded Heart threshold routing: STARK-only outbound-call ledger with provider-reported tokens (no estimation, no billing/quota polling), rolling 24h summaries with token-completeness gating, user-configured routing thresholds + at most one Heart alternate per route (default off, atomic saves), frozen per-run route snapshots with immutable per-role decision audit beside the step-model audit, tracked-but-unrouted Ask/Propose/Recovery paths, zero added provider calls with all existing call bounds intact, three usage IPC channels (schema v16 → v17 adds usage tables)
 - [ ] Agent orchestration, model routing, auth, Supabase — later stages

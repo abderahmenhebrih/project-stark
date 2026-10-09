@@ -76,22 +76,22 @@ function seedV12(db: DatabaseSync): void {
 }
 
 describe('migration 13 (worker tools)', () => {
-  it('fresh DB migrates to v14', () => {
+  it('fresh DB migrates to v17', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 14)
-      assert.equal(getUserVersion(db), 14)
+      assert.equal(runMigrations(db, migrations), 17)
+      assert.equal(getUserVersion(db), 17)
     } finally {
       db.close()
     }
   })
 
-  it('v12 database upgrades to v14', () => {
+  it('v12 database upgrades to v17', () => {
     const db = openFresh()
     try {
       seedV12(db)
-      assert.equal(runMigrations(db, migrations), 14)
-      assert.equal(getUserVersion(db), 14)
+      assert.equal(runMigrations(db, migrations), 17)
+      assert.equal(getUserVersion(db), 17)
     } finally {
       db.close()
     }
@@ -101,7 +101,7 @@ describe('migration 13 (worker tools)', () => {
     const db = openFresh()
     try {
       seedV12(db)
-      assert.equal(runMigrations(db, migrations), 14)
+      assert.equal(runMigrations(db, migrations), 17)
       for (const table of [
         'key_value',
         'workspaces',
@@ -113,12 +113,25 @@ describe('migration 13 (worker tools)', () => {
         'ai_provider_configs',
         'looplink_handoffs',
         'ai_recovery_settings',
-        'workspace_agent_settings',
-        'workspace_capability_policies'
+        'workspace_agent_settings'
       ]) {
         const count: unknown = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()
         assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }), table)
       }
+      // Stage 27 backfills two default-deny observation policies alongside
+      // the one seeded v12 row; the original row is preserved verbatim.
+      // Raw rows use null prototypes, so compare serialized forms.
+      const policies = db
+        .prepare('SELECT capability, mode FROM workspace_capability_policies WHERE workspace_id = 1 ORDER BY capability')
+        .all() as { capability: string; mode: string }[]
+      assert.equal(
+        JSON.stringify(policies),
+        JSON.stringify([
+          { capability: 'preview.inspect', mode: 'deny' },
+          { capability: 'runtime.observe', mode: 'deny' },
+          { capability: 'workspace.read', mode: 'allow' }
+        ])
+      )
     } finally {
       db.close()
     }
@@ -162,7 +175,7 @@ describe('migration 13 (worker tools)', () => {
     const db = openFresh()
     try {
       runMigrations(db, migrations)
-      assert.equal(runMigrations(db, migrations), 14)
+      assert.equal(runMigrations(db, migrations), 17)
     } finally {
       db.close()
     }
@@ -209,7 +222,7 @@ describe('migration 13 (worker tools)', () => {
   it('migration 13 is registered after migration 12', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     )
     assert.equal(migration013WorkerTools.version, 13)
   })

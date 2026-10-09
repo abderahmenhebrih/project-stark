@@ -9,6 +9,8 @@ import { HeartRepository } from '../heart/heart-repository'
 import { LooplinkRepository } from '../looplink/looplink-repository'
 import { RecoveryRepository } from '../recovery/recovery-repository'
 import { CapabilityRepository } from '../capabilities/capability-repository'
+import { AiUsageRepository } from '../usage/ai-usage-repository'
+import { ProjectRuntimeRepository } from '../project-runtime/project-runtime-repository'
 import { WorkerCommandRepository } from '../worker-tools/worker-command-repository'
 import { WorkerToolRepository } from '../worker-tools/worker-tool-repository'
 import { OrchestrationRepository } from './repositories/orchestration-repository'
@@ -101,8 +103,10 @@ export class StarkDatabase {
   private capabilityRepo: CapabilityRepository | null = null
   private workerToolRepo: WorkerToolRepository | null = null
   private workerCommandRepo: WorkerCommandRepository | null = null
+  private projectRuntimeRepo: ProjectRuntimeRepository | null = null
   private codingSessionRepo: CodingSessionRepository | null = null
   private aiProviderRepo: AiProviderRepository | null = null
+  private usageRepo: AiUsageRepository | null = null
   private schemaVersion = 0
 
   /**
@@ -139,8 +143,10 @@ export class StarkDatabase {
       this.capabilityRepo = new CapabilityRepository(db)
       this.workerToolRepo = new WorkerToolRepository(db)
       this.workerCommandRepo = new WorkerCommandRepository(db)
+      this.projectRuntimeRepo = new ProjectRuntimeRepository(db)
       this.codingSessionRepo = new CodingSessionRepository(db)
       this.aiProviderRepo = new AiProviderRepository(db)
+      this.usageRepo = new AiUsageRepository(db)
     } catch (error) {
       try {
         db.close()
@@ -171,8 +177,10 @@ export class StarkDatabase {
       this.capabilityRepo = null
       this.workerToolRepo = null
       this.workerCommandRepo = null
+      this.projectRuntimeRepo = null
       this.codingSessionRepo = null
       this.aiProviderRepo = null
+      this.usageRepo = null
       this.schemaVersion = 0
     }
   }
@@ -283,6 +291,14 @@ export class StarkDatabase {
     return this.workerCommandRepo
   }
 
+  /** Project-runtime repository access for main-process services. Throws when closed. */
+  getProjectRuntimes(): ProjectRuntimeRepository {
+    if (this.projectRuntimeRepo === null) {
+      throw new DatabaseError('database is not initialized')
+    }
+    return this.projectRuntimeRepo
+  }
+
   /** Coding-session repository access for main-process services. Throws when closed. */
   getCodingSessions(): CodingSessionRepository {
     if (this.codingSessionRepo === null) {
@@ -297,5 +313,13 @@ export class StarkDatabase {
       throw new DatabaseError('database is not initialized')
     }
     return this.aiProviderRepo
+  }
+
+  /** Local usage-awareness repository access for main-process services. Throws when closed. */
+  getUsage(): AiUsageRepository {
+    if (this.usageRepo === null) {
+      throw new DatabaseError('database is not initialized')
+    }
+    return this.usageRepo
   }
 }

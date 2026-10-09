@@ -12,22 +12,31 @@ function readShared(relative: string): string {
 }
 
 describe('worker tool architecture', () => {
-  it('tool registry contains exactly five tools (Stage 25)', () => {
+  it('tool registry contains exactly eight tools (Stage 27)', () => {
     const registry = readMain('worker-tools/worker-tool-registry.ts')
     assert.ok(registry.includes('workspace_read'))
     assert.ok(registry.includes('workspace_search'))
     assert.ok(registry.includes('git_read'))
     assert.ok(registry.includes('change_propose'))
     assert.ok(registry.includes('terminal_execute'))
-    for (const forbidden of ['file_write', 'shell']) {
+    assert.ok(registry.includes('runtime_start'))
+    assert.ok(registry.includes('runtime_observe'))
+    assert.ok(registry.includes('preview_inspect'))
+    for (const forbidden of ['file_write', 'shell', 'browser_click', 'browser_type', 'browser_navigate', 'runtime_stop', 'runtime_logs']) {
       assert.ok(!registry.includes(`'${forbidden}'`), `registry must not contain ${forbidden}`)
     }
   })
 
-  it('change_propose and terminal_execute map to their Stage 22 capabilities', () => {
+  it('change_propose, terminal_execute, and runtime_start map to their Stage 22 capabilities', () => {
     const registry = readMain('worker-tools/worker-tool-registry.ts')
     assert.ok(registry.includes("'change.propose'") || registry.includes('change.propose'))
     assert.ok(registry.includes("'terminal.execute'") || registry.includes('terminal.execute'))
+  })
+
+  it('runtime_start is advertised ask-only and shares the terminal capability', () => {
+    const runner = readMain('worker-tools/worker-tool-runner.ts')
+    assert.ok(runner.includes("'runtime_start'"), 'runner names the runtime tool')
+    assert.ok(runner.includes('terminal.execute'), 'runtime maps to the terminal capability')
   })
 
   it('Worker loop is explicitly bounded (no while-true, no recursion)', () => {
@@ -166,13 +175,89 @@ describe('worker tool architecture', () => {
     assert.ok(service.includes('killOnlyChild'), 'cleanup is scoped to the spawned child')
   })
 
-  it('Brain remains tool-free (no change_propose or terminal_execute schema)', () => {
+  it('runtime_start schema carries program, argv, and port only', () => {
+    const registry = readMain('worker-tools/worker-tool-registry.ts')
+    const start = registry.indexOf("name: 'runtime_start'")
+    assert.ok(start >= 0, 'runtime_start schema must exist')
+    const end = registry.indexOf('}\n    }\n  ]', start)
+    assert.ok(end > start, 'schema block must end')
+    const slice = registry.slice(start, end)
+    assert.ok(slice.includes('program'), 'schema must carry program')
+    assert.ok(slice.includes('args'), 'schema must carry args')
+    assert.ok(slice.includes('port'), 'schema must carry port')
+    for (const forbidden of ['"command"', '"cwd"', '"env"', '"host"', '"url"', '"shell"', '"stdin"', '"timeout"', '"background"', '"detached"', '"workspaceId"', '"sessionId"']) {
+      assert.ok(!slice.includes(forbidden), `runtime_start request schema must not contain ${forbidden}`)
+    }
+  })
+
+  it('no Worker runtime_stop tool exists; stopping is human-only', () => {
+    const registry = readMain('worker-tools/worker-tool-registry.ts')
+    assert.ok(!registry.includes('runtime_stop'))
+    assert.ok(!registry.includes('runtime_logs'))
+    assert.ok(!registry.includes('runtime_status'))
+    for (const forbidden of ['browser_click', 'browser_type', 'browser_navigate', 'javascript', 'evaluate', 'fetch']) {
+      assert.ok(!registry.includes(forbidden), `registry must not contain ${forbidden}`)
+    }
+    const shared = readShared('worker-tools/types.ts')
+    assert.ok(!shared.includes('runtime_stop'))
+    assert.ok(shared.includes('runtime_observe'))
+    assert.ok(shared.includes('preview_inspect'))
+  })
+
+  it('observation tools map to their Stage 27 capabilities', () => {
+    const registry = readMain('worker-tools/worker-tool-registry.ts')
+    assert.ok(registry.includes('runtime.observe'))
+    assert.ok(registry.includes('preview.inspect'))
+  })
+
+  it('observation schemas are exactly empty objects', () => {
+    const registry = readMain('worker-tools/worker-tool-registry.ts')
+    for (const name of ['runtime_observe', 'preview_inspect']) {
+      const start = registry.indexOf(`name: '${name}'`)
+      assert.ok(start >= 0, `${name} schema must exist`)
+      const end = registry.indexOf('}\n    }\n  ]', start)
+      assert.ok(end > start, 'schema block must end')
+      const slice = registry.slice(start, end)
+      assert.ok(slice.includes('additionalProperties'), `${name} must be strict`)
+      for (const forbidden of ['runtimeId', 'workspaceId', 'sessionId', 'port', 'url', 'path', 'selector', 'script', 'javascript']) {
+        assert.ok(!slice.includes(`'${forbidden}'`) && !slice.includes(`"${forbidden}"`), `${name} schema must not contain ${forbidden}`)
+      }
+    }
+  })
+
+  it('runtime observation service is read-only (static)', () => {
+    const service = readMain('runtime-observation/runtime-observation-service.ts')
+    for (const forbidden of ['spawn', 'kill', 'stopRuntime', 'writeTextFile', 'acceptTransaction', 'terminal.write', 'generateText', 'generateStructured']) {
+      assert.ok(!service.includes(forbidden), `observation service must not contain ${forbidden}`)
+    }
+    const preview = readMain('preview-inspection/preview-inspection-service.ts')
+    for (const forbidden of ['WorkspaceFileWriteService', 'ChangeTransactionService', 'TerminalService', 'credential', 'generateText', 'generateStructured']) {
+      assert.ok(!preview.includes(forbidden), `preview service must not contain ${forbidden}`)
+    }
+    assert.ok(!preview.includes('capturePage'), 'no screenshots')
+  })
+
+  it('no arbitrary browser evaluation surface exists', () => {
+    const inspection = readMain('preview-inspection/preview-inspection-service.ts')
+    assert.ok(!inspection.includes('executeJavaScript(') || inspection.includes('MAIN_OWNED_PREVIEW_INSPECTION_SCRIPT'), 'only constant script may execute')
+    const ipc = readMain('ipc/worker-tools.ts')
+    assert.ok(!ipc.includes('callTool'), 'no generic callTool endpoint')
+    assert.ok(!ipc.includes('evaluate('), 'no evaluate endpoint')
+    assert.ok(!ipc.includes('executeBrowser'), 'no browser execute endpoint')
+    const runtimes = readMain('ipc/runtimes.ts')
+    assert.ok(!runtimes.includes('callTool'), 'no runtime callTool endpoint')
+    assert.ok(!runtimes.includes('evaluate('), 'no runtime evaluate endpoint')
+  })
+
+  it('Brain remains tool-free (no change_propose, terminal_execute, or runtime_start)', () => {
     const brain = readMain('ai/ai-brain-service.ts')
     assert.ok(!brain.includes('change_propose'), 'Brain must not name proposal tool')
     assert.ok(!brain.includes('terminal_execute'), 'Brain must not name terminal tool')
+    assert.ok(!brain.includes('runtime_start'), 'Brain must not name runtime tool')
     const shared = readShared('worker-tools/types.ts')
     assert.ok(shared.includes('change_propose'))
     assert.ok(shared.includes('terminal_execute'))
+    assert.ok(shared.includes('runtime_start'))
   })
 
   it('tool domain performs no mutation (static)', () => {
@@ -185,9 +270,14 @@ describe('worker tool architecture', () => {
       'worker-tools/worker-proposal-service.ts',
       'worker-tools/worker-read-ref.ts',
       'worker-tools/worker-proposal-validation.ts',
-      'worker-tools/worker-terminal-validation.ts',
-      'worker-tools/worker-executable.ts'
-    ]) {
+        'worker-tools/worker-terminal-validation.ts',
+        'worker-tools/worker-runtime-validation.ts',
+        'worker-tools/worker-executable.ts',
+        'project-runtime/project-runtime-repository.ts',
+        'project-runtime/project-runtime-validation.ts',
+        'project-runtime/process-tree.ts',
+        'project-runtime/runtime-preview.ts'
+      ]) {
       const source = readMain(file)
       for (const forbidden of ['.rm(', 'mkdir', 'git commit', 'git checkout', 'git push', 'git reset', 'terminal.write', 'spawn(']) {
         assert.ok(!source.includes(forbidden), `${file} must not contain ${forbidden}`)

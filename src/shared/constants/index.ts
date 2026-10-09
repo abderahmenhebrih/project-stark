@@ -84,7 +84,16 @@ export const IPC_CHANNELS = {
   capabilitiesUpdateWorkspaceConfig: 'stark:capabilities:update-workspace-config',
   workerToolsGetPendingApproval: 'stark:worker-tools:get-pending-approval',
   workerToolsApproveAndResume: 'stark:worker-tools:approve-and-resume',
-  workerToolsDenyAndResume: 'stark:worker-tools:deny-and-resume'
+  workerToolsDenyAndResume: 'stark:worker-tools:deny-and-resume',
+  runtimesGetActive: 'stark:runtimes:get-active',
+  runtimesListRecent: 'stark:runtimes:list-recent',
+  runtimesStop: 'stark:runtimes:stop',
+  runtimesOpenPreview: 'stark:runtimes:open-preview',
+  runtimesReloadPreview: 'stark:runtimes:reload-preview',
+  runtimeUpdated: 'stark:runtime:updated',
+  usageGetConfig: 'stark:usage:get-config',
+  usageUpdateConfig: 'stark:usage:update-config',
+  usageGetSummary: 'stark:usage:get-summary'
 } as const
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS]

@@ -8,6 +8,8 @@ import {
   type ProviderStructuredRequest,
   type SafePathDiagnosis
 } from './provider-adapter'
+import { normalizeProviderUsage } from '../usage/ai-usage-types'
+import type { ProviderUsage } from '../usage/ai-usage-types'
 import type { ProviderModel } from '../../shared/providers/types'
 import {
   ProviderEmptyResponseError,
@@ -40,7 +42,29 @@ export interface OpenAiResponsesClient {
       text?: unknown
     },
     options?: { timeout?: number; maxRetries?: number }
-  ): Promise<{ output_text?: string; output?: readonly unknown[] }>
+  ): Promise<{
+    output_text?: string
+    output?: readonly unknown[]
+    usage?: { input_tokens?: unknown; output_tokens?: unknown; total_tokens?: unknown }
+  }>
+}
+
+/** Maps a Responses-API usage block to ProviderUsage (null when unreported). */
+function readResponseUsage(response: {
+  usage?: { input_tokens?: unknown; output_tokens?: unknown; total_tokens?: unknown }
+}): ProviderUsage | null {
+  if (response.usage === undefined) {
+    return null
+  }
+  const normalized = normalizeProviderUsage({
+    input_tokens: response.usage.input_tokens,
+    output_tokens: response.usage.output_tokens,
+    total_tokens: response.usage.total_tokens
+  })
+  if (normalized.inputTokens === null && normalized.outputTokens === null && normalized.totalTokens === null) {
+    return null
+  }
+  return normalized
 }
 
 export interface OpenAiClientLike {
@@ -138,7 +162,9 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
     }
   }
 
-  async generateText(request: ProviderGenerateRequest & { readonly apiKey: string }): Promise<{ text: string }> {
+  async generateText(
+    request: ProviderGenerateRequest & { readonly apiKey: string }
+  ): Promise<{ text: string; usage: ProviderUsage | null }> {
     try {
       const response = await this.clients(request.apiKey).responses.create(
         {
@@ -154,7 +180,7 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
       if (text === null || text === '') {
         throw new ProviderEmptyResponseError()
       }
-      return { text }
+      return { text, usage: readResponseUsage(response) }
     } catch (error) {
       if (error instanceof ProviderEmptyResponseError) {
         throw error
@@ -173,7 +199,7 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
    */
   async generateStructured(
     request: ProviderStructuredRequest & { readonly apiKey: string }
-  ): Promise<{ outputText: string }> {
+  ): Promise<{ outputText: string; usage: ProviderUsage | null }> {
     try {
       const response = await this.clients(request.apiKey).responses.create(
         {
@@ -197,7 +223,7 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
       if (text === null || text === '') {
         throw new ProviderEmptyResponseError()
       }
-      return { outputText: text }
+      return { outputText: text, usage: readResponseUsage(response) }
     } catch (error) {
       if (error instanceof ProviderEmptyResponseError) {
         throw error

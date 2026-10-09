@@ -47,11 +47,18 @@ describe('brain no-authority architecture', () => {
     // Stage 21 adds two bounded recovery paths (recovery-fixed run +
     // recovery text-only final) alongside the primary run: 3 structured
     // plan sites and 6 text sites total, each path using at most 1 plan
-    // + 1 worker + 1 synthesis. No path loops or retries.
-    const structuredSites = brain.match(/generateStructured\(/g) ?? []
+    // + 1 worker + 1 synthesis. No path loops or retries. Stage 28
+    // wraps every site in a bound tracking closure (bound captures
+    // preserve adapter `this`), so text sites read as
+    // generateWorkerText/generateSynthesisText.
+    const structuredSites = brain.match(/generateStructured\(\{/g) ?? []
     assert.equal(structuredSites.length, 3, 'primary + recovery + recovery-text-only plan sites')
-    const textSites = brain.match(/generateText\(/g) ?? []
-    assert.equal(textSites.length, 6, 'primary (2) + recovery (2) + recovery-text-only (2) text sites')
+    const workerSites = brain.match(/generateWorkerText\(\{/g) ?? []
+    assert.equal(workerSites.length, 3, 'primary + recovery + recovery-text-only worker sites')
+    const synthesisSites = brain.match(/generateSynthesisText\(\{/g) ?? []
+    assert.equal(synthesisSites.length, 3, 'primary + recovery + recovery-text-only synthesis sites')
+    const trackedSites = brain.match(/this\.trackCall\(/g) ?? []
+    assert.equal(trackedSites.length, 9, 'all 9 call sites pass through the central tracker')
     // The only loops in the file budget local context bytes; no loop
     // encloses a provider call (single call sites above prove it).
     for (const forbidden of ['retry', 'repair', 'fallback', 'recursi']) {

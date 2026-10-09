@@ -1,4 +1,5 @@
 import type { ProviderId, ProviderModel } from '../../shared/providers/types'
+import type { ProviderUsage } from '../usage/ai-usage-types'
 import {
   ProviderForbiddenError,
   ProviderGenericError,
@@ -24,9 +25,10 @@ export interface ProviderGenerateRequest {
   readonly maxOutputTokens: number
 }
 
-/** Provider-neutral text result. Text only. */
+/** Provider-neutral text result: text plus provider-REPORTED usage when available. */
 export interface ProviderGenerateResult {
   readonly text: string
+  readonly usage?: ProviderUsage | null
 }
 
 /**
@@ -43,9 +45,10 @@ export interface ProviderStructuredRequest {
   readonly schema: unknown
 }
 
-/** Provider-neutral structured result: the raw JSON envelope text. */
+/** Provider-neutral structured result: raw JSON envelope text plus provider-REPORTED usage when available. */
 export interface ProviderStructuredResult {
   readonly outputText: string
+  readonly usage?: ProviderUsage | null
 }
 
 /** One tool schema advertised to the Worker (main-owned, never renderer). */
@@ -64,10 +67,10 @@ export interface ProviderWorkerTurnRequest {
   readonly tools: readonly ProviderWorkerToolSchema[]
 }
 
-/** Normalized Worker-turn result: exactly one tool request or final text. */
+/** Normalized Worker-turn result: exactly one tool request or final text, plus provider-REPORTED usage when available. */
 export type ProviderWorkerTurnResult =
-  | { readonly kind: 'tool_request'; readonly tool: string; readonly args: unknown }
-  | { readonly kind: 'final_text'; readonly text: string }
+  | { readonly kind: 'tool_request'; readonly tool: string; readonly args: unknown; readonly usage?: ProviderUsage | null }
+  | { readonly kind: 'final_text'; readonly text: string; readonly usage?: ProviderUsage | null }
 
 /**
  * Safe, secret-free outcome of one diagnostic transport path.

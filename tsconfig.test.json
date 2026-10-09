@@ -91,6 +91,13 @@
     "src/renderer/src/features/sessions/capabilities-state.ts",
     "src/renderer/src/features/sessions/capabilities-state.test.ts",
     "src/renderer/src/features/sessions/capabilities-safety.test.ts",
-    "src/renderer/src/features/sessions/worker-tools-safety.test.ts"
+    "src/renderer/src/features/sessions/worker-tools-safety.test.ts",
+    "src/renderer/src/features/sessions/runtime-state.ts",
+    "src/renderer/src/features/sessions/runtime-state.test.ts",
+    "src/renderer/src/features/sessions/runtime-safety.test.ts",
+    "src/renderer/src/features/sessions/observation-safety.test.ts",
+    "src/renderer/src/features/sessions/usage-state.ts",
+    "src/renderer/src/features/sessions/usage-state.test.ts",
+    "src/renderer/src/features/sessions/usage-safety.test.ts"
   ]
 }

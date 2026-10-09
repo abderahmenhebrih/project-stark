@@ -32,10 +32,17 @@ import { CapabilityService } from '../capabilities/capability-service'
 import { CapabilityGate } from '../capabilities/capability-gate'
 import { WorkerCommandRepository } from '../worker-tools/worker-command-repository'
 import { WorkerCommandService } from '../worker-tools/worker-command-service'
+import { ProjectRuntimeRepository } from '../project-runtime/project-runtime-repository'
+import { ProjectRuntimeService } from '../project-runtime/project-runtime-service'
+import { RuntimeObservationService } from '../runtime-observation/runtime-observation-service'
+import { PreviewInspectionService } from '../preview-inspection/preview-inspection-service'
 import { WorkerToolRepository } from '../worker-tools/worker-tool-repository'
 import { WorkerToolApprovalService } from '../worker-tools/worker-tool-approval-service'
 import { WorkerReadToolService } from '../worker-tools/worker-tool-service'
 import { WorkerToolRunner } from '../worker-tools/worker-tool-runner'
+import { AiUsageRepository } from '../usage/ai-usage-repository'
+import { AiUsageService } from '../usage/ai-usage-service'
+import { AiUsageTracker } from '../usage/ai-usage-tracker'
 import { SessionContextService } from '../session-context/session-context-service'
 import { SettingsService } from '../settings/settings-service'
 import { WorkspaceFileWriteService } from '../workspace-files/workspace-file-write-service'
@@ -92,6 +99,15 @@ export interface ApplicationServices {
   /** Stage 25 worker commands. Absent in older harnesses without a command repository. */
   readonly workerCommandStore?: WorkerCommandRepository
   readonly workerCommandService?: WorkerCommandService
+  /** Stage 26 managed project runtimes. Absent in older harnesses without a runtime repository. */
+  readonly runtimeStore?: ProjectRuntimeRepository
+  readonly projectRuntimeService?: ProjectRuntimeService
+  /** Stage 27 read-only observations. Absent in older harnesses without a runtime repository. */
+  readonly runtimeObservationService?: RuntimeObservationService
+  readonly previewInspectionService?: PreviewInspectionService
+  /** Stage 28 local usage awareness. Absent in older harnesses without a usage repository. */
+  readonly usageStore?: AiUsageRepository
+  readonly usageService?: AiUsageService
 }
 
 export interface ServiceDependencies {
@@ -116,6 +132,10 @@ export interface ServiceDependencies {
   readonly workerToolStore?: WorkerToolRepository
   /** Stage 25 worker command-execution repository. Optional so older harnesses keep working. */
   readonly workerCommandStore?: WorkerCommandRepository
+  /** Stage 26 project-runtime repository. Optional so older harnesses keep working. */
+  readonly runtimeStore?: ProjectRuntimeRepository
+  /** Stage 28 usage repository. Optional so older harnesses keep working. */
+  readonly usageStore?: AiUsageRepository
 }
 
 /**
@@ -145,6 +165,50 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
   }
   const protector = providers?.credentialProtector ?? new ElectronSafeStorageCredentialProtector()
   const aiProviderService = new AiProviderService(deps.aiProviders, protector, registry)
+  const heartService =
+    deps.heartStore === undefined
+      ? undefined
+      : new HeartService(deps.heartStore, deps.aiProviders, registry)
+  // Stage 28 local usage awareness: one ledger repository, one
+  // validating service, one central call tracker shared by every AI
+  // service below. Absent in older harnesses (legacy untracked).
+  // Threshold routing stays off until the user explicitly opts in.
+  const usageStore = deps.usageStore
+  const usageService =
+    usageStore === undefined
+      ? undefined
+      : new AiUsageService(usageStore, registry, {
+          heartBaseResolver:
+            heartService === undefined
+              ? undefined
+              : (routeKey) => {
+                  try {
+                    const config = heartService.getConfig()
+                    if (config === null) {
+                      return null
+                    }
+                    if (routeKey === 'brain.primary') {
+                      return { ...config.brain }
+                    }
+                    if (routeKey === 'worker.fixed') {
+                      return config.workerFixed === null ? null : { ...config.workerFixed }
+                    }
+                    if (routeKey === 'worker.default') {
+                      return config.workerDefault === null ? null : { ...config.workerDefault }
+                    }
+                    const profile = routeKey.replace(/^worker\./, '')
+                    if (profile === 'general' || profile === 'coding' || profile === 'reasoning' || profile === 'fast') {
+                      const route = config.workerRoutes[profile]
+                      return route === null ? null : { ...route }
+                    }
+                    return null
+                  } catch {
+                    return null
+                  }
+                }
+        })
+  const usageTracker = usageStore === undefined ? undefined : new AiUsageTracker(usageStore)
+  const usage = usageService === undefined || usageTracker === undefined ? undefined : { tracker: usageTracker, service: usageService }
   const workspaceFilesService = new WorkspaceFilesService(deps.workspaces)
   const workspaceSearchService = new WorkspaceSearchService(deps.workspaces)
   const sessionContextService = new SessionContextService(deps.workspaces, workspaceFilesService)
@@ -181,12 +245,8 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
           registry,
           workspaceFilesService,
           changeSetService,
-          { operationGuard: aiOperationGuard, pendingApprovals }
+          { operationGuard: aiOperationGuard, pendingApprovals, usage }
         )
-  const heartService =
-    deps.heartStore === undefined
-      ? undefined
-      : new HeartService(deps.heartStore, deps.aiProviders, registry)
   // Stage 20 continuity: built only when a looplink repository is
   // supplied; older harnesses omit it and keep legacy AI behavior.
   // Stage 21 couples handoff_ready dismissal with the recovery event
@@ -219,7 +279,7 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
           aiProviderService,
           deps.orchestrationRuns,
           heartService,
-          { operationGuard: aiOperationGuard, looplink: looplinkOption, pendingApprovals }
+          { operationGuard: aiOperationGuard, looplink: looplinkOption, pendingApprovals, usage }
         )
   const aiCompletionService = new AiCompletionService(
       deps.workspaces,
@@ -227,7 +287,7 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
       deps.aiProviders,
       aiProviderService,
       registry,
-      { operationGuard: aiOperationGuard, looplink: looplinkOption, pendingApprovals }
+      { operationGuard: aiOperationGuard, looplink: looplinkOption, pendingApprovals, usage }
     )
   // Stage 21 recovery: built only when a recovery repository is
   // supplied; older harnesses omit it and keep legacy AI behavior.
@@ -286,6 +346,38 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
           gate: capabilityGate,
           commands: workerCommandStore
         })
+  // Stage 26 managed project runtimes: reservation + lifecycle share
+  // the runtime repository. Built only when the runtime repository,
+  // capability gate, worker-tool storage, and orchestration runs are
+  // present. The renderer-update sink is wired by the app root after
+  // construction (tests inject their own listeners).
+  const runtimeStore = deps.runtimeStore
+  const projectRuntimeService =
+    runtimeStore === undefined || capabilityGate === undefined || workerToolStore === undefined
+      ? undefined
+      : new ProjectRuntimeService({
+          workspaces: deps.workspaces,
+          gate: capabilityGate,
+          runtimes: runtimeStore,
+          runs: deps.orchestrationRuns
+        })
+  // Stage 27 read-only observations: bounded runtime state/logs and
+  // bounded rendered Preview snapshots. Built only when the runtime
+  // repository exists; the hidden inspector defaults to unavailable
+  // in headless harnesses (tests inject fakes) and the visible target
+  // resolves from the live Preview map when present.
+  const runtimeObservationService =
+    runtimeStore === undefined ? undefined : new RuntimeObservationService({ runtimes: runtimeStore })
+  const previewInspectionService =
+    runtimeStore === undefined
+      ? undefined
+      : new PreviewInspectionService({
+          runtimes: runtimeStore,
+          getVisiblePreviewUrl:
+            projectRuntimeService === undefined
+              ? undefined
+              : (runtimeId: number) => projectRuntimeService.getVisiblePreviewUrl(runtimeId)
+        })
   const workerReadToolService =
     workerToolStore === undefined || capabilityGate === undefined
       ? undefined
@@ -297,7 +389,10 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
           tools: workerToolStore,
           transactions: changeTransactionService,
           changeSets: changeSetService,
-          commands: workerCommandService
+          commands: workerCommandService,
+          runtimes: projectRuntimeService,
+          runtimeObservation: runtimeObservationService,
+          previewInspection: previewInspectionService
         })
   // Stage 23 tool-enabled Work runner: built only when Heart, gate,
   // files/search/git, and worker-tool storage are all present.
@@ -326,7 +421,11 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
             git: gitService,
             tools: workerToolStore,
             approvals: workerToolApprovalService,
-            executor: workerReadToolService
+            executor: workerReadToolService,
+            runtimes: projectRuntimeService,
+            runtimeObservation: runtimeObservationService,
+            previewInspection: previewInspectionService,
+            usage
           },
           undefined
         )
@@ -354,7 +453,7 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
       registry,
       workspaceFilesService,
       changeTransactionService,
-      { operationGuard: aiOperationGuard, pendingApprovals }
+      { operationGuard: aiOperationGuard, pendingApprovals, usage }
     ),
     changeSetService,
     aiMultiFileProposalService,
@@ -372,6 +471,12 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
     workerReadToolService,
     workerToolRunner,
     workerCommandStore,
-    workerCommandService
+    workerCommandService,
+    runtimeStore,
+    projectRuntimeService,
+    runtimeObservationService,
+    previewInspectionService,
+    usageStore,
+    usageService
   }
 }

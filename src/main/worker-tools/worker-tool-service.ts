@@ -6,6 +6,7 @@ import type { WorkspaceSearchService } from '../workspace-search/workspace-searc
 import type { GitService } from '../git/git-service'
 import type { ChangeSetService } from '../change-sets/change-set-service'
 import type { ChangeTransactionService } from '../change-transactions/change-transaction-service'
+import type { ProjectRuntimeService } from '../project-runtime/project-runtime-service'
 import type { WorkerCommandService } from './worker-command-service'
 import type { WorkerToolRepository } from './worker-tool-repository'
 import { capabilityForTool, isKnownWorkerTool } from './worker-tool-registry'
@@ -32,6 +33,27 @@ import {
   buildTerminalStepSummary,
   parseTerminalExecuteArgs
 } from './worker-terminal-validation'
+import {
+  WORKER_RUNTIME_DENY_MESSAGE,
+  WORKER_RUNTIME_INVALID_POLICY_MESSAGE,
+  WORKER_RUNTIME_USER_DENY_MESSAGE,
+  parseRuntimeStartArgs
+} from './worker-runtime-validation'
+import {
+  WORKER_RUNTIME_OBSERVE_DENY_MESSAGE,
+  WORKER_RUNTIME_OBSERVE_USER_DENY_MESSAGE,
+  WORKER_RUNTIME_TARGET_CHANGED_MESSAGE,
+  parseRuntimeObserveApprovalArgs,
+  parseRuntimeObserveArgs
+} from '../runtime-observation/runtime-observation-validation'
+import {
+  WORKER_PREVIEW_INSPECT_DENY_MESSAGE,
+  WORKER_PREVIEW_USER_DENY_MESSAGE,
+  parsePreviewInspectApprovalArgs,
+  parsePreviewInspectArgs
+} from '../preview-inspection/preview-inspection-validation'
+import type { RuntimeObservationService } from '../runtime-observation/runtime-observation-service'
+import type { PreviewInspectionService } from '../preview-inspection/preview-inspection-service'
 import { hashToolArgs } from './worker-tool-repository'
 import { createWorkerProposal, resolveProposalTargets } from './worker-proposal-service'
 
@@ -102,6 +124,25 @@ export function parseWorkerToolRequest(tool: string, args: unknown): WorkerToolA
     const parsed = parseTerminalExecuteArgs(args)
     return { tool, program: parsed.program, args: [...parsed.args] }
   }
+  if (tool === 'runtime_start') {
+    // Strict program + argv + loopback port only (same program/argv
+    // rules as terminal_execute; main derives the preview URL).
+    const parsed = parseRuntimeStartArgs(args)
+    return { tool, program: parsed.program, args: [...parsed.args], port: parsed.port }
+  }
+  if (tool === 'runtime_observe') {
+    // Exactly empty object — main derives the active runtime from the
+    // current Workspace. No runtimeId/log-limit/PID/path authority.
+    parseRuntimeObserveArgs(args)
+    return { tool }
+  }
+  if (tool === 'preview_inspect') {
+    // Exactly empty object — main derives the loopback target from
+    // the active runtime and human Preview state. No URL/path
+    // authority, no selectors, no JavaScript.
+    parsePreviewInspectArgs(args)
+    return { tool }
+  }
   if (!hasStrictShape(args, ['operation', 'scope', 'relativePath']) && !hasStrictShape(args, ['operation'])) {
     throw new InvalidWorkerToolRequestError('tool arguments are invalid')
   }
@@ -141,6 +182,12 @@ export interface ToolExecutionDeps {
   readonly changeSets?: ChangeSetService
   /** Stage 25 bounded command execution (reservation + spawn). Optional for older harnesses. */
   readonly commands?: WorkerCommandService
+  /** Stage 26 managed runtime sessions (reservation + lifecycle). Optional for older harnesses. */
+  readonly runtimes?: ProjectRuntimeService
+  /** Stage 27 read-only runtime observation. Optional for older harnesses. */
+  readonly runtimeObservation?: RuntimeObservationService
+  /** Stage 27 read-only Preview inspection. Optional for older harnesses. */
+  readonly previewInspection?: PreviewInspectionService
 }
 
 export interface ExecuteToolInput {
@@ -155,13 +202,14 @@ export interface ExecuteToolInput {
 }
 
 /**
- * Bounded tool executor (Stage 24): read-only tools plus one
- * reviewable-proposal tool (change_propose). Validates the request,
- * consults CapabilityGate (worker only), then executes through the
- * existing bounded read/search/Git/proposal services. Direct writers,
- * terminal, shells, Accept/Reject/Rollback are never imported or
- * called — proposals persist as pending Stage 9 transactions or Stage
- * 17 Change Sets only. Results are untrusted DATA with strict caps.
+ * Bounded tool executor (Stage 27): read-only tools plus one
+ * reviewable-proposal tool (change_propose) plus two read-only
+ * observations (runtime_observe, preview_inspect). Validates the
+ * request, consults CapabilityGate (worker only), then executes
+ * through the existing bounded read/search/Git/proposal/observation
+ * services. Direct writers, terminal, shells, Accept/Reject/Rollback,
+ * browser automation, and network fetches are never imported or
+ * called — observations are bounded untrusted DATA with strict caps.
  */
 export class WorkerReadToolService {
   constructor(private readonly deps: ToolExecutionDeps) {}
@@ -180,7 +228,13 @@ export class WorkerReadToolService {
           ? WORKER_PROPOSAL_DENY_MESSAGE
           : input.tool === 'terminal_execute'
             ? WORKER_TERMINAL_DENY_MESSAGE
-            : 'The workspace policy denies this action.'
+            : input.tool === 'runtime_start'
+              ? WORKER_RUNTIME_DENY_MESSAGE
+              : input.tool === 'runtime_observe'
+                ? WORKER_RUNTIME_OBSERVE_DENY_MESSAGE
+                : input.tool === 'preview_inspect'
+                  ? WORKER_PREVIEW_INSPECT_DENY_MESSAGE
+                  : 'The workspace policy denies this action.'
       const result: WorkerToolResult = {
         status: 'denied',
         summary: this.summaryFor(input.tool, input.args),
@@ -193,7 +247,7 @@ export class WorkerReadToolService {
     if (decision.decision === 'requires_approval') {
       throw new InvalidWorkerToolRequestError('approval required')
     }
-    if (input.tool === 'terminal_execute') {
+    if (input.tool === 'terminal_execute' || input.tool === 'runtime_start') {
       // Defense in depth: terminal persistent Allow is forbidden, so a
       // gate `allow` for terminal.execute is an invalid policy — never
       // sufficient for execution. No process spawns here, ever.
@@ -201,7 +255,8 @@ export class WorkerReadToolService {
         status: 'denied',
         summary: this.summaryFor(input.tool, input.args),
         payload: '',
-        reason: WORKER_TERMINAL_INVALID_POLICY_MESSAGE
+        reason:
+          input.tool === 'terminal_execute' ? WORKER_TERMINAL_INVALID_POLICY_MESSAGE : WORKER_RUNTIME_INVALID_POLICY_MESSAGE
       }
       this.persist(input, result)
       return result
@@ -226,7 +281,17 @@ export class WorkerReadToolService {
   async executeApproved(input: ExecuteToolInput): Promise<WorkerToolResult> {
     if (input.tool === 'terminal_execute') {
       return await this.executeApprovedTerminal(input)
-    }    try {
+    }
+    if (input.tool === 'runtime_start') {
+      return await this.executeApprovedRuntime(input)
+    }
+    if (input.tool === 'runtime_observe') {
+      return await this.executeApprovedRuntimeObserve(input)
+    }
+    if (input.tool === 'preview_inspect') {
+      return await this.executeApprovedPreviewInspect(input)
+    }
+    try {
       const result = await this.executeAllowed(input)
       this.persist(input, result)
       return result
@@ -252,6 +317,21 @@ export class WorkerReadToolService {
     return WORKER_TERMINAL_USER_DENY_MESSAGE
   }
 
+  /** Denied-user copy for runtime_start approval denial (persisted by the runner). */
+  static runtimeUserDenyMessage(): string {
+    return WORKER_RUNTIME_USER_DENY_MESSAGE
+  }
+
+  /** Denied-user copy for runtime_observe approval denial (persisted by the runner). */
+  static runtimeObserveUserDenyMessage(): string {
+    return WORKER_RUNTIME_OBSERVE_USER_DENY_MESSAGE
+  }
+
+  /** Denied-user copy for preview_inspect approval denial (persisted by the runner). */
+  static previewInspectUserDenyMessage(): string {
+    return WORKER_PREVIEW_USER_DENY_MESSAGE
+  }
+
   summaryFor(tool: WorkerToolName, args: WorkerToolArguments): string {
     if (tool === 'workspace_read') {
       return `Read ${(args as { relativePath: string }).relativePath}`
@@ -272,6 +352,15 @@ export class WorkerReadToolService {
     }
     if (tool === 'terminal_execute') {
       return `Run command: ${(args as { program?: string }).program ?? ''}`
+    }
+    if (tool === 'runtime_start') {
+      return `Start project runtime: ${(args as { program?: string }).program ?? ''}`
+    }
+    if (tool === 'runtime_observe') {
+      return 'Observe managed runtime'
+    }
+    if (tool === 'preview_inspect') {
+      return 'Inspect rendered Live Preview'
     }
     const record = args as Record<string, unknown>
     if (record['operation'] === 'status') return 'Read Git status'
@@ -304,6 +393,12 @@ export class WorkerReadToolService {
   }
 
   private async executeAllowed(input: ExecuteToolInput): Promise<WorkerToolResult> {
+    if (input.tool === 'runtime_observe') {
+      return await this.executeRuntimeObserve(input)
+    }
+    if (input.tool === 'preview_inspect') {
+      return await this.executePreviewInspect(input)
+    }
     if (input.tool === 'workspace_read') {
       const { relativePath } = input.args as { relativePath: string }
       const file = await this.deps.files.readTextFile({ workspaceId: input.workspaceId, relativePath })
@@ -517,6 +612,273 @@ export class WorkerReadToolService {
     const summary = buildTerminalStepSummary(program, args, result)
     const toolResult: WorkerToolResult = { status: 'succeeded', summary, payload }
     this.persist({ ...input, argsJson: input.argsJson }, toolResult)
+    return toolResult
+  }
+
+  /**
+   * Starts one human-approved managed runtime at most once. The caller
+   * must have verified the approval is pending with the exact args
+   * hash; this re-parses the exact persisted args, re-runs the gate
+   * (only `requires_approval` proceeds), returns the active runtime
+   * when the workspace already owns one, otherwise reserves +
+   * consumes the approval in ONE transaction BEFORE spawning, then
+   * spawns exactly once and persists the bounded audit event. The
+   * runtime outlives the Work run by design.
+   */
+  private async executeApprovedRuntime(input: ExecuteToolInput): Promise<WorkerToolResult> {
+    const fallbackSummary = this.summaryFor(input.tool, input.args)
+    const runtimes = this.deps.runtimes
+    if (runtimes === undefined) {
+      const result: WorkerToolResult = {
+        status: 'failed', summary: fallbackSummary, payload: '', reason: 'Project runtimes are unavailable.'
+      }
+      this.persist(input, result)
+      return result
+    }
+    let program: string
+    let args: readonly string[]
+    let port: number
+    try {
+      const canonical: unknown = JSON.parse(input.argsJson) as unknown
+      const validated = parseRuntimeStartArgs(canonical)
+      program = validated.program
+      args = validated.args
+      port = validated.port
+    } catch {
+      const result: WorkerToolResult = {
+        status: 'failed', summary: fallbackSummary, payload: '', reason: 'Runtime arguments are invalid.'
+      }
+      this.persist(input, result)
+      return result
+    }
+    if (input.approvalId === null) {
+      const result: WorkerToolResult = {
+        status: 'failed', summary: fallbackSummary, payload: '', reason: 'Project runtimes require exact human approval.'
+      }
+      this.persist(input, result)
+      return result
+    }
+    let outcome: Awaited<ReturnType<ProjectRuntimeService['executeApprovedRuntime']>>
+    try {
+      outcome = await runtimes.executeApprovedRuntime({
+        workspaceId: input.workspaceId,
+        sessionId: input.sessionId,
+        runId: input.runId,
+        approvalId: input.approvalId,
+        argsJson: input.argsJson,
+        argsHash: hashToolArgs(input.argsJson),
+        now: input.now
+      })
+    } catch (error) {
+      const result: WorkerToolResult = {
+        status: 'failed',
+        summary: fallbackSummary,
+        payload: '',
+        reason: error instanceof Error ? error.message : 'The tool could not complete.'
+      }
+      this.persist(input, result)
+      return result
+    }
+    if (outcome.kind === 'denied') {
+      const result: WorkerToolResult = { status: 'denied', summary: fallbackSummary, payload: '', reason: outcome.reason }
+      this.persist(input, result)
+      return result
+    }
+    if (outcome.kind === 'active') {
+      const payload = JSON.stringify({
+        status: 'runtime_already_active',
+        runtimeId: outcome.runtime.id,
+        previewUrl: outcome.runtime.previewUrl,
+        port: outcome.runtime.previewPort
+      })
+      const toolResult: WorkerToolResult = {
+        status: 'succeeded',
+        summary: `Project runtime already active: ${program}`,
+        payload
+      }
+      this.persist(input, toolResult)
+      return toolResult
+    }
+    if (outcome.kind === 'failed') {
+      const result: WorkerToolResult = {
+        status: 'failed', summary: fallbackSummary, payload: '', reason: 'The project runtime could not be started.'
+      }
+      this.persist(input, result)
+      return result
+    }
+    const payload = JSON.stringify({
+      status: 'runtime_started',
+      runtimeId: outcome.runtimeId,
+      previewUrl: outcome.previewUrl,
+      port,
+      program,
+      args: [...args]
+    })
+    const toolResult: WorkerToolResult = { status: 'succeeded', summary: `Start project runtime: ${program}`, payload }
+    this.persist(input, toolResult)
+    return toolResult
+  }
+
+  /**
+   * Read-only runtime observation for an allow decision (no approval).
+   * Resolves the active managed runtime main-side and returns a
+   * bounded normalized observation. Never starts/stopsополь. Zero
+   * provider calls. Observations create no proposal authority.
+   */
+  private async executeRuntimeObserve(input: ExecuteToolInput): Promise<WorkerToolResult> {
+    const observation = this.deps.runtimeObservation
+    if (observation === undefined) {
+      return { status: 'failed', summary: 'Observe managed runtime', payload: '', reason: 'Runtime observation is unavailable.' }
+    }
+    try {
+      parseRuntimeObserveArgs(JSON.parse(input.argsJson) as unknown)
+    } catch {
+      return { status: 'failed', summary: 'Observe managed runtime', payload: '', reason: 'Tool arguments are invalid.' }
+    }
+    const outcome = observation.observe(input.workspaceId)
+    if (outcome.status === 'no_active_runtime') {
+      return { status: 'succeeded', summary: 'Observe managed runtime (no active runtime)', payload: outcome.payloadJson }
+    }
+    return { status: 'succeeded', summary: outcome.summary, payload: outcome.payloadJson }
+  }
+
+  /**
+   * Read-only Preview inspection for an allow decision (no approval).
+   * Resolves the target main-side (visible current URL or loopback
+   * root), performs exactly one bounded load maximum when a hidden
+   * inspector is needed, and returns a bounded structured snapshot.
+   * Never clicks, types, navigates arbitrarily, or mutates the DOM.
+   */
+  private async executePreviewInspect(input: ExecuteToolInput): Promise<WorkerToolResult> {
+    const inspection = this.deps.previewInspection
+    if (inspection === undefined) {
+      return { status: 'failed', summary: 'Inspect rendered Live Preview', payload: '', reason: 'Preview inspection is unavailable.' }
+    }
+    try {
+      parsePreviewInspectArgs(JSON.parse(input.argsJson) as unknown)
+    } catch {
+      return { status: 'failed', summary: 'Inspect rendered Live Preview', payload: '', reason: 'Tool arguments are invalid.' }
+    }
+    const outcome = await inspection.inspect(input.workspaceId)
+    if (outcome.status === 'preview_unavailable') {
+      return { status: 'succeeded', summary: 'Inspect rendered Live Preview (unavailable)', payload: outcome.payloadJson }
+    }
+    return { status: 'succeeded', summary: 'Inspect rendered Live Preview', payload: outcome.payloadJson }
+  }
+
+  /**
+   * Executes one human-approved runtime observation exactly once. The
+   * caller must have verified the approval is pending with the exact
+   * args hash; this re-parses the main-owned `{runtimeId}`, re-runs
+   * the gate (deny fails closed), and observes ONLY when the bound
+   * runtime is still the active starting/running session. A replaced
+   * or interrupted runtime fails safely with no retargeting.
+   */
+  private async executeApprovedRuntimeObserve(input: ExecuteToolInput): Promise<WorkerToolResult> {
+    const fallbackSummary = 'Observe managed runtime'
+    const observation = this.deps.runtimeObservation
+    if (observation === undefined) {
+      const result: WorkerToolResult = { status: 'failed', summary: fallbackSummary, payload: '', reason: 'Runtime observation is unavailable.' }
+      this.persist(input, result)
+      return result
+    }
+    let runtimeId: number
+    try {
+      const canonical: unknown = JSON.parse(input.argsJson) as unknown
+      runtimeId = parseRuntimeObserveApprovalArgs(canonical).runtimeId
+    } catch {
+      const result: WorkerToolResult = { status: 'failed', summary: fallbackSummary, payload: '', reason: 'Approval arguments are invalid.' }
+      this.persist(input, result)
+      return result
+    }
+    if (input.approvalId === null) {
+      const result: WorkerToolResult = { status: 'failed', summary: fallbackSummary, payload: '', reason: 'Runtime observation requires exact human approval.' }
+      this.persist(input, result)
+      return result
+    }
+    const decision = this.deps.gate.authorize({
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      actor: 'worker',
+      capability: 'runtime.observe'
+    })
+    if (decision.decision === 'deny') {
+      const result: WorkerToolResult = { status: 'denied', summary: fallbackSummary, payload: '', reason: WORKER_RUNTIME_OBSERVE_DENY_MESSAGE }
+      this.persist(input, result)
+      return result
+    }
+    const outcome = observation.observeBound(input.workspaceId, runtimeId)
+    if (outcome === null) {
+      const result: WorkerToolResult = { status: 'failed', summary: fallbackSummary, payload: '', reason: WORKER_RUNTIME_TARGET_CHANGED_MESSAGE }
+      this.persist(input, result)
+      return result
+    }
+    const toolResult: WorkerToolResult = { status: 'succeeded', summary: outcome.summary, payload: outcome.payloadJson }
+    this.persist(input, toolResult)
+    return toolResult
+  }
+
+  /**
+   * Executes one human-approved Preview inspection exactly once. The
+   * caller must have verified the approval is pending with the exact
+   * args hash; this re-parses the main-owned
+   * `{runtimeId, targetPathAndQueryAndHash}`, re-runs the gate (deny
+   * fails closed), and inspects the FROZEN path in an isolated hidden
+   * window. The human Preview is never navigated or mutated.
+   */
+  private async executeApprovedPreviewInspect(input: ExecuteToolInput): Promise<WorkerToolResult> {
+    const fallbackSummary = 'Inspect rendered Live Preview'
+    const inspection = this.deps.previewInspection
+    if (inspection === undefined) {
+      const result: WorkerToolResult = { status: 'failed', summary: fallbackSummary, payload: '', reason: 'Preview inspection is unavailable.' }
+      this.persist(input, result)
+      return result
+    }
+    let runtimeId: number
+    let targetPath: string
+    try {
+      const canonical: unknown = JSON.parse(input.argsJson) as unknown
+      const validated = parsePreviewInspectApprovalArgs(canonical)
+      runtimeId = validated.runtimeId
+      targetPath = validated.targetPathAndQueryAndHash
+    } catch {
+      const result: WorkerToolResult = { status: 'failed', summary: fallbackSummary, payload: '', reason: 'Approval arguments are invalid.' }
+      this.persist(input, result)
+      return result
+    }
+    if (input.approvalId === null) {
+      const result: WorkerToolResult = { status: 'failed', summary: fallbackSummary, payload: '', reason: 'Preview inspection requires exact human approval.' }
+      this.persist(input, result)
+      return result
+    }
+    const decision = this.deps.gate.authorize({
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      actor: 'worker',
+      capability: 'preview.inspect'
+    })
+    if (decision.decision === 'deny') {
+      const result: WorkerToolResult = { status: 'denied', summary: fallbackSummary, payload: '', reason: WORKER_PREVIEW_INSPECT_DENY_MESSAGE }
+      this.persist(input, result)
+      return result
+    }
+    const outcome = await inspection.inspect(input.workspaceId, { runtimeId, targetPathAndQueryAndHash: targetPath })
+    if (outcome.status === 'preview_unavailable') {
+      let reason = 'The local Preview could not be inspected.'
+      try {
+        const parsed: unknown = JSON.parse(outcome.payloadJson) as unknown
+        if (typeof parsed === 'object' && parsed !== null && (parsed as Record<string, unknown>)['status'] === 'runtime_target_changed') {
+          reason = WORKER_RUNTIME_TARGET_CHANGED_MESSAGE
+        }
+      } catch {
+        // Keep generic copy.
+      }
+      const result: WorkerToolResult = { status: 'failed', summary: fallbackSummary, payload: '', reason }
+      this.persist(input, result)
+      return result
+    }
+    const toolResult: WorkerToolResult = { status: 'succeeded', summary: fallbackSummary, payload: outcome.payloadJson }
+    this.persist(input, toolResult)
     return toolResult
   }
 }

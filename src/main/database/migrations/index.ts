@@ -15,6 +15,9 @@ import { migration011RecoveryContinuity } from './011-recovery-continuity'
 import { migration012AgentCapabilities } from './012-agent-capabilities'
 import { migration013WorkerTools } from './013-worker-tools'
 import { migration014WorkerCommandExecutions } from './014-worker-command-executions'
+import { migration015ProjectRuntimes } from './015-project-runtimes'
+import { migration016RuntimeObservationCapabilities } from './016-runtime-observation-capabilities'
+import { migration017AiUsageThresholds } from './017-ai-usage-thresholds'
 
 /**
  * Ordered migration registry. Append-only: add new migrations to the end
@@ -34,7 +37,10 @@ export const migrations: readonly Migration[] = [
   migration011RecoveryContinuity,
   migration012AgentCapabilities,
   migration013WorkerTools,
-  migration014WorkerCommandExecutions
+  migration014WorkerCommandExecutions,
+  migration015ProjectRuntimes,
+  migration016RuntimeObservationCapabilities,
+  migration017AiUsageThresholds
 ]
 
 /**

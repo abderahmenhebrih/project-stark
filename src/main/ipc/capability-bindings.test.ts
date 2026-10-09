@@ -52,7 +52,9 @@ describe('capability IPC bindings', () => {
             { capability: 'workspace.search', mode: 'ask' },
             { capability: 'git.read', mode: 'allow' },
             { capability: 'change.propose', mode: 'ask' },
-            { capability: 'terminal.execute', mode: 'ask' }
+            { capability: 'terminal.execute', mode: 'ask' },
+            { capability: 'runtime.observe', mode: 'deny' },
+            { capability: 'preview.inspect', mode: 'deny' }
           ]
         },
         undefined as never

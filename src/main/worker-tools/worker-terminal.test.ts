@@ -220,7 +220,9 @@ function setPolicies(h: Harness, terminal: 'deny' | 'ask'): void {
       { capability: 'workspace.search', mode: 'deny' },
       { capability: 'git.read', mode: 'deny' },
       { capability: 'change.propose', mode: 'allow' },
-      { capability: 'terminal.execute', mode: terminal }
+      { capability: 'terminal.execute', mode: terminal },
+      { capability: 'runtime.observe', mode: 'deny' },
+      { capability: 'preview.inspect', mode: 'deny' }
     ]
   })
 }
@@ -246,10 +248,10 @@ function createRun(h: Harness, sessionId: number): number {
 }
 
 describe('stage 25 registry, schema, and validation', () => {
-  it('registry contains exactly five tools with terminal mapping', () => {
-    assert.deepEqual([...WORKER_TOOLS].sort(), ['change_propose', 'git_read', 'terminal_execute', 'workspace_read', 'workspace_search'].sort())
+  it('registry contains exactly eight tools with terminal mapping', () => {
+    assert.deepEqual([...WORKER_TOOLS].sort(), ['change_propose', 'git_read', 'preview_inspect', 'runtime_observe', 'runtime_start', 'terminal_execute', 'workspace_read', 'workspace_search'].sort())
     assert.equal(capabilityForTool('terminal_execute'), 'terminal.execute')
-    assert.equal(workerToolSchemas().length, 5)
+    assert.equal(workerToolSchemas().length, 8)
   })
 
   it('terminal schema is strict program plus argv', () => {
@@ -321,10 +323,10 @@ describe('stage 25 registry, schema, and validation', () => {
 })
 
 describe('stage 25 command repository', () => {
-  it('schema is v14 with executions table, UNIQUE approval, and run index', () => {
+  it('schema is v17 with executions table, UNIQUE approval, and run index', () => {
     const h = openHarness()
     try {
-      assert.equal(getUserVersion(h.db), 14)
+      assert.equal(getUserVersion(h.db), 17)
       const table: unknown = h.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'worker_command_executions'").get()
       assert.ok(table !== undefined)
       const index: unknown = h.db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_worker_command_run_created'").get()
@@ -901,7 +903,9 @@ describe('stage 25 worker approval flows', () => {
               { capability: 'workspace.search', mode: 'deny' },
               { capability: 'git.read', mode: 'deny' },
               { capability: 'change.propose', mode: 'deny' },
-              { capability: 'terminal.execute', mode: 'ask' }
+              { capability: 'terminal.execute', mode: 'ask' },
+      { capability: 'runtime.observe', mode: 'deny' },
+      { capability: 'preview.inspect', mode: 'deny' }
             ]
           })
         }
@@ -1021,7 +1025,9 @@ describe('stage 25 bounds, recovery, and interactions', () => {
           { capability: 'workspace.search', mode: 'allow' },
           { capability: 'git.read', mode: 'allow' },
           { capability: 'change.propose', mode: 'deny' },
-          { capability: 'terminal.execute', mode: 'ask' }
+          { capability: 'terminal.execute', mode: 'ask' },
+      { capability: 'runtime.observe', mode: 'deny' },
+      { capability: 'preview.inspect', mode: 'deny' }
         ]
       })
       h.adapter.planScript = [delegatePlan()]
@@ -1255,7 +1261,9 @@ describe('stage 25 bounds, recovery, and interactions', () => {
           { capability: 'workspace.search', mode: 'deny' },
           { capability: 'git.read', mode: 'deny' },
           { capability: 'change.propose', mode: 'allow' },
-          { capability: 'terminal.execute', mode: 'ask' }
+          { capability: 'terminal.execute', mode: 'ask' },
+      { capability: 'runtime.observe', mode: 'deny' },
+      { capability: 'preview.inspect', mode: 'deny' }
         ]
       })
       h.adapter.planScript = [delegatePlan()]

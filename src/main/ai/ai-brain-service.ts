@@ -48,6 +48,10 @@ import {
 import type { AiProviderService } from './ai-provider-service'
 import { AiOperationGuard } from './ai-operation-guard'
 import { PendingApprovalBlockedError } from '../worker-tools/worker-tool-errors'
+import type { AiUsageDeps } from '../usage/ai-usage-tracker'
+import type { WorkUsageSnapshot } from '../usage/ai-usage-service'
+import { decideThresholdRoute, usagePairKey } from '../usage/usage-threshold-policy'
+import type { UsageThresholdRouteKey } from '../../shared/usage/types'
 import type { LooplinkRepository } from '../looplink/looplink-repository'
 import type { LooplinkService } from '../looplink/looplink-service'
 import { formatProviderContext } from '../session-context/session-context-service'
@@ -140,6 +144,14 @@ export interface AiBrainServiceOptions {
   readonly looplink?: { readonly service: LooplinkService; readonly store: LooplinkRepository }
   /** Stage 23 approval gate (optional): unresolved approvals block new Work. */
   readonly pendingApprovals?: { hasPending(sessionId: number): boolean }
+  /**
+   * Stage 28 local usage awareness (optional). When present, every
+   * outbound provider call is recorded in the local usage ledger
+   * through the central tracker, and normal Work routes through the
+   * Heart threshold policy. Absent means legacy untracked behavior —
+   * existing harnesses keep working.
+   */
+  readonly usage?: AiUsageDeps
 }
 
 /**
@@ -159,6 +171,7 @@ export class AiBrainService {
   private readonly guard: AiOperationGuard
   private readonly looplink: { readonly service: LooplinkService; readonly store: LooplinkRepository } | undefined
   private readonly pendingApprovals: { hasPending(sessionId: number): boolean } | undefined
+  private readonly usage: AiUsageDeps | undefined
 
   constructor(
     private readonly workspaces: WorkspaceRepository,
@@ -172,6 +185,154 @@ export class AiBrainService {
     this.guard = options?.operationGuard ?? new AiOperationGuard()
     this.looplink = options?.looplink
     this.pendingApprovals = options?.pendingApprovals
+    this.usage = options?.usage
+  }
+
+  /**
+   * Stage 28 central tracking boundary: every outbound provider
+   * invocation in this service passes through here. Records one
+   * local usage event (or invokes directly when usage awareness is
+   * absent in older harnesses). Telemetry never retries the call.
+   */
+  private trackCall<T>(
+    meta: {
+      operation: 'brain_plan' | 'worker' | 'brain_synthesis' | 'recovery_brain_plan' | 'recovery_worker' | 'recovery_brain_synthesis'
+      workspaceId: number
+      sessionId: number
+      runId: number | null
+    },
+    providerId: string,
+    model: string,
+    invoke: () => Promise<T>
+  ): Promise<T> {
+    if (this.usage === undefined) {
+      return invoke()
+    }
+    return this.usage.tracker.track(
+      {
+        operation: meta.operation,
+        role: meta.operation === 'brain_plan' || meta.operation === 'brain_synthesis' ? 'brain' : meta.operation === 'worker' ? 'worker' : 'recovery',
+        providerId,
+        model,
+        workspaceId: meta.workspaceId,
+        sessionId: meta.sessionId,
+        runId: meta.runId
+      },
+      invoke
+    )
+  }
+
+  /**
+   * Stage 28 threshold-route selector for normal Work: applies the
+   * frozen Work-start usage snapshot exactly once per role. The
+   * alternate is terminal — never re-evaluated, never chained.
+   * Returns the base assignment unchanged when routing is absent,
+   * disabled, unconfigured, or untriggered.
+   */
+  private applyThreshold(
+    snapshot: WorkUsageSnapshot | null,
+    routeKey: UsageThresholdRouteKey,
+    base: { providerId: string; model: string }
+  ): {
+    assignment: { providerId: string; model: string }
+    decision: ReturnType<typeof decideThresholdRoute>
+    usage: { calls24h: number; tokens24h: number | null; tokenTelemetryComplete: boolean }
+    limit: { maxCalls24h: number | null; maxTotalTokens24h: number | null; switchAtPercent: number } | null
+  } {
+    const idle = {
+      usage: { calls24h: 0, tokens24h: 0 as number | null, tokenTelemetryComplete: true },
+      limit: null as { maxCalls24h: number | null; maxTotalTokens24h: number | null; switchAtPercent: number } | null
+    }
+    if (snapshot === null) {
+      return {
+        assignment: base,
+        decision: { selected: base, decision: 'base', callsTriggered: false, tokensTriggered: false },
+        ...idle
+      }
+    }
+    const entry = snapshot.summaries.get(usagePairKey(base.providerId, base.model))
+    const usage = entry?.usage ?? idle.usage
+    const limit = entry?.limit ?? null
+    const decision = decideThresholdRoute({
+      enabled: snapshot.enabled,
+      routeKey,
+      base,
+      alternate: snapshot.alternates.get(routeKey) ?? null,
+      usage,
+      limit
+    })
+    return { assignment: { ...decision.selected }, decision, usage, limit }
+  }
+
+  /**
+   * Captures the frozen Work-start usage snapshot over the Brain
+   * assignment plus every configured Worker assignment, or null
+   * when usage awareness is absent. Exactly one snapshot per run —
+   * the Brain-plan call itself must not move the synthesis route.
+   */
+  private snapshotWorkUsage(
+    brain: { providerId: string; model: string },
+    workerAssignments: readonly { providerId: string; model: string }[]
+  ): WorkUsageSnapshot | null {
+    if (this.usage === undefined) {
+      return null
+    }
+    return this.usage.service.snapshotForWork([brain, ...workerAssignments])
+  }
+
+  /** Best-effort route-decision audit: never breaks the run. */
+  private recordRouteDecision(input: {
+    runId: number
+    role: 'brain' | 'worker'
+    routeKey: string
+    baseProviderId: string
+    baseModel: string
+    selectedProviderId: string
+    selectedModel: string
+    decision: ReturnType<typeof decideThresholdRoute>
+    usage: { calls24h: number; tokens24h: number | null; tokenTelemetryComplete: boolean }
+    limit: { maxCalls24h: number | null; maxTotalTokens24h: number | null; switchAtPercent: number } | null
+    snapshotAt: number
+  }): void {
+    if (this.usage === undefined) {
+      return
+    }
+    try {
+      this.usage.service.recordDecision({
+        runId: input.runId,
+        role: input.role,
+        routeKey: input.routeKey,
+        baseProviderId: input.baseProviderId,
+        baseModel: input.baseModel,
+        selectedProviderId: input.selectedProviderId,
+        selectedModel: input.selectedModel,
+        decision: input.decision.decision,
+        calls24h: input.usage.calls24h,
+        tokens24h: input.usage.tokens24h,
+        tokenTelemetryComplete: input.usage.tokenTelemetryComplete,
+        maxCalls24h: input.limit?.maxCalls24h ?? null,
+        maxTotalTokens24h: input.limit?.maxTotalTokens24h ?? null,
+        switchAtPercent: input.limit?.switchAtPercent ?? null,
+        callsTriggered: input.decision.callsTriggered,
+        tokensTriggered: input.decision.tokensTriggered,
+        snapshotAt: input.snapshotAt,
+        now: this.now()
+      })
+    } catch {
+      // Audit must never break the run.
+    }
+  }
+
+  /** Route decisions for run assembly (empty for pre-Stage-28 runs). */
+  private usageDecisionsFor(runId: number): import('../../shared/usage/types').UsageRouteDecision[] {
+    if (this.usage === undefined) {
+      return []
+    }
+    try {
+      return this.usage.service.decisionsForRun(runId)
+    } catch {
+      return []
+    }
   }
 
   async runBrain(payload: unknown): Promise<AiRunBrainResult> {
@@ -303,21 +464,60 @@ export class AiBrainService {
     // re-read between Brain → Worker → Brain, so mid-run config
     // changes cannot cause model drift.
     const routing = this.heart.snapshot()
+    // Stage 28 frozen usage snapshot: captured once here over the
+    // Brain assignment plus every configured Worker assignment. The
+    // Brain-plan call itself must not move the synthesis route, and
+    // later usage/config changes never affect this run.
+    const usageSnap = this.snapshotWorkUsage(routing.brain, [
+      ...(routing.workerFixed === null ? [] : [routing.workerFixed]),
+      ...(routing.workerDefault === null ? [] : [routing.workerDefault]),
+      ...Object.values(routing.workerRoutes).filter(
+        (entry): entry is { providerId: string; model: string } => entry !== null
+      )
+    ])
     // Pending continuity travels as historical user-role data to Brain
     // plan and Worker only — never re-injected into synthesis, which
     // already carries plan summary plus Worker result.
     const loop = this.looplink?.service.getPendingBlock(workspaceId, sessionId) ?? null
     const runId = this.runs.createRun({ workspaceId, sessionId, userMessageId: latest.id, now: this.now() })
+    // Stage 28 Brain threshold route: selected once, used for BOTH
+    // plan and synthesis. The alternate is terminal — never
+    // re-evaluated for this run.
+    const brainRouted = this.applyThreshold(usageSnap, 'brain.primary', routing.brain)
+    if (usageSnap !== null) {
+      this.recordRouteDecision({
+        runId,
+        role: 'brain',
+        routeKey: 'brain.primary',
+        baseProviderId: routing.brain.providerId,
+        baseModel: routing.brain.model,
+        selectedProviderId: brainRouted.assignment.providerId,
+        selectedModel: brainRouted.assignment.model,
+        decision: brainRouted.decision,
+        usage: brainRouted.usage,
+        limit: brainRouted.limit,
+        snapshotAt: usageSnap.snapshotAt
+      })
+    }
     try {
+      this.requireDeadline(deadline)
       const brainResolved = await this.providerService.resolveExplicitAssignment(
-        routing.brain.providerId,
-        routing.brain.model
+        brainRouted.assignment.providerId,
+        brainRouted.assignment.model
       )
       const brainAdapter = brainResolved.adapter
       const brainModel = brainResolved.model
+      // Bound synthesis capture for tracking closures (preserves
+      // adapter `this`; narrowing is unaffected for required methods).
+      const generateSynthesisText = brainAdapter.generateText.bind(brainAdapter)
       if (typeof brainAdapter.generateStructured !== 'function') {
         throw new ProviderStructuredOutputUnsupportedError()
       }
+      // Captured after the guard so tracking closures keep the
+      // narrowed function type (narrowing is lost inside closures).
+      // Bound to preserve adapter `this` (fakes and the OpenAI
+      // adapter both read instance state).
+      const generateStructured = brainAdapter.generateStructured.bind(brainAdapter)
 
       // Call 1 of at most 3: structured Brain plan.
       this.requireDeadline(deadline)
@@ -335,15 +535,20 @@ export class AiBrainService {
             ]
       let plan: ValidatedBrainPlan
       try {
-        const planned = await brainAdapter.generateStructured({
-          apiKey: brainResolved.apiKey,
-          model: brainModel,
-          instructions: STAGE_18_FIXED_BRAIN_PLANNING_INSTRUCTIONS,
-          messages: planMessages,
-          maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
-          schemaName: BRAIN_PLAN_SCHEMA_NAME,
-          schema: BRAIN_PLAN_JSON_SCHEMA
-        })
+        const planned = await this.trackCall(
+          { operation: 'brain_plan', workspaceId, sessionId, runId },
+          brainResolved.adapter.id,
+          brainModel,
+          () => generateStructured({
+            apiKey: brainResolved.apiKey,
+            model: brainModel,
+            instructions: STAGE_18_FIXED_BRAIN_PLANNING_INSTRUCTIONS,
+            messages: planMessages,
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+            schemaName: BRAIN_PLAN_SCHEMA_NAME,
+            schema: BRAIN_PLAN_JSON_SCHEMA
+          })
+        )
         plan = this.parseAndValidatePlan(planned.outputText)
       } finally {
         void brainResolved.apiKey
@@ -360,7 +565,7 @@ export class AiBrainService {
         },
         {
           role: 'brain',
-          providerId: routing.brain.providerId,
+          providerId: brainRouted.assignment.providerId,
           model: brainModel,
           routeKey: 'primary',
           requestedProfile: null
@@ -386,25 +591,56 @@ export class AiBrainService {
       }
 
       // Calls 2 and 3 of at most 3: one Worker call, one synthesis call.
-      // The synthesis reuses the SAME snapshotted Brain assignment.
+      // The synthesis reuses the SAME threshold-selected Brain
+      // assignment — never re-resolved, never re-routed.
       const workerInstruction = plan.workerInstruction ?? ''
       const workerProfile = plan.workerProfile ?? 'general'
       const workerRoute = this.heart.resolveWorker(routing, workerProfile)
+      // Stage 28 Worker threshold route: resolved from the base route
+      // using the SAME Work-start usage snapshot (no fresh query —
+      // the Brain-plan call must not move the Worker route either).
+      const workerRouted = this.applyThreshold(
+        usageSnap,
+        `worker.${workerRoute.routeKey}` as UsageThresholdRouteKey,
+        workerRoute.assignment
+      )
+      if (usageSnap !== null) {
+        this.recordRouteDecision({
+          runId,
+          role: 'worker',
+          routeKey: `worker.${workerRoute.routeKey}`,
+          baseProviderId: workerRoute.assignment.providerId,
+          baseModel: workerRoute.assignment.model,
+          selectedProviderId: workerRouted.assignment.providerId,
+          selectedModel: workerRouted.assignment.model,
+          decision: workerRouted.decision,
+          usage: workerRouted.usage,
+          limit: workerRouted.limit,
+          snapshotAt: usageSnap.snapshotAt
+        })
+      }
       this.requireDeadline(deadline)
       const workerResolved = await this.providerService.resolveExplicitAssignment(
-        workerRoute.assignment.providerId,
-        workerRoute.assignment.model
+        workerRouted.assignment.providerId,
+        workerRouted.assignment.model
       )
+      // Bound worker capture for the tracking closure (preserves `this`).
+      const generateWorkerText = workerResolved.adapter.generateText.bind(workerResolved.adapter)
       let workerOutput: string
       try {
         const workerMessages = this.buildWorkerMessages(context, persisted, workerInstruction, loop?.block ?? null)
-        const produced = await workerResolved.adapter.generateText({
-          apiKey: workerResolved.apiKey,
-          model: workerResolved.model,
-          instructions: STAGE_18_FIXED_WORKER_INSTRUCTIONS,
-          messages: workerMessages,
-          maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
-        })
+        const produced = await this.trackCall(
+          { operation: 'worker', workspaceId, sessionId, runId },
+          workerResolved.adapter.id,
+          workerResolved.model,
+          () => generateWorkerText({
+            apiKey: workerResolved.apiKey,
+            model: workerResolved.model,
+            instructions: STAGE_18_FIXED_WORKER_INSTRUCTIONS,
+            messages: workerMessages,
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+          })
+        )
         workerOutput = this.validateWorkerOutput(produced.text)
       } finally {
         void workerResolved.apiKey
@@ -421,8 +657,8 @@ export class AiBrainService {
         },
         {
           role: 'worker',
-          providerId: workerRoute.assignment.providerId,
-          model: workerRoute.assignment.model,
+          providerId: workerRouted.assignment.providerId,
+          model: workerResolved.model,
           routeKey: workerRoute.routeKey,
           requestedProfile: workerProfile
         }
@@ -430,8 +666,8 @@ export class AiBrainService {
 
       this.requireDeadline(deadline)
       const synthesisResolved = await this.providerService.resolveExplicitAssignment(
-        routing.brain.providerId,
-        routing.brain.model
+        brainRouted.assignment.providerId,
+        brainRouted.assignment.model
       )
       if (synthesisResolved.model !== brainModel) {
         throw new InvalidBrainPlanError()
@@ -444,13 +680,18 @@ export class AiBrainService {
           workerInstruction,
           workerOutput
         )
-        const synthesized = await brainAdapter.generateText({
-          apiKey: synthesisResolved.apiKey,
-          model: synthesisResolved.model,
-          instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
-          messages: synthesisMessages,
-          maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
-        })
+        const synthesized = await this.trackCall(
+          { operation: 'brain_synthesis', workspaceId, sessionId, runId },
+          synthesisResolved.adapter.id,
+          synthesisResolved.model,
+          () => generateSynthesisText({
+            apiKey: synthesisResolved.apiKey,
+            model: synthesisResolved.model,
+            instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
+            messages: synthesisMessages,
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+          })
+        )
         finalText = this.validateFinalText(synthesized.text)
       } finally {
         void synthesisResolved.apiKey
@@ -467,7 +708,7 @@ export class AiBrainService {
         },
         {
           role: 'brain',
-          providerId: routing.brain.providerId,
+          providerId: brainRouted.assignment.providerId,
           model: brainModel,
           routeKey: 'primary',
           requestedProfile: null
@@ -582,9 +823,17 @@ export class AiBrainService {
       )
       const brainAdapter = brainResolved.adapter
       const brainModel = brainResolved.model
+      // Bound synthesis capture for tracking closures (preserves
+      // adapter `this`; narrowing is unaffected for required methods).
+      const generateSynthesisText = brainAdapter.generateText.bind(brainAdapter)
       if (typeof brainAdapter.generateStructured !== 'function') {
         throw new ProviderStructuredOutputUnsupportedError()
       }
+      // Captured after the guard so tracking closures keep the
+      // narrowed function type (narrowing is lost inside closures).
+      // Bound to preserve adapter `this` (fakes and the OpenAI
+      // adapter both read instance state).
+      const generateStructured = brainAdapter.generateStructured.bind(brainAdapter)
       this.requireDeadline(deadline)
       const planBase =
         persisted.length === 0
@@ -600,15 +849,20 @@ export class AiBrainService {
             ]
       let plan: ValidatedBrainPlan
       try {
-        const planned = await brainAdapter.generateStructured({
-          apiKey: brainResolved.apiKey,
-          model: brainModel,
-          instructions: STAGE_18_FIXED_BRAIN_PLANNING_INSTRUCTIONS,
-          messages: planMessages,
-          maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
-          schemaName: BRAIN_PLAN_SCHEMA_NAME,
-          schema: BRAIN_PLAN_JSON_SCHEMA
-        })
+        const planned = await this.trackCall(
+          { operation: 'recovery_brain_plan', workspaceId, sessionId, runId },
+          brainResolved.adapter.id,
+          brainModel,
+          () => generateStructured({
+            apiKey: brainResolved.apiKey,
+            model: brainModel,
+            instructions: STAGE_18_FIXED_BRAIN_PLANNING_INSTRUCTIONS,
+            messages: planMessages,
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+            schemaName: BRAIN_PLAN_SCHEMA_NAME,
+            schema: BRAIN_PLAN_JSON_SCHEMA
+          })
+        )
         plan = this.parseAndValidatePlan(planned.outputText)
       } finally {
         void brainResolved.apiKey
@@ -653,16 +907,23 @@ export class AiBrainService {
         recovery.worker.providerId,
         recovery.worker.model
       )
+      // Bound worker capture for the tracking closure (preserves `this`).
+      const generateWorkerText = workerResolved.adapter.generateText.bind(workerResolved.adapter)
       let workerOutput: string
       try {
         const workerMessages = this.buildWorkerMessages(context, persisted, workerInstruction, loop?.block ?? null)
-        const produced = await workerResolved.adapter.generateText({
-          apiKey: workerResolved.apiKey,
-          model: workerResolved.model,
-          instructions: STAGE_18_FIXED_WORKER_INSTRUCTIONS,
-          messages: workerMessages,
-          maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
-        })
+        const produced = await this.trackCall(
+          { operation: 'recovery_worker', workspaceId, sessionId, runId },
+          workerResolved.adapter.id,
+          workerResolved.model,
+          () => generateWorkerText({
+            apiKey: workerResolved.apiKey,
+            model: workerResolved.model,
+            instructions: STAGE_18_FIXED_WORKER_INSTRUCTIONS,
+            messages: workerMessages,
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+          })
+        )
         workerOutput = this.validateWorkerOutput(produced.text)
       } finally {
         void workerResolved.apiKey
@@ -696,13 +957,18 @@ export class AiBrainService {
       let finalText: string
       try {
         const synthesisMessages = this.buildSynthesisMessages(context, plan.planSummary, workerInstruction, workerOutput)
-        const synthesized = await brainAdapter.generateText({
-          apiKey: synthesisResolved.apiKey,
-          model: synthesisResolved.model,
-          instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
-          messages: synthesisMessages,
-          maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
-        })
+        const synthesized = await this.trackCall(
+          { operation: 'recovery_brain_synthesis', workspaceId, sessionId, runId },
+          synthesisResolved.adapter.id,
+          synthesisResolved.model,
+          () => generateSynthesisText({
+            apiKey: synthesisResolved.apiKey,
+            model: synthesisResolved.model,
+            instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
+            messages: synthesisMessages,
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+          })
+        )
         finalText = this.validateFinalText(synthesized.text)
       } finally {
         void synthesisResolved.apiKey
@@ -778,9 +1044,17 @@ export class AiBrainService {
       )
       const brainAdapter = brainResolved.adapter
       const brainModel = brainResolved.model
+      // Bound synthesis capture for tracking closures (preserves
+      // adapter `this`; narrowing is unaffected for required methods).
+      const generateSynthesisText = brainAdapter.generateText.bind(brainAdapter)
       if (typeof brainAdapter.generateStructured !== 'function') {
         throw new ProviderStructuredOutputUnsupportedError()
       }
+      // Captured after the guard so tracking closures keep the
+      // narrowed function type (narrowing is lost inside closures).
+      // Bound to preserve adapter `this` (fakes and the OpenAI
+      // adapter both read instance state).
+      const generateStructured = brainAdapter.generateStructured.bind(brainAdapter)
       this.requireDeadline(deadline)
       const planBase =
         persisted.length === 0
@@ -796,15 +1070,20 @@ export class AiBrainService {
             ]
       let plan: ValidatedBrainPlan
       try {
-        const planned = await brainAdapter.generateStructured({
-          apiKey: brainResolved.apiKey,
-          model: brainModel,
-          instructions: STAGE_18_FIXED_BRAIN_PLANNING_INSTRUCTIONS,
-          messages: planMessages,
-          maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
-          schemaName: BRAIN_PLAN_SCHEMA_NAME,
-          schema: BRAIN_PLAN_JSON_SCHEMA
-        })
+        const planned = await this.trackCall(
+          { operation: 'recovery_brain_plan', workspaceId, sessionId, runId },
+          brainResolved.adapter.id,
+          brainModel,
+          () => generateStructured({
+            apiKey: brainResolved.apiKey,
+            model: brainModel,
+            instructions: STAGE_18_FIXED_BRAIN_PLANNING_INSTRUCTIONS,
+            messages: planMessages,
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+            schemaName: BRAIN_PLAN_SCHEMA_NAME,
+            schema: BRAIN_PLAN_JSON_SCHEMA
+          })
+        )
         plan = this.parseAndValidatePlan(planned.outputText)
       } finally {
         void brainResolved.apiKey
@@ -838,16 +1117,23 @@ export class AiBrainService {
         recovery.worker.providerId,
         recovery.worker.model
       )
+      // Bound worker capture for the tracking closure (preserves `this`).
+      const generateWorkerText = workerResolved.adapter.generateText.bind(workerResolved.adapter)
       let workerOutput: string
       try {
         const workerMessages = this.buildWorkerMessages(context, persisted, workerInstruction, loop?.block ?? null)
-        const produced = await workerResolved.adapter.generateText({
-          apiKey: workerResolved.apiKey,
-          model: workerResolved.model,
-          instructions: STAGE_18_FIXED_WORKER_INSTRUCTIONS,
-          messages: workerMessages,
-          maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
-        })
+        const produced = await this.trackCall(
+          { operation: 'recovery_worker', workspaceId, sessionId, runId },
+          workerResolved.adapter.id,
+          workerResolved.model,
+          () => generateWorkerText({
+            apiKey: workerResolved.apiKey,
+            model: workerResolved.model,
+            instructions: STAGE_18_FIXED_WORKER_INSTRUCTIONS,
+            messages: workerMessages,
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+          })
+        )
         workerOutput = this.validateWorkerOutput(produced.text)
       } finally {
         void workerResolved.apiKey
@@ -881,13 +1167,18 @@ export class AiBrainService {
       let finalText: string
       try {
         const synthesisMessages = this.buildSynthesisMessages(context, plan.planSummary, workerInstruction, workerOutput)
-        const synthesized = await brainAdapter.generateText({
-          apiKey: synthesisResolved.apiKey,
-          model: synthesisResolved.model,
-          instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
-          messages: synthesisMessages,
-          maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
-        })
+        const synthesized = await this.trackCall(
+          { operation: 'recovery_brain_synthesis', workspaceId, sessionId, runId },
+          synthesisResolved.adapter.id,
+          synthesisResolved.model,
+          () => generateSynthesisText({
+            apiKey: synthesisResolved.apiKey,
+            model: synthesisResolved.model,
+            instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
+            messages: synthesisMessages,
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+          })
+        )
         finalText = this.validateFinalText(synthesized.text)
       } finally {
         void synthesisResolved.apiKey
@@ -1203,7 +1494,10 @@ export class AiBrainService {
       errorCategory: header.errorCategory,
       createdAt: header.createdAt,
       updatedAt: header.updatedAt,
-      steps
+      steps,
+      // Stage 28 usage-routing explanation (empty for older runs —
+      // historical details load normally with no fake explanation).
+      usageRouteDecisions: this.usageDecisionsFor(header.id)
     }
   }
 }

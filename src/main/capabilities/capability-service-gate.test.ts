@@ -83,7 +83,7 @@ describe('capability repository', () => {
       assert.equal(saved.enabled, true)
       const loaded = h.service.getConfig({ workspaceId: h.workspaceId })
       assert.deepEqual(loaded, saved)
-      assert.ok(h.store.listPolicies(h.workspaceId).length === 5)
+      assert.ok(h.store.listPolicies(h.workspaceId).length === 7)
     } finally {
       h.db.close()
       rmSync(h.dir, { recursive: true, force: true })

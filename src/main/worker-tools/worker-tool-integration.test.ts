@@ -195,7 +195,9 @@ describe('worker-tool integration boundaries', () => {
           { capability: 'workspace.search', mode: 'deny' },
           { capability: 'git.read', mode: 'deny' },
           { capability: 'change.propose', mode: 'deny' },
-          { capability: 'terminal.execute', mode: 'deny' }
+          { capability: 'terminal.execute', mode: 'deny' },
+      { capability: 'runtime.observe', mode: 'deny' },
+      { capability: 'preview.inspect', mode: 'deny' }
         ]
       })
       h.adapter.planScript = [delegatePlan()]
@@ -223,7 +225,9 @@ describe('worker-tool integration boundaries', () => {
           { capability: 'workspace.search', mode: 'deny' },
           { capability: 'git.read', mode: 'deny' },
           { capability: 'change.propose', mode: 'deny' },
-          { capability: 'terminal.execute', mode: 'deny' }
+          { capability: 'terminal.execute', mode: 'deny' },
+      { capability: 'runtime.observe', mode: 'deny' },
+      { capability: 'preview.inspect', mode: 'deny' }
         ]
       })
       h.adapter.planScript = [delegatePlan()]
@@ -256,7 +260,9 @@ describe('worker-tool integration boundaries', () => {
           { capability: 'workspace.search', mode: 'deny' },
           { capability: 'git.read', mode: 'deny' },
           { capability: 'change.propose', mode: 'deny' },
-          { capability: 'terminal.execute', mode: 'deny' }
+          { capability: 'terminal.execute', mode: 'deny' },
+      { capability: 'runtime.observe', mode: 'deny' },
+      { capability: 'preview.inspect', mode: 'deny' }
         ]
       })
       h.adapter.planScript = [delegatePlan()]
@@ -289,7 +295,9 @@ describe('worker-tool integration boundaries', () => {
           { capability: 'workspace.search', mode: 'deny' },
           { capability: 'git.read', mode: 'deny' },
           { capability: 'change.propose', mode: 'deny' },
-          { capability: 'terminal.execute', mode: 'deny' }
+          { capability: 'terminal.execute', mode: 'deny' },
+      { capability: 'runtime.observe', mode: 'deny' },
+      { capability: 'preview.inspect', mode: 'deny' }
         ]
       })
       h.adapter.planScript = [delegatePlan()]

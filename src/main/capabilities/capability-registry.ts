@@ -11,7 +11,9 @@ export const AGENT_CAPABILITIES: readonly AgentCapability[] = [
   'workspace.search',
   'git.read',
   'change.propose',
-  'terminal.execute'
+  'terminal.execute',
+  'runtime.observe',
+  'preview.inspect'
 ]
 
 const KNOWN: ReadonlySet<string> = new Set<string>(AGENT_CAPABILITIES)
@@ -21,7 +23,9 @@ const LEGAL_MODES: Readonly<Record<AgentCapability, readonly CapabilityPolicyMod
   'workspace.search': ['deny', 'ask', 'allow'],
   'git.read': ['deny', 'ask', 'allow'],
   'change.propose': ['deny', 'ask', 'allow'],
-  'terminal.execute': ['deny', 'ask']
+  'terminal.execute': ['deny', 'ask'],
+  'runtime.observe': ['deny', 'ask', 'allow'],
+  'preview.inspect': ['deny', 'ask', 'allow']
 }
 
 /** True for exactly the five known capabilities. */

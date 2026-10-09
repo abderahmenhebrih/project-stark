@@ -37,7 +37,9 @@ describe('capability panel state', () => {
           { capability: 'workspace.search', mode: 'ask' },
           { capability: 'git.read', mode: 'allow' },
           { capability: 'change.propose', mode: 'ask' },
-          { capability: 'terminal.execute', mode: 'deny' }
+          { capability: 'terminal.execute', mode: 'deny' },
+          { capability: 'runtime.observe', mode: 'deny' },
+          { capability: 'preview.inspect', mode: 'deny' }
         ]
       }
     })
@@ -77,7 +79,9 @@ describe('capability panel state', () => {
         { capability: 'workspace.search' as const, mode: 'ask' as const },
         { capability: 'git.read' as const, mode: 'allow' as const },
         { capability: 'change.propose' as const, mode: 'ask' as const },
-        { capability: 'terminal.execute' as const, mode: 'deny' as const }
+        { capability: 'terminal.execute' as const, mode: 'deny' as const },
+        { capability: 'runtime.observe' as const, mode: 'deny' as const },
+        { capability: 'preview.inspect' as const, mode: 'deny' as const }
       ]
     }
     state = capabilityPanelReducer(state, { type: 'save-succeeded', workspaceId: 7, config })
@@ -104,12 +108,16 @@ describe('capability panel state', () => {
     assert.equal(state.loading, false)
   })
 
-  it('labels all five rows and legal modes', () => {
-    assert.deepEqual([...CAPABILITY_ORDER], ['workspace.read', 'workspace.search', 'git.read', 'change.propose', 'terminal.execute'])
+  it('labels all seven rows and legal modes', () => {
+    assert.deepEqual([...CAPABILITY_ORDER], ['workspace.read', 'workspace.search', 'git.read', 'change.propose', 'terminal.execute', 'runtime.observe', 'preview.inspect'])
     assert.equal(capabilityLabel('workspace.read'), 'Workspace file read')
     assert.equal(capabilityLabel('terminal.execute'), 'Terminal execute')
+    assert.equal(capabilityLabel('runtime.observe'), 'Runtime observation')
+    assert.equal(capabilityLabel('preview.inspect'), 'Live Preview inspection')
     assert.deepEqual([...legalModesFor('terminal.execute')], ['deny', 'ask'])
     assert.deepEqual([...legalModesFor('git.read')], ['deny', 'ask', 'allow'])
+    assert.deepEqual([...legalModesFor('runtime.observe')], ['deny', 'ask', 'allow'])
+    assert.deepEqual([...legalModesFor('preview.inspect')], ['deny', 'ask', 'allow'])
     const draft = capabilityDraftFromConfig({
       workspaceId: 1,
       enabled: false,

@@ -13,13 +13,15 @@ function readShared(relative: string): string {
 }
 
 describe('capability registry contract', () => {
-  it('contains exactly the five Stage 22 capabilities', () => {
+  it('contains exactly the seven Stage 27 capabilities', () => {
     assert.deepEqual([...AGENT_CAPABILITIES], [
       'workspace.read',
       'workspace.search',
       'git.read',
       'change.propose',
-      'terminal.execute'
+      'terminal.execute',
+      'runtime.observe',
+      'preview.inspect'
     ])
     for (const capability of AGENT_CAPABILITIES) {
       assert.ok(isKnownCapability(capability))
@@ -34,6 +36,8 @@ describe('capability registry contract', () => {
     assert.deepEqual([...legalModesFor('git.read')], ['deny', 'ask', 'allow'])
     assert.deepEqual([...legalModesFor('change.propose')], ['deny', 'ask', 'allow'])
     assert.deepEqual([...legalModesFor('terminal.execute')], ['deny', 'ask'])
+    assert.deepEqual([...legalModesFor('runtime.observe')], ['deny', 'ask', 'allow'])
+    assert.deepEqual([...legalModesFor('preview.inspect')], ['deny', 'ask', 'allow'])
   })
 
   it('defines no direct-write/accept/rollback/delete/credential capability', () => {
