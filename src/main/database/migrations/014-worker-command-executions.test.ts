@@ -84,8 +84,8 @@ describe('migration 14 (worker command executions)', () => {
   it('fresh DB migrates to v17', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 17)
-      assert.equal(getUserVersion(db), 17)
+      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(getUserVersion(db), 18)
     } finally {
       db.close()
     }
@@ -95,8 +95,8 @@ describe('migration 14 (worker command executions)', () => {
     const db = openFresh()
     try {
       seedV13(db)
-      assert.equal(runMigrations(db, migrations), 17)
-      assert.equal(getUserVersion(db), 17)
+      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(getUserVersion(db), 18)
     } finally {
       db.close()
     }
@@ -106,7 +106,7 @@ describe('migration 14 (worker command executions)', () => {
     const db = openFresh()
     try {
       seedV13(db)
-      assert.equal(runMigrations(db, migrations), 17)
+      assert.equal(runMigrations(db, migrations), 18)
       for (const table of [
         'key_value',
         'workspaces',
@@ -202,7 +202,7 @@ describe('migration 14 (worker command executions)', () => {
     const db = openFresh()
     try {
       runMigrations(db, migrations)
-      assert.equal(runMigrations(db, migrations), 17)
+      assert.equal(runMigrations(db, migrations), 18)
     } finally {
       db.close()
     }
@@ -231,7 +231,7 @@ describe('migration 14 (worker command executions)', () => {
   it('migration 14 is registered after migration 13', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
     )
     assert.equal(migration014WorkerCommandExecutions.version, 14)
   })

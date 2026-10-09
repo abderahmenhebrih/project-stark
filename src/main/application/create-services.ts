@@ -43,6 +43,13 @@ import { WorkerToolRunner } from '../worker-tools/worker-tool-runner'
 import { AiUsageRepository } from '../usage/ai-usage-repository'
 import { AiUsageService } from '../usage/ai-usage-service'
 import { AiUsageTracker } from '../usage/ai-usage-tracker'
+import { CloudAccountRepository } from '../cloud-account/cloud-account-repository'
+import { CloudAccountService } from '../cloud-account/cloud-account-service'
+import { SessionProtector } from '../cloud-account/cloud-auth-session-store'
+import { OAuthAttemptManager } from '../cloud-account/oauth-attempt-manager'
+import { openSystemBrowserOnce } from '../cloud-account/browser-opener'
+import { SupabaseAuthAdapter, loadSupabasePublicConfig } from '../cloud-account/supabase-auth-adapter'
+import type { BrowserOpener, CloudAuthAdapter } from '../cloud-account/cloud-account-types'
 import { SessionContextService } from '../session-context/session-context-service'
 import { SettingsService } from '../settings/settings-service'
 import { WorkspaceFileWriteService } from '../workspace-files/workspace-file-write-service'
@@ -108,6 +115,9 @@ export interface ApplicationServices {
   /** Stage 28 local usage awareness. Absent in older harnesses without a usage repository. */
   readonly usageStore?: AiUsageRepository
   readonly usageService?: AiUsageService
+  /** Stage 29 optional cloud account. Absent in older harnesses without cloud tables. */
+  readonly cloudAccountStore?: CloudAccountRepository
+  readonly cloudAccountService?: CloudAccountService
 }
 
 export interface ServiceDependencies {
@@ -136,6 +146,8 @@ export interface ServiceDependencies {
   readonly runtimeStore?: ProjectRuntimeRepository
   /** Stage 28 usage repository. Optional so older harnesses keep working. */
   readonly usageStore?: AiUsageRepository
+  /** Stage 29 cloud-account repository. Optional so older harnesses keep working. */
+  readonly cloudAccountStore?: CloudAccountRepository
 }
 
 /**
@@ -151,6 +163,10 @@ export interface ProviderConstruction {
    * OpenAI registration is skipped so suites can register fakes.
    */
   readonly registry?: ProviderRegistry
+  /** Stage 29 cloud-auth seams (tests only). Defaults use Supabase + system browser. */
+  readonly cloudAuthAdapter?: CloudAuthAdapter
+  readonly cloudBrowserOpener?: BrowserOpener
+  readonly cloudNow?: () => number
 }
 
 export function createServices(deps: ServiceDependencies, providers?: ProviderConstruction): ApplicationServices {
@@ -429,6 +445,26 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
           },
           undefined
         )
+  // Stage 29 optional cloud account: built only when the cloud tables
+  // exist. Supabase public config is application-owned; when absent
+  // the adapter reports unconfigured and local STARK stays fully
+  // usable. Auth material never touches AI/provider code.
+  const cloudAccountStore = deps.cloudAccountStore
+  let cloudAccountService: CloudAccountService | undefined
+  if (cloudAccountStore !== undefined) {
+    const cloudProtector = new SessionProtector(protector)
+    const cloudAdapter: CloudAuthAdapter =
+      providers?.cloudAuthAdapter ?? new SupabaseAuthAdapter(loadSupabasePublicConfig())
+    const cloudOpener: BrowserOpener = providers?.cloudBrowserOpener ?? openSystemBrowserOnce
+    cloudAccountService = new CloudAccountService({
+      repository: cloudAccountStore,
+      sessionProtector: cloudProtector,
+      authAdapter: cloudAdapter,
+      attempts: new OAuthAttemptManager(providers?.cloudNow),
+      browserOpener: cloudOpener,
+      now: providers?.cloudNow
+    })
+  }
   return {
     settingsService: new SettingsService(deps.keyValue),
     profileService: new ProfileService(deps.keyValue),
@@ -477,6 +513,8 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
     runtimeObservationService,
     previewInspectionService,
     usageStore,
-    usageService
+    usageService,
+    cloudAccountStore,
+    cloudAccountService
   }
 }

@@ -17,6 +17,7 @@ export interface AppInfo {
 }
 
 import type { ProfileApi } from '../profile/types'
+import type { CloudAccountApi } from '../cloud-account/types'
 import type { SessionsApi } from '../sessions/types'
 import type { SessionContextApi } from '../context/types'
 import type { ProvidersApi } from '../providers/types'
@@ -64,6 +65,7 @@ export interface StarkApi {
   workerTools: WorkerToolsApi
   runtimes: ProjectRuntimesApi
   usage: UsageApi
+  account: CloudAccountApi
 }
 
 /** Lifecycle status shown by the development shell. */

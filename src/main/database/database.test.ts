@@ -17,8 +17,8 @@ describe('StarkDatabase lifecycle', () => {
     try {
       database.initialize(':memory:')
       assert.equal(database.isOpen(), true)
-      assert.equal(database.getSchemaVersion(), 17)
-      assert.equal(database.readStoredSchemaVersion(), 17)
+      assert.equal(database.getSchemaVersion(), 18)
+      assert.equal(database.readStoredSchemaVersion(), 18)
     } finally {
       database.close()
     }
@@ -97,14 +97,14 @@ describe('StarkDatabase lifecycle', () => {
       try {
         first.initialize(file)
         first.getKeyValue().set('survive', [1, 2, 3])
-        assert.equal(first.getSchemaVersion(), 17)
+        assert.equal(first.getSchemaVersion(), 18)
       } finally {
         first.close()
       }
       const second = new StarkDatabase()
       try {
         second.initialize(file)
-        assert.equal(second.getSchemaVersion(), 17)
+        assert.equal(second.getSchemaVersion(), 18)
         assert.deepEqual(second.getKeyValue().get('survive'), [1, 2, 3])
       } finally {
         second.close()

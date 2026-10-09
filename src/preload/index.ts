@@ -109,6 +109,13 @@ import type {
   ProjectRuntimesApi,
   RuntimeRefRequest
 } from '../shared/project-runtime/types'
+import type {
+  CloudAccountApi,
+  CloudAccountStatus,
+  StartSignInRequest,
+  StartSignInResult
+} from '../shared/cloud-account/types'
+import { isCloudAccountStatus } from '../shared/cloud-account/types'
 import type { AppInfo, StarkApi } from '../shared/types'
 
 /**
@@ -364,6 +371,30 @@ function createSessionContextApi(): SessionContextApi {
   }
 }
 
+function createAccountApi(): CloudAccountApi {
+  return {
+    getStatus: (): Promise<CloudAccountStatus> =>
+      ipcRenderer.invoke(IPC_CHANNELS.accountGetStatus, {}) as Promise<CloudAccountStatus>,
+    startSignIn: (request: StartSignInRequest): Promise<StartSignInResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.accountStartSignIn, request) as Promise<StartSignInResult>,
+    cancelSignIn: (): Promise<CloudAccountStatus> =>
+      ipcRenderer.invoke(IPC_CHANNELS.accountCancelSignIn, {}) as Promise<CloudAccountStatus>,
+    signOut: (): Promise<CloudAccountStatus> =>
+      ipcRenderer.invoke(IPC_CHANNELS.accountSignOut, {}) as Promise<CloudAccountStatus>,
+    onUpdated: (listener: (status: CloudAccountStatus) => void): (() => void) => {
+      const handler = (_event: unknown, payload: unknown): void => {
+        if (isCloudAccountStatus(payload)) {
+          listener(payload)
+        }
+      }
+      ipcRenderer.on(IPC_CHANNELS.accountUpdated, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.accountUpdated, handler)
+      }
+    }
+  }
+}
+
 const starkApi: StarkApi = {
   getAppInfo: (): Promise<AppInfo> =>
     ipcRenderer.invoke(IPC_CHANNELS.getAppInfo) as Promise<AppInfo>,
@@ -435,7 +466,8 @@ const starkApi: StarkApi = {
   capabilities: createCapabilitiesApi(),
   workerTools: createWorkerToolsApi(),
   runtimes: createRuntimesApi(),
-  usage: createUsageApi()
+  usage: createUsageApi(),
+  account: createAccountApi()
 }
 
 contextBridge.exposeInMainWorld('stark', starkApi)

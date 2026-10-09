@@ -69,8 +69,8 @@ describe('migration 11 (recovery continuity)', () => {
   it('fresh DB migrates to v11', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 17)
-      assert.equal(getUserVersion(db), 17)
+      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(getUserVersion(db), 18)
     } finally {
       db.close()
     }
@@ -80,8 +80,8 @@ describe('migration 11 (recovery continuity)', () => {
     const db = openFresh()
     try {
       seedV10(db)
-      assert.equal(runMigrations(db, migrations), 17)
-      assert.equal(getUserVersion(db), 17)
+      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(getUserVersion(db), 18)
     } finally {
       db.close()
     }
@@ -91,7 +91,7 @@ describe('migration 11 (recovery continuity)', () => {
     const db = openFresh()
     try {
       seedV10(db)
-      assert.equal(runMigrations(db, migrations), 17)
+      assert.equal(runMigrations(db, migrations), 18)
       for (const table of [
         'key_value',
         'workspaces',
@@ -163,7 +163,7 @@ describe('migration 11 (recovery continuity)', () => {
     try {
       runMigrations(db, migrations)
       db.exec("INSERT INTO ai_recovery_settings (id, mode, created_at, updated_at) VALUES (1, 'off', 1, 1)")
-      assert.equal(runMigrations(db, migrations), 17)
+      assert.equal(runMigrations(db, migrations), 18)
       const count: unknown = db.prepare('SELECT COUNT(*) AS n FROM ai_recovery_settings').get()
       assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }))
     } finally {
@@ -210,7 +210,7 @@ describe('migration 11 (recovery continuity)', () => {
   it('migration 11 is registered after migration 10', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
     )
     assert.equal(migration011RecoveryContinuity.version, 11)
   })

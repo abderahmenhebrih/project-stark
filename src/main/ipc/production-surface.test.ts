@@ -19,6 +19,7 @@ import { AiUsageRepository } from '../usage/ai-usage-repository'
 import { KeyValueRepository } from '../database/repositories/key-value-repository'
 import { OrchestrationRepository } from '../database/repositories/orchestration-repository'
 import { WorkspaceRepository } from '../database/repositories/workspace-repository'
+import { CloudAccountRepository } from '../cloud-account/cloud-account-repository'
 import { TerminalManager } from '../terminal/terminal-manager'
 import type { CredentialProtector } from '../ai/credential-protector'
 import type { AiProviderAdapter, ProviderGenerateRequest, ProviderGenerateResult } from '../ai/provider-adapter'
@@ -82,6 +83,7 @@ function openProductionShapedServices(): { db: DatabaseSync; services: ReturnTyp
         workerCommandStore: new WorkerCommandRepository(db),
         runtimeStore: new ProjectRuntimeRepository(db),
         usageStore: new AiUsageRepository(db),
+        cloudAccountStore: new CloudAccountRepository(db),
         codingSessions: new CodingSessionRepository(db),
         aiProviders: new AiProviderRepository(db)
       },
@@ -160,7 +162,11 @@ const EXPECTED_PRODUCTION_CHANNELS: readonly string[] = [
   IPC_CHANNELS.runtimesReloadPreview,
   IPC_CHANNELS.usageGetConfig,
   IPC_CHANNELS.usageUpdateConfig,
-  IPC_CHANNELS.usageGetSummary
+  IPC_CHANNELS.usageGetSummary,
+  IPC_CHANNELS.accountGetStatus,
+  IPC_CHANNELS.accountStartSignIn,
+  IPC_CHANNELS.accountCancelSignIn,
+  IPC_CHANNELS.accountSignOut
 ]
 
 describe('authoritative production IPC surface', () => {
@@ -202,6 +208,7 @@ describe('authoritative production IPC surface', () => {
         workerToolRunner: services.workerToolRunner,
         projectRuntimeService: services.projectRuntimeService,
         usageService: services.usageService,
+        cloudAccountService: services.cloudAccountService,
         workspaces: new WorkspaceRepository(db),
         codingSessions: new CodingSessionRepository(db)
       }).map((binding) => binding.channel)
@@ -214,9 +221,9 @@ describe('authoritative production IPC surface', () => {
   it('accounts for every shipped IPC channel exactly once', () => {
     const all = new Set<string>(Object.values(IPC_CHANNELS))
     // Channels outside createIpcBindings by design: getAppInfo is
-    // registered directly, terminal data/exit and runtime updates are
+    // registered directly, terminal data/exit and runtime/account updates are
     // main-to-renderer events, never invoke bindings.
-    for (const standalone of [IPC_CHANNELS.getAppInfo, IPC_CHANNELS.terminalData, IPC_CHANNELS.terminalExit, IPC_CHANNELS.runtimeUpdated]) {
+    for (const standalone of [IPC_CHANNELS.getAppInfo, IPC_CHANNELS.terminalData, IPC_CHANNELS.terminalExit, IPC_CHANNELS.runtimeUpdated, IPC_CHANNELS.accountUpdated]) {
       assert.ok(all.delete(standalone), `${standalone} must exist`)
     }
     assert.deepEqual([...all].sort(), [...EXPECTED_PRODUCTION_CHANNELS].sort())
@@ -273,7 +280,14 @@ describe('authoritative production IPC surface', () => {
       'IPC_CHANNELS.usageUpdateConfig',
       'IPC_CHANNELS.usageGetSummary',
       'createUsageApi()',
-      'usage: createUsageApi()'
+      'usage: createUsageApi()',
+      'IPC_CHANNELS.accountGetStatus',
+      'IPC_CHANNELS.accountStartSignIn',
+      'IPC_CHANNELS.accountCancelSignIn',
+      'IPC_CHANNELS.accountSignOut',
+      'IPC_CHANNELS.accountUpdated',
+      'createAccountApi()',
+      'account: createAccountApi()'
     ]) {
       assert.ok(source.includes(expected), `preload must contain ${expected}`)
     }
@@ -286,5 +300,6 @@ describe('authoritative production IPC surface', () => {
     assert.ok(!source.includes("'stark:worker-tools:"), 'preload must not hardcode worker-tool channel names')
     assert.ok(!source.includes("'stark:runtimes:"), 'preload must not hardcode runtime channel names')
     assert.ok(!source.includes("'stark:runtime:"), 'preload must not hardcode runtime event names')
+    assert.ok(!source.includes("'stark:account:complete"), 'preload must not hardcode OAuth completion channels')
   })
 })

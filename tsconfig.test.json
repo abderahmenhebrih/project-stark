@@ -98,6 +98,10 @@
     "src/renderer/src/features/sessions/observation-safety.test.ts",
     "src/renderer/src/features/sessions/usage-state.ts",
     "src/renderer/src/features/sessions/usage-state.test.ts",
-    "src/renderer/src/features/sessions/usage-safety.test.ts"
+    "src/renderer/src/features/sessions/usage-safety.test.ts",
+    "src/renderer/src/features/account/account-state.ts",
+    "src/renderer/src/features/account/account-state.test.ts",
+    "src/renderer/src/lib/account-error.ts",
+    "src/renderer/src/lib/account-error.test.ts"
   ]
 }

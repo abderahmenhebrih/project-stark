@@ -18,6 +18,7 @@ import { migration014WorkerCommandExecutions } from './014-worker-command-execut
 import { migration015ProjectRuntimes } from './015-project-runtimes'
 import { migration016RuntimeObservationCapabilities } from './016-runtime-observation-capabilities'
 import { migration017AiUsageThresholds } from './017-ai-usage-thresholds'
+import { migration018CloudAccount } from './018-cloud-account'
 
 /**
  * Ordered migration registry. Append-only: add new migrations to the end
@@ -40,7 +41,8 @@ export const migrations: readonly Migration[] = [
   migration014WorkerCommandExecutions,
   migration015ProjectRuntimes,
   migration016RuntimeObservationCapabilities,
-  migration017AiUsageThresholds
+  migration017AiUsageThresholds,
+  migration018CloudAccount
 ]
 
 /**

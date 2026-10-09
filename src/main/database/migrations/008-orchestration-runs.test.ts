@@ -65,8 +65,8 @@ describe('migration 8 (orchestration runs)', () => {
   it('fresh DB migrates to v8', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 17)
-      assert.equal(getUserVersion(db), 17)
+      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(getUserVersion(db), 18)
     } finally {
       db.close()
     }
@@ -76,8 +76,8 @@ describe('migration 8 (orchestration runs)', () => {
     const db = openFresh()
     try {
       seedV7(db)
-      assert.equal(runMigrations(db, migrations), 17)
-      assert.equal(getUserVersion(db), 17)
+      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(getUserVersion(db), 18)
     } finally {
       db.close()
     }
@@ -87,7 +87,7 @@ describe('migration 8 (orchestration runs)', () => {
     const db = openFresh()
     try {
       seedV7(db)
-      assert.equal(runMigrations(db, migrations), 17)
+      assert.equal(runMigrations(db, migrations), 18)
       for (const table of [
         'key_value',
         'workspaces',
@@ -151,7 +151,7 @@ describe('migration 8 (orchestration runs)', () => {
         'INSERT INTO orchestration_runs (workspace_id, session_id, user_message_id, status, created_at, updated_at) ' +
           "VALUES (1, 1, 1, 'failed', 1, 1)"
       )
-      assert.equal(runMigrations(db, migrations), 17)
+      assert.equal(runMigrations(db, migrations), 18)
       const count: unknown = db.prepare('SELECT COUNT(*) AS n FROM orchestration_runs').get()
       assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }))
     } finally {
@@ -195,7 +195,7 @@ describe('migration 8 (orchestration runs)', () => {
   it('migration 8 is registered after migration 7', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
     )
     assert.equal(migration008OrchestrationRuns.version, 8)
   })

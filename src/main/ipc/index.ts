@@ -14,6 +14,7 @@ import type { AiRecoveryCoordinator } from '../recovery/recovery-coordinator'
 import type { RecoveryRepository } from '../recovery/recovery-repository'
 import type { WorkspaceRepository } from '../database/repositories/workspace-repository'
 import type { CodingSessionRepository } from '../database/repositories/coding-session-repository'
+import type { CloudAccountService } from '../cloud-account/cloud-account-service'
 import type { AiBrainService } from '../ai/ai-brain-service'
 import type { AiCodeProposalService } from '../ai/ai-code-proposal-service'
 import type { AiCompletionService } from '../ai/ai-completion-service'
@@ -54,6 +55,7 @@ import { isTrustedIpcSender } from './trust'
 import { createWorkspaceBindings, electronDirectoryPicker } from './workspace'
 import { createWorkspaceFilesBindings } from './workspace-files'
 import { createWorkspaceSearchBindings } from './workspace-search'
+import { createAccountBindings } from './account'
 
 /**
  * Registers an IPC handler that first proves the caller is STARK's own
@@ -120,6 +122,8 @@ export interface IpcDependencies {
   readonly projectRuntimeService?: ProjectRuntimeService
   /** Stage 28 local usage awareness. Optional; absent means no usage channels. */
   readonly usageService?: AiUsageService
+  /** Stage 29 optional cloud account. Optional; absent means no account channels. */
+  readonly cloudAccountService?: CloudAccountService
   readonly workspaces?: WorkspaceRepository
   readonly codingSessions?: CodingSessionRepository
 }
@@ -179,6 +183,9 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
   }
   if (deps.usageService !== undefined) {
     bindings.push(...createUsageBindings(deps.usageService, deps.heartService))
+  }
+  if (deps.cloudAccountService !== undefined) {
+    bindings.push(...createAccountBindings(deps.cloudAccountService))
   }
   return bindings
 }

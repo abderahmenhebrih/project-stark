@@ -93,7 +93,12 @@ export const IPC_CHANNELS = {
   runtimeUpdated: 'stark:runtime:updated',
   usageGetConfig: 'stark:usage:get-config',
   usageUpdateConfig: 'stark:usage:update-config',
-  usageGetSummary: 'stark:usage:get-summary'
+  usageGetSummary: 'stark:usage:get-summary',
+  accountGetStatus: 'stark:account:get-status',
+  accountStartSignIn: 'stark:account:start-sign-in',
+  accountCancelSignIn: 'stark:account:cancel-sign-in',
+  accountSignOut: 'stark:account:sign-out',
+  accountUpdated: 'stark:account:updated'
 } as const
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS]

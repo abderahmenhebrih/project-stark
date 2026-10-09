@@ -18,6 +18,7 @@ import { AiProviderRepository } from './repositories/ai-provider-repository'
 import { CodingSessionRepository } from './repositories/coding-session-repository'
 import { KeyValueRepository } from './repositories/key-value-repository'
 import { WorkspaceRepository } from './repositories/workspace-repository'
+import { CloudAccountRepository } from '../cloud-account/cloud-account-repository'
 import type { Migration } from './types'
 
 /**
@@ -107,6 +108,7 @@ export class StarkDatabase {
   private codingSessionRepo: CodingSessionRepository | null = null
   private aiProviderRepo: AiProviderRepository | null = null
   private usageRepo: AiUsageRepository | null = null
+  private cloudAccountRepo: CloudAccountRepository | null = null
   private schemaVersion = 0
 
   /**
@@ -147,6 +149,7 @@ export class StarkDatabase {
       this.codingSessionRepo = new CodingSessionRepository(db)
       this.aiProviderRepo = new AiProviderRepository(db)
       this.usageRepo = new AiUsageRepository(db)
+      this.cloudAccountRepo = new CloudAccountRepository(db)
     } catch (error) {
       try {
         db.close()
@@ -181,6 +184,7 @@ export class StarkDatabase {
       this.codingSessionRepo = null
       this.aiProviderRepo = null
       this.usageRepo = null
+      this.cloudAccountRepo = null
       this.schemaVersion = 0
     }
   }
@@ -321,5 +325,13 @@ export class StarkDatabase {
       throw new DatabaseError('database is not initialized')
     }
     return this.usageRepo
+  }
+
+  /** Cloud-account repository access for main-process services. Throws when closed. */
+  getCloudAccount(): CloudAccountRepository {
+    if (this.cloudAccountRepo === null) {
+      throw new DatabaseError('database is not initialized')
+    }
+    return this.cloudAccountRepo
   }
 }

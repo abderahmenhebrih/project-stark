@@ -1,9 +1,11 @@
 import { app, BrowserWindow } from 'electron'
 import { IPC_CHANNELS } from '../shared/constants'
+import type { CloudAccountStatus } from '../shared/cloud-account/types'
 import type { ProjectRuntimeUpdatedEvent } from '../shared/project-runtime/types'
 import { setStarkAiDiagEnabled } from './ai/ai-provider-service'
 import { createOpenAiClient } from './ai/openai-adapter'
-import { createServices } from './application/create-services'
+import { createServices, type ApplicationServices } from './application/create-services'
+import { extractDeepLinkFromArgv } from './cloud-account/deep-link'
 import { StarkDatabase } from './database/database'
 import { resolveDatabaseFile } from './database/paths'
 import { registerIpcHandlers } from './ipc'
@@ -35,6 +37,71 @@ let terminalManager: TerminalManager | null = null
  * persists their final state before the database connection closes.
  */
 let shutdownRuntimes: (() => void) | null = null
+
+/**
+ * STARK cloud-account wiring (Stage 29, main-process only).
+ * Holds the constructed services so platform deep-link callbacks
+ * (second-instance argv, macOS open-url) reach the account service
+ * without launching a second app instance.
+ */
+let accountServices: ApplicationServices | null = null
+
+function broadcastAccountStatus(status: CloudAccountStatus): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    try {
+      if (!window.isDestroyed()) {
+        window.webContents.send(IPC_CHANNELS.accountUpdated, status)
+      }
+    } catch {
+      // Best effort streaming: a destroyed renderer stops receiving.
+    }
+  }
+}
+
+/**
+ * Handles one raw deep-link URL from the OS. Forwards exactly
+ * stark:// callbacks to the account service; anything else is
+ * ignored safely. Never logs the URL, code, or tokens — only a
+ * secret-free outcome category.
+ */
+function handleAuthDeepLink(rawUrl: string): void {
+  const service = accountServices?.cloudAccountService
+  if (service === undefined || service === null) {
+    return
+  }
+  void service
+    .handleAuthCallback(rawUrl)
+    .then((status) => {
+      broadcastAccountStatus(status)
+    })
+    .catch(() => {
+      // Safe log: outcome category only, never the URL or code.
+      if (!app.isPackaged) {
+        console.log('[STARK] account callback rejected')
+      }
+      const fallback = service.getStatus()
+      broadcastAccountStatus(fallback)
+    })
+}
+
+function handleSecondInstanceArgv(argv: readonly string[]): void {
+  const deepLink = extractDeepLinkFromArgv(argv)
+  if (deepLink !== null) {
+    handleAuthDeepLink(deepLink)
+  }
+  if (mainWindow !== null && !mainWindow.isDestroyed()) {
+    try {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore()
+      }
+      mainWindow.focus()
+    } catch {
+      // Best effort focus during callback handling.
+    }
+  } else {
+    createMainWindow()
+  }
+}
 
 function shutdownTerminals(): void {
   try {
@@ -122,6 +189,11 @@ function printTemporaryAiBuildDiag(): void {
 
 void app.whenReady().then(() => {
   applyContentSecurityPolicy()
+  try {
+    app.setAsDefaultProtocolClient('stark')
+  } catch {
+    // Best effort: protocol registration must never block startup.
+  }
   if (!initializePersistence()) {
     app.quit()
     return
@@ -143,9 +215,11 @@ void app.whenReady().then(() => {
     workerCommandStore: starkDatabase.getWorkerCommands(),
     runtimeStore: starkDatabase.getProjectRuntimes(),
     usageStore: starkDatabase.getUsage(),
+    cloudAccountStore: starkDatabase.getCloudAccount(),
     codingSessions: starkDatabase.getCodingSessions(),
     aiProviders: starkDatabase.getAiProviders()
   })
+  accountServices = services
   // Crash recovery, once: leftover running orchestration runs from a
   // previous process become interrupted. No resume, no continuation.
   try {
@@ -257,11 +331,36 @@ void app.whenReady().then(() => {
     workerToolRunner: services.workerToolRunner,
     projectRuntimeService: services.projectRuntimeService,
     usageService: services.usageService,
+    cloudAccountService: services.cloudAccountService,
     workspaces: starkDatabase.getWorkspaces(),
     codingSessions: starkDatabase.getCodingSessions()
   })
+  // STARK account status fans out to every open renderer. Payloads are
+  // trusted safe statuses only (no tokens) via the preload validator.
+  services.cloudAccountService?.setEmitter(broadcastAccountStatus)
   printTemporaryAiBuildDiag()
   createMainWindow()
+  // STARK startup never blocks on authentication: the window is already
+  // created above; the single bounded session restore runs detached and
+  // broadcasts its safe outcome when done. Offline, unconfigured, or
+  // corrupt sessions all degrade to local use.
+  if (services.cloudAccountService !== undefined) {
+    const accountService = services.cloudAccountService
+    void accountService.restoreAtStartup().then(
+      (status) => {
+        broadcastAccountStatus(status)
+      },
+      () => {
+        // Restore failures are already safe statuses; stay local.
+      }
+    )
+    // Windows/Linux protocol launch: the OS may have started STARK
+    // with a stark://auth/callback argument.
+    const initialDeepLink = extractDeepLinkFromArgv(process.argv)
+    if (initialDeepLink !== null) {
+      handleAuthDeepLink(initialDeepLink)
+    }
+  }
 
   // Standard macOS behavior: re-create the window when the dock icon is
   // clicked and no windows are open.
@@ -271,6 +370,37 @@ void app.whenReady().then(() => {
     }
   })
 })
+
+// Single-instance lock: a second protocol launch forwards its exact
+// callback to the primary instance and exits — no duplicate windows,
+// no independent auth handling.
+const singleInstanceLock = (() => {
+  try {
+    return app.requestSingleInstanceLock()
+  } catch {
+    return true
+  }
+})()
+if (!singleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', (_event, argv) => {
+    try {
+      handleSecondInstanceArgv(argv)
+    } catch {
+      // Callback forwarding must never crash the primary instance.
+    }
+  })
+  // macOS protocol callback.
+  app.on('open-url', (event, url) => {
+    event.preventDefault()
+    try {
+      handleAuthDeepLink(url)
+    } catch {
+      // Callback handling must never crash the primary instance.
+    }
+  })
+}
 // Quit on Windows/Linux when every window closes; stay alive on macOS.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

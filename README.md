@@ -146,7 +146,7 @@ and `window.stark` have no database access and no generic SQL IPC exists.
   so the dev server and a raw `electron ./out/...` launch may use
   different roots; the dev/prod *filename* split above always applies.)
 - Migrations: ordered, validated, transactional, tracked with
-  `PRAGMA user_version`. Current schema version: **17**.
+  `PRAGMA user_version`. Current schema version: **18**.
 - Tables: `key_value(key TEXT PRIMARY KEY, value TEXT (JSON), updated_at INTEGER)`,
   `workspaces(id, root_path UNIQUE, display_name, created_at, last_opened_at)`
   plus a recency index, `change_transactions` + `change_transaction_files`,
@@ -157,7 +157,9 @@ and `window.stark` have no database access and no generic SQL IPC exists.
   `worker_tool_approvals` + `worker_tool_events` + `worker_tool_run_state`
   (exact approvals, immutable audit, bounded resume state),
   `worker_command_executions` (at-most-once bounded command runs, UNIQUE approval),
-  `project_runtime_sessions` (at-most-once managed runtimes, UNIQUE approval, one active per Workspace).
+  `project_runtime_sessions` (at-most-once managed runtimes, UNIQUE approval, one active per Workspace),
+  `cloud_account` (singleton id=1: normalized Google/GitHub identity only, no tokens)
+  + `cloud_auth_session` (singleton id=1: safeStorage-encrypted session BLOB only, no plaintext).
 - Pragmas: `foreign_keys = ON`, `journal_mode = WAL`, `synchronous = NORMAL`,
   `busy_timeout = 5000`.
 - Tests: `npm test` (Node built-in runner, real SQLite, isolated
@@ -1143,6 +1145,68 @@ no provider billing/quota API polling of any kind.
   `stark:usage:get-config` / `update-config` / `get-summary`
   (schema v16 → v17 adds usage tables).
 
+## Optional STARK account
+
+STARK remains LOCAL-FIRST. The account is an OPTIONAL cloud identity
+layer: signing in never uploads the project and signing out never
+deletes local work.
+
+- Providers: Google and GitHub only (`google` | `github`). No
+  email/password, magic link, phone, anonymous, Microsoft, Discord,
+  Apple, custom OAuth, or API-key login. Other providers are rejected
+  before Supabase, the browser, or the database.
+- System-browser OAuth: the user presses Continue with Google/GitHub,
+  main creates one bounded attempt, Supabase generates the OAuth URL,
+  main opens the system browser exactly once (never a STARK window,
+  WebView, or iframe), the provider redirects to the exact
+  `stark://auth/callback` deep link, main validates and exchanges the
+  code once through Supabase Auth (PKCE), then persists and emits a
+  safe status.
+- Main-process auth: the Supabase client lives in main only
+  (`@supabase/supabase-js`, `persistSession: false`,
+  `autoRefreshToken: false`). The renderer never receives the client,
+  access/refresh tokens, OAuth codes, PKCE verifiers, or raw
+  user/session objects — only the normalized safe status.
+- Bounded 5-minute sign-in attempt: exactly one pending attempt;
+  a second start is rejected with "An account sign-in is already in
+  progress." No polling, no refresh loops, no retries, no fallback,
+  no second browser. Cancel clears the attempt with no network.
+- Deep-link security: exact scheme `stark`, host `auth`, path
+  `/callback`; rejects other hosts/paths/schemes, credentials in the
+  authority, fragments, unexpected parameters, and oversized values.
+  Callbacks require an active attempt and are single-use (consumed
+  before exchange); expired or unsolicited callbacks never exchange.
+  Windows/Linux second-instance args and macOS open-url forward to the
+  primary instance under a single-instance lock.
+- Encrypted safeStorage session persistence: the minimum normalized
+  session envelope is strictly validated, encrypted as a whole, and
+  persisted atomically with the account identity (one SQLite
+  transaction, all-or-none). Fail-closed on unavailable/insecure
+  storage: no plaintext tokens anywhere. Corrupt blobs degrade to a
+  safe attention state, never a crash or plaintext fallback.
+- Renderer never receives tokens: IPC is exactly four invoke channels
+  (`stark:account:get-status` / `start-sign-in` / `cancel-sign-in` /
+  `sign-out`, provider enum only) plus the `stark:account:updated`
+  event with safe statuses. No OAuth completion, token, code,
+  session, or URL channels. Preload validates every pushed payload.
+- Local profile remains separate: the onboarding "How should I call
+  you?" name stays authoritative for greetings; GitHub/Google display
+  names never overwrite it.
+- Local Workspaces/files/sessions remain local: signing in uploads no
+  project data; signing out deletes no local project data; provider
+  API credentials remain separate.
+- Missing/offline Supabase never blocks local use: absent public
+  config reports "Cloud account features are unavailable in this
+  build."; offline or expired sessions degrade to signed-in or
+  attention states with local work fully usable.
+- Minimal `profiles` table only (`supabase/migrations/0001_profiles.sql`):
+  `user_id` / `display_name` / `avatar_url` with RLS own-user
+  SELECT/INSERT/UPDATE (`auth.uid() = user_id`). No Workspace, file,
+  session, transaction, tool, runtime, or usage tables. No
+  service-role key in the client.
+- Schema v18 (`018-cloud-account.ts`, append-only): `cloud_account`
+  + `cloud_auth_session` singletons (id=1).
+
 ## Current status
 
 - [x] Electron main process, preload bridge, React shell
@@ -1176,4 +1240,5 @@ no provider billing/quota API polling of any kind.
 - [x] Managed project runtime: exactly one additional Worker-only tool (`runtime_start` → `terminal.execute`) starting one bounded long-lived dev server per exact human approval — program + argv (Stage 25 rules) + loopback preview port, one active runtime per Workspace (`runtime_already_active` without approval/spawn), Workspace-root cwd, sanitized environment, stdin closed, detached process-group/tree termination (POSIX group signal, Windows exact-PID `taskkill /T`, no names/scans/PIDs), 30-minute hard deadline, explicit human Stop, bounded app-shutdown cleanup, crash → `interrupted` with no relaunch/kill/reconnect, 128 KiB rolling log tails persisted for human display, isolated loopback-only Preview window (no preload/bridge, same-origin allowlist, popups/permissions denied, lifecycle separate from runtime), workspace Runtime UI with push updates (no polling/countdowns), runtime-scoped IPC reads/stop/preview only, outlives Work by design with recovery disabled, no Worker stop tool (schema v14 → v15 adds runtime sessions)
 - [x] Bounded Worker runtime observation + read-only Live Preview inspection: exactly two additional read-only Worker-only tools (`runtime_observe` → `runtime.observe`, `preview_inspect` → `preview.inspect`) with two new default-deny Workspace capabilities (Deny/Ask/Allow; existing five unchanged; v15 configs migrate withdeny backfill, no silent grants). `runtime_observe` (`{}` only, main derives the active `starting`/`running` runtime) returns a bounded normalized observation (runtimeId/state/program/args/previewUrl/previewPort/startedAt/maximumLifetimeMs plus stdout/stderr/totalOutputBytes/olderOutputOmitted, ≤64 KiB newest-preferred, no PID/paths/env/credentials, no start/stop/reload/lifetime change). `preview_inspect` (`{}` only, main derives the loopback target from the human Preview's current same-origin URL or `/`) returns a bounded structured textual snapshot (title/readyState/URL, ≤32 KiB visible text, ≤100 elements with 300-codepoint text, same-origin path-only hrefs, no input values/cookies/storage/scripts/outerHTML, ≤64 KiB total) via the single constant main-owned DOM script through either the visible page (read-only, never navigated/reloaded/focused) or one temporary hidden isolated inspector (same partition, no preload, popups/permissions denied, one 10 s load attempt, no retry/polling, destroyed immediately, runtime untouched). Ask binds exact `runtimeId` (observe) or `runtimeId` + frozen path (inspect); replaced/restarted runtimes fail safely with no retargeting. Observations are untrusted DATA with zero provider calls, create no `readRef`/proposal authority (only same-run `workspace_read` does), never auto-inject into Worker context, count toward the 4-tool budget (Work still ≤7 calls), disable recovery after use, and reuse existing approval/event IPC with no new channels (schema v15 → v16 backfills capability defaults only)
 - [x] Local provider usage awareness + bounded Heart threshold routing: STARK-only outbound-call ledger with provider-reported tokens (no estimation, no billing/quota polling), rolling 24h summaries with token-completeness gating, user-configured routing thresholds + at most one Heart alternate per route (default off, atomic saves), frozen per-run route snapshots with immutable per-role decision audit beside the step-model audit, tracked-but-unrouted Ask/Propose/Recovery paths, zero added provider calls with all existing call bounds intact, three usage IPC channels (schema v16 → v17 adds usage tables)
-- [ ] Agent orchestration, model routing, auth, Supabase — later stages
+- [x] Optional STARK account foundation: Google/GitHub-only system-browser OAuth via main-process Supabase Auth (PKCE), exact `stark://auth/callback` deep link with single-instance forwarding, one bounded 5-minute attempt with single-use callbacks and explicit Cancel, safeStorage-encrypted session persistence (fail-closed, never plaintext, renderer never receives tokens), singleton `cloud_account` + `cloud_auth_session` persisted atomically, local profile stays authoritative for greetings, minimal remote `profiles` table with own-user RLS only, four account IPC channels plus one safe status event, no Workspace/session/code/settings/key/usage sync of any kind (schema v17 → v18 adds cloud-account tables)
+- [ ] Agent orchestration, model routing, Supabase sync — later stages
