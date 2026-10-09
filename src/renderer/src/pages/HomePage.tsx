@@ -3,6 +3,7 @@ import { useEffect, useReducer, useState } from 'react'
 import { APP_TAGLINE } from '../../../shared/constants'
 import { useApp } from '../app/app-context'
 import { Explorer } from '../features/explorer/Explorer'
+import { ProfileSection } from '../features/profile/ProfileSection'
 import { SessionPanel } from '../features/sessions/SessionPanel'
 import {
   initialSessionContextDraftState,
@@ -24,7 +25,7 @@ import './HomePage.css'
  * no session state leaks across projects.
  */
 export function HomePage(): ReactElement {
-  const { profile, workspace } = useApp()
+  const { profile, refreshProfile, workspace } = useApp()
   const displayName = profile?.displayName ?? ''
   const active = workspace.current
   const activeId = active?.id ?? null
@@ -70,6 +71,7 @@ export function HomePage(): ReactElement {
           <h1 className="home__title">Hi {displayName}, I’m STARK. What are we building today?</h1>
           <p className="home__tagline">{APP_TAGLINE}</p>
           <WorkspaceSection />
+          <ProfileSection current={profile} onChanged={() => void refreshProfile()} />
           <SystemStatus />
         </div>
       </div>
@@ -120,6 +122,7 @@ export function HomePage(): ReactElement {
         )}
       </div>
       <div className="workbench-status">
+        <ProfileSection current={profile} onChanged={() => void refreshProfile()} />
         <SystemStatus />
       </div>
     </div>

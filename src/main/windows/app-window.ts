@@ -1,4 +1,4 @@
-import { BrowserWindow, shell } from 'electron'
+import { BrowserWindow, shell, type BrowserWindowConstructorOptions } from 'electron'
 import { join } from 'node:path'
 import { APP_NAME } from '../../shared/constants'
 import { RENDERER_DEV_URL, RENDERER_ENTRY, RENDERER_DIR, devServerOrigin } from '../security/app-urls'
@@ -9,17 +9,13 @@ function logRendererLoadError(error: unknown): void {
 }
 
 /**
- * Creates the single STARK application window.
- *
- * Security posture:
- * - contextIsolation enabled, nodeIntegration disabled, sandbox enabled.
- * - The renderer receives no Node.js access; it talks to the main
- *   process only through the preload bridge.
- * - Only http(s) links reach the OS browser; everything else is denied.
- * - The main frame cannot navigate away from the application.
+ * Hardened main-window options (Stage 30 release matrix).
+ * contextIsolation on, nodeIntegration off, sandboxed, STARK preload
+ * only. Pure so the release security suite asserts the exact posture
+ * without constructing a BrowserWindow.
  */
-export function createAppWindow(): BrowserWindow {
-  const window = new BrowserWindow({
+export function buildMainWindowOptions(): BrowserWindowConstructorOptions {
+  return {
     width: 1100,
     height: 750,
     minWidth: 900,
@@ -34,7 +30,21 @@ export function createAppWindow(): BrowserWindow {
       nodeIntegration: false,
       sandbox: true
     }
-  })
+  }
+}
+
+/**
+ * Creates the single STARK application window.
+ *
+ * Security posture:
+ * - contextIsolation enabled, nodeIntegration disabled, sandbox enabled.
+ * - The renderer receives no Node.js access; it talks to the main
+ *   process only through the preload bridge.
+ * - Only http(s) links reach the OS browser; everything else is denied.
+ * - The main frame cannot navigate away from the application.
+ */
+export function createAppWindow(): BrowserWindow {
+  const window = new BrowserWindow(buildMainWindowOptions())
 
   window.once('ready-to-show', () => {
     window.show()

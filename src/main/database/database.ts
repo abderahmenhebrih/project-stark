@@ -128,7 +128,14 @@ export class StarkDatabase {
         throw new DatabaseError('unable to create database directory', { cause: error })
       }
     }
-    const db = new DatabaseSync(dbFilePath)
+    let db: DatabaseSync
+    try {
+      db = new DatabaseSync(dbFilePath)
+    } catch (error) {
+      // Foreign open failures (e.g. corrupt files) normalize to a
+      // path-free DatabaseError; nothing is deleted or repaired.
+      throw new DatabaseError('unable to open database', { cause: error })
+    }
     try {
       applyPragmas(db, dbFilePath === ':memory:')
       const version = runMigrations(db, migrationList)
@@ -156,7 +163,12 @@ export class StarkDatabase {
       } catch {
         // Best effort: the original initialization error below is what matters.
       }
-      throw error
+      if (error instanceof DatabaseError) {
+        throw error
+      }
+      // Foreign failures (e.g. corrupt files surfacing at first use)
+      // normalize to a path-free DatabaseError; nothing is deleted.
+      throw new DatabaseError('unable to open database', { cause: error })
     }
   }
 

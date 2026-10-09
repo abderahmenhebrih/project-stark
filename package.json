@@ -12,10 +12,12 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "tsc -p tsconfig.test.json && node -e \"require('fs').writeFileSync('.test-dist/package.json', JSON.stringify({ type: 'commonjs' }))\" && node --test \".test-dist/**/*.test.js\" && node -e \"require('fs').rmSync('.test-dist', { recursive: true, force: true })\"",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "release:check": "node scripts/release-check.cjs",
+    "release:smoke": "node scripts/packaged-smoke.cjs"
   },
   "keywords": [],
-  "author": "",
+  "author": "STARK",
   "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",
@@ -54,7 +56,17 @@
     "files": [
       "out/**/*",
       "package.json",
-      "node_modules/node-pty/**/*"
+      "node_modules/node-pty/**/*",
+      "!**/.env*",
+      "!**/*.db*",
+      "!**/*.log",
+      "!**/coverage/**"
+    ],
+    "protocols": [
+      {
+        "name": "STARK Auth",
+        "schemes": ["stark"]
+      }
     ],
     "asarUnpack": [
       "node_modules/node-pty/prebuilds/**/*",
@@ -62,17 +74,19 @@
     ],
     "win": {
       "target": [
-        "dir"
+        "nsis"
       ]
     },
     "mac": {
       "target": [
-        "dir"
+        "dmg",
+        "zip"
       ]
     },
     "linux": {
       "target": [
-        "dir"
+        "AppImage",
+        "deb"
       ]
     }
   }

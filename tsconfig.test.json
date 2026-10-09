@@ -102,6 +102,11 @@
     "src/renderer/src/features/account/account-state.ts",
     "src/renderer/src/features/account/account-state.test.ts",
     "src/renderer/src/lib/account-error.ts",
-    "src/renderer/src/lib/account-error.test.ts"
+    "src/renderer/src/lib/account-error.test.ts",
+    "src/renderer/src/components/error-boundary-state.ts",
+    "src/renderer/src/components/error-boundary-state.test.ts",
+    "src/renderer/src/features/profile/profile-state.ts",
+    "src/renderer/src/features/profile/profile-state.test.ts",
+    "src/renderer/src/lib/double-submit-guards.test.ts"
   ]
 }

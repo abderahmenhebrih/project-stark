@@ -100,15 +100,20 @@ describe('Stage 29 architecture boundaries', () => {
   })
 
   it('no service-role credential in client surfaces', () => {
+    const allowedGuards = new Set(['supabase-auth-adapter.ts', 'diagnostic-redaction.ts'])
     const surfaceFiles = listFilesRecursive(join(root(), 'src'), '.ts')
       .concat(listFilesRecursive(join(root(), 'src'), '.tsx'))
       .filter((file) => !file.endsWith('.test.ts'))
     for (const file of surfaceFiles) {
+      if ([...allowedGuards].some((name) => file.endsWith(name))) {
+        continue
+      }
       const source = readSource(file)
       assert.ok(!source.includes('SUPABASE_SERVICE_ROLE'), `${file} must not reference a service-role env key`)
     }
-    // Defensive rejection guard is the only allowed executable
-    // mention of the service_role literal outside comments/docs.
+    // Defensive guards are the only allowed executable mentions of the
+    // service_role literal outside comments/docs: the Supabase adapter
+    // rejection guard and the diagnostic redaction pattern.
     const offenderFiles = surfaceFiles.filter((file) => {
       const source = readSource(file)
       const lines = source.split('\n').filter((line) => {
@@ -117,9 +122,12 @@ describe('Stage 29 architecture boundaries', () => {
       })
       return lines.join('\n').includes('service_role')
     })
-    assert.ok(
-      offenderFiles.length <= 1 && (offenderFiles.length === 0 || offenderFiles[0].endsWith('supabase-auth-adapter.ts')),
-      `only the Supabase adapter guard may mention service_role: ${offenderFiles.join(',')}`
+    const allowed = new Set(['supabase-auth-adapter.ts', 'diagnostic-redaction.ts'])
+    const unexpected = offenderFiles.filter((file) => ![...allowed].some((name) => file.endsWith(name)))
+    assert.deepEqual(
+      unexpected,
+      [],
+      `only defensive guards may mention service_role: ${offenderFiles.join(',')}`
     )
   })
 

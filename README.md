@@ -7,16 +7,18 @@ continuously across AI models and sessions — without manually switching
 models, copying prompts, or losing coding context. It targets both
 nontechnical users and developers on Windows, macOS, and Linux.
 
-> **Current stage: explicit bounded project context (Stage 15).** This repository contains
-> the Electron + React + TypeScript application with local SQLite
-> persistence and the Settings, local-profile, Workspace, Explorer,
-> Search, single-file Editing, Change Transaction, Monaco Editor,
-> human-only Terminal, read-only Git, persistent local coding-session,
-> OpenAI provider, and explicit project-context domains. The provider
-> receives only user-attached context plus session text — no tools,
-> no agents, no automatic ingestion. Brain/Heart orchestration, model
-> routing, authentication, Supabase sync, and the duo-agent workflow are
-> **not implemented yet**. Nothing below claims otherwise.
+> **Current stage: v1 release candidate (Stages 1–30, schema v18).**
+> This repository contains the Electron + React + TypeScript application
+> with local SQLite persistence and all Stage 1–30 domains (Settings,
+> local-profile, Workspace, Explorer, Search, Editing, Change
+> Transactions/Sets, Monaco, human Terminal, read-only Git, coding
+> sessions, OpenAI provider, explicit context, proposals, Brain/Heart,
+> Looplink, Recovery, capabilities, Worker tools, managed runtimes,
+> usage awareness, optional Google/GitHub account foundation, and
+> release hardening). Cloud Workspace sync, collaboration, payments,
+> and the duo-agent workflow are **not implemented**. Manual acceptance
+> (docs/RELEASE_ACCEPTANCE_V1.md) is **not yet executed**. Nothing below
+> claims otherwise.
 
 ## Stack
 
@@ -1241,4 +1243,5 @@ deletes local work.
 - [x] Bounded Worker runtime observation + read-only Live Preview inspection: exactly two additional read-only Worker-only tools (`runtime_observe` → `runtime.observe`, `preview_inspect` → `preview.inspect`) with two new default-deny Workspace capabilities (Deny/Ask/Allow; existing five unchanged; v15 configs migrate withdeny backfill, no silent grants). `runtime_observe` (`{}` only, main derives the active `starting`/`running` runtime) returns a bounded normalized observation (runtimeId/state/program/args/previewUrl/previewPort/startedAt/maximumLifetimeMs plus stdout/stderr/totalOutputBytes/olderOutputOmitted, ≤64 KiB newest-preferred, no PID/paths/env/credentials, no start/stop/reload/lifetime change). `preview_inspect` (`{}` only, main derives the loopback target from the human Preview's current same-origin URL or `/`) returns a bounded structured textual snapshot (title/readyState/URL, ≤32 KiB visible text, ≤100 elements with 300-codepoint text, same-origin path-only hrefs, no input values/cookies/storage/scripts/outerHTML, ≤64 KiB total) via the single constant main-owned DOM script through either the visible page (read-only, never navigated/reloaded/focused) or one temporary hidden isolated inspector (same partition, no preload, popups/permissions denied, one 10 s load attempt, no retry/polling, destroyed immediately, runtime untouched). Ask binds exact `runtimeId` (observe) or `runtimeId` + frozen path (inspect); replaced/restarted runtimes fail safely with no retargeting. Observations are untrusted DATA with zero provider calls, create no `readRef`/proposal authority (only same-run `workspace_read` does), never auto-inject into Worker context, count toward the 4-tool budget (Work still ≤7 calls), disable recovery after use, and reuse existing approval/event IPC with no new channels (schema v15 → v16 backfills capability defaults only)
 - [x] Local provider usage awareness + bounded Heart threshold routing: STARK-only outbound-call ledger with provider-reported tokens (no estimation, no billing/quota polling), rolling 24h summaries with token-completeness gating, user-configured routing thresholds + at most one Heart alternate per route (default off, atomic saves), frozen per-run route snapshots with immutable per-role decision audit beside the step-model audit, tracked-but-unrouted Ask/Propose/Recovery paths, zero added provider calls with all existing call bounds intact, three usage IPC channels (schema v16 → v17 adds usage tables)
 - [x] Optional STARK account foundation: Google/GitHub-only system-browser OAuth via main-process Supabase Auth (PKCE), exact `stark://auth/callback` deep link with single-instance forwarding, one bounded 5-minute attempt with single-use callbacks and explicit Cancel, safeStorage-encrypted session persistence (fail-closed, never plaintext, renderer never receives tokens), singleton `cloud_account` + `cloud_auth_session` persisted atomically, local profile stays authoritative for greetings, minimal remote `profiles` table with own-user RLS only, four account IPC channels plus one safe status event, no Workspace/session/code/settings/key/usage sync of any kind (schema v17 → v18 adds cloud-account tables)
-- [ ] Agent orchestration, model routing, Supabase sync — later stages
+- [x] Release hardening: explicit startup order with fatal-local vs recoverable-optional classification and one safe fatal dialog + Quit (no relaunch loop), newer-schema guard (refuse backwards, never writable), corrupt-DB safe failure (no delete/repair), ordered bounded shutdown (10 s global deadline, late events dropped), uncaughtException/unhandledRejection handling with redacted logging, bounded local diagnostics (2 MiB current/previous rotation, no upload), top-level renderer Error Boundary, local "STARK calls you" profile editor (Stage 4 rules, no cloud sync), double-submit guards, 30-item release security matrix + 21-domain error-redaction sweep, production packaging (NSIS/DMG+ZIP/AppImage+DEB, `stark://` protocol, secret excludes, native unpack), `npm run release:check` gate, `STARK_RELEASE_SMOKE=1` bounded smoke mode, authoritative `docs/RELEASE_ACCEPTANCE_V1.md` (76 checks, UNTESTED) + `docs/RELEASE_READINESS_V1.md` (schema v18, acceptance NOT YET EXECUTED)
+- [ ] Manual acceptance Stage 31 — see docs/RELEASE_ACCEPTANCE_V1.md

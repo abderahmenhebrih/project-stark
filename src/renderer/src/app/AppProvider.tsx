@@ -118,6 +118,18 @@ export function AppProvider({ children }: AppProviderProps): ReactElement {
     setProfile(saved)
   }, [])
 
+  const refreshProfile = useCallback(async (): Promise<void> => {
+    const api = getProfileApi()
+    if (api === undefined) {
+      return
+    }
+    try {
+      setProfile(await api.get())
+    } catch {
+      // Best effort: the editor keeps its current value on failure.
+    }
+  }, [])
+
   const retryBoot = useCallback(() => {
     setLoading(true)
     setLoadError(false)
@@ -225,10 +237,11 @@ export function AppProvider({ children }: AppProviderProps): ReactElement {
       boot: resolveBootState({ loading, profile, loadError }),
       profile,
       completeOnboarding,
+      refreshProfile,
       retryBoot,
       workspace
     }),
-    [loading, profile, loadError, completeOnboarding, retryBoot, workspace]
+    [loading, profile, loadError, completeOnboarding, refreshProfile, retryBoot, workspace]
   )
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

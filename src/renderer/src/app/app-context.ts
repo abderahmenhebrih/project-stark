@@ -19,6 +19,7 @@ export interface AppContextValue {
   readonly boot: BootState
   readonly profile: LocalProfile | null
   readonly completeOnboarding: (displayName: string) => Promise<void>
+  readonly refreshProfile: () => Promise<void>
   readonly retryBoot: () => void
   readonly workspace: WorkspaceSlice
 }

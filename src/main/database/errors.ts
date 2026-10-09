@@ -23,6 +23,22 @@ export class MigrationError extends DatabaseError {
 }
 
 /**
+ * Thrown when the stored user_version is newer than this build
+ * supports. The database must NOT be migrated backwards or opened
+ * writable — fail safely with guidance to use a newer STARK build.
+ */
+export class NewerSchemaError extends DatabaseError {
+  override readonly name = 'NewerSchemaError'
+
+  constructor(storedVersion: number, supportedVersion: number, options?: { cause?: unknown }) {
+    super(
+      `This STARK data was created by a newer version of STARK (data v${storedVersion}, this build supports v${supportedVersion}).`,
+      options
+    )
+  }
+}
+
+/**
  * Thrown when a persisted value cannot be decoded safely.
  * Carries the key, never the corrupted payload.
  */

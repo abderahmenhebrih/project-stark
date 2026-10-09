@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
 import { IPC_CHANNELS } from '../shared/constants'
 import type { CloudAccountStatus } from '../shared/cloud-account/types'
 import type { ProjectRuntimeUpdatedEvent } from '../shared/project-runtime/types'
@@ -8,9 +8,16 @@ import { createServices, type ApplicationServices } from './application/create-s
 import { extractDeepLinkFromArgv } from './cloud-account/deep-link'
 import { StarkDatabase } from './database/database'
 import { resolveDatabaseFile } from './database/paths'
+import { DiagnosticLogger } from './diagnostics/diagnostic-logger'
+import { redactForLog } from './diagnostics/diagnostic-redaction'
 import { registerIpcHandlers } from './ipc'
 import { createTerminalEventSink } from './ipc/terminal'
 import { applyContentSecurityPolicy } from './security/session'
+import { FatalStartupPresenter } from './startup/fatal-startup'
+import { installGlobalErrorHandlers } from './startup/global-errors'
+import { performOrderedShutdown, ShutdownGuard } from './startup/shutdown'
+import { parseSmokeConfig, smokeDatabaseFile, writeSmokeMarker } from './startup/smoke-mode'
+import { runStartupRecoveryPasses } from './startup/startup-order'
 import { createNodePtyFactory } from './terminal/node-pty-adapter'
 import { TerminalManager } from './terminal/terminal-manager'
 import { createAppWindow } from './windows/app-window'
@@ -37,6 +44,53 @@ let terminalManager: TerminalManager | null = null
  * persists their final state before the database connection closes.
  */
 let shutdownRuntimes: (() => void) | null = null
+
+/**
+ * Release diagnostics owner (Stage 30): bounded in-memory ring, no
+ * file sink in the default path, redacted lines only. Never carries
+ * prompts, keys, tokens, file contents, or terminal output.
+ */
+const diagnostics = new DiagnosticLogger()
+
+/** Process-lifetime shutdown guard: late child events drop after quit begins. */
+const shutdownGuard = new ShutdownGuard()
+
+/**
+ * Exactly-once fatal-startup presenter: one minimal safe dialog
+ * ("STARK could not start." + category + guidance) then Quit. No
+ * relaunch loop, no second presentation per process.
+ */
+const fatalPresenter = new FatalStartupPresenter({
+  showFatalSync: ({ title, message, detail }) => {
+    dialog.showMessageBoxSync({ type: 'error', title, message, detail, buttons: ['Quit'], noLink: true })
+  },
+  quit: () => {
+    app.quit()
+  }
+})
+
+function logFatalDiagnostic(category: string, detail: string): void {
+  try {
+    diagnostics.log({ severity: 'error', subsystem: 'main', category, operation: 'fatal', message: detail })
+  } catch {
+    // Diagnostics must never break fatal handling.
+  }
+  if (!app.isPackaged) {
+    try {
+      console.error(`[STARK] fatal (${category}): ${redactForLog(detail).slice(0, 200)}`)
+    } catch {
+      // Best effort.
+    }
+  }
+}
+
+installGlobalErrorHandlers(process, {
+  logFatal: logFatalDiagnostic,
+  quitAfterFatal: () => {
+    shutdownGuard.beginShutdown()
+    fatalPresenter.presentFatal('local-data')
+  }
+})
 
 /**
  * STARK cloud-account wiring (Stage 29, main-process only).
@@ -188,6 +242,37 @@ function printTemporaryAiBuildDiag(): void {
 }
 
 void app.whenReady().then(() => {
+  // Release smoke mode (test packaging only): isolated userdata,
+  // full migrations, one bounded ready marker, clean quit. No
+  // security bypass, no providers, no OAuth, no runtimes.
+  const smokeConfig = parseSmokeConfig()
+  if (smokeConfig !== null) {
+    try {
+      app.setPath('userData', smokeConfig.userDataDir)
+    } catch {
+      // Best effort: the isolated DB path below still applies.
+    }
+    try {
+      starkDatabase.initialize(smokeDatabaseFile(smokeConfig.userDataDir))
+      const schemaVersion = starkDatabase.getSchemaVersion()
+      starkDatabase.close()
+      writeSmokeMarker(smokeConfig.markerPath, { ok: true, schemaVersion, appVersion: app.getVersion() })
+    } catch (error) {
+      logFatalDiagnostic('smoke', error instanceof Error ? error.message : String(error))
+      try {
+        starkDatabase.close()
+      } catch {
+        // Best effort.
+      }
+      try {
+        writeSmokeMarker(smokeConfig.markerPath, { ok: false, schemaVersion: 0, appVersion: app.getVersion() })
+      } catch {
+        // Best effort marker.
+      }
+    }
+    app.quit()
+    return
+  }
   applyContentSecurityPolicy()
   try {
     app.setAsDefaultProtocolClient('stark')
@@ -195,7 +280,7 @@ void app.whenReady().then(() => {
     // Best effort: protocol registration must never block startup.
   }
   if (!initializePersistence()) {
-    app.quit()
+    fatalPresenter.presentFatal('local-data')
     return
   }
   // Services are constructed from initialized infrastructure first, then
@@ -220,81 +305,65 @@ void app.whenReady().then(() => {
     aiProviders: starkDatabase.getAiProviders()
   })
   accountServices = services
-  // Crash recovery, once: leftover running orchestration runs from a
-  // previous process become interrupted. No resume, no continuation.
-  try {
-    starkDatabase.getOrchestrationRuns().markRunningAsInterrupted(Date.now())
-  } catch {
-    // Best effort: a failed recovery mark must never block startup.
-  }
-  // Crash recovery for continuity: leftover running recovery events
-  // become interrupted. No provider calls, no resume, no continuation.
-  // Looplink stays pending and the target replay message is preserved
-  // for manual continuation.
-  try {
-    starkDatabase.getRecovery().markRunningAsInterrupted(Date.now())
-  } catch {
-    // Best effort: a failed recovery mark must never block startup.
-  }
-  // Crash recovery for Worker commands (Stage 25): leftover launching /
-  // running executions become interrupted with no re-execution and no
-  // PID kills (PIDs are never persisted). Parked runs that were waiting
-  // on those executions fail with safe copy; approvals stay consumed.
-  try {
-    const now = Date.now()
-    const outcome = starkDatabase.getWorkerCommands().markLaunchingAndRunningAsInterrupted(now)
-    for (const runId of outcome.runIds) {
-      try {
-        const run = starkDatabase.getOrchestrationRuns().findRunById(runId)
-        if (run !== undefined && run.status === 'waiting_for_approval') {
-          starkDatabase.getOrchestrationRuns().updateRunState({
-            id: runId,
-            status: 'failed',
-            action: run.action,
-            planSummary: run.planSummary,
-            finalMessageId: run.finalMessageId,
-            errorCategory: 'An approved Worker command was interrupted. Start the Work request again.',
-            now
-          })
+  // Bounded startup recovery, once, in explicit order: leftover
+  // running orchestration/recovery rows, launching/running Worker
+  // commands (parked runs fail with safe copy), managed runtimes,
+  // and usage telemetry become interrupted. No resume, no
+  // continuation, no provider calls, no retries.
+  runStartupRecoveryPasses(
+    {
+      markOrchestrationRunningInterrupted: (now) => {
+        starkDatabase.getOrchestrationRuns().markRunningAsInterrupted(now)
+      },
+      markRecoveryRunningInterrupted: (now) => {
+        starkDatabase.getRecovery().markRunningAsInterrupted(now)
+      },
+      markWorkerCommandsInterrupted: (now) => starkDatabase.getWorkerCommands().markLaunchingAndRunningAsInterrupted(now),
+      failParkedRuns: (runIds, now) => {
+        for (const runId of runIds) {
+          try {
+            const run = starkDatabase.getOrchestrationRuns().findRunById(runId)
+            if (run !== undefined && run.status === 'waiting_for_approval') {
+              starkDatabase.getOrchestrationRuns().updateRunState({
+                id: runId,
+                status: 'failed',
+                action: run.action,
+                planSummary: run.planSummary,
+                finalMessageId: run.finalMessageId,
+                errorCategory: 'An approved Worker command was interrupted. Start the Work request again.',
+                now
+              })
+            }
+          } catch {
+            // Best effort per run.
+          }
         }
-      } catch {
-        // Best effort per run.
+      },
+      recoverProjectRuntimes: (now) => {
+        services.projectRuntimeService?.recoverAtStartup(now)
+      },
+      cleanupUsage: (now) => {
+        services.usageService?.startupCleanup(now)
       }
-    }
-  } catch {
-    // Best effort: a failed recovery mark must never block startup.
-  }
-  // Crash recovery for managed project runtimes (Stage 26): leftover
-  // starting/running sessions become interrupted with no relaunch, no
-  // PID kills, and no auto-restart. Parked runs linked to those
-  // sessions fail with safe copy.
-  try {
-    services.projectRuntimeService?.recoverAtStartup(Date.now())
-  } catch {
-    // Best effort: a failed recovery mark must never block startup.
-  }
-  // Local usage telemetry cleanup (Stage 28): one bounded retention
-  // delete plus one bounded started→interrupted update. No provider
-  // calls, no retries, no timers. Interrupted attempts still count
-  // as locally initiated calls.
-  try {
-    services.usageService?.startupCleanup(Date.now())
-  } catch {
-    // Best effort: a failed usage cleanup must never block startup.
-  }
+    },
+    Date.now()
+  )
   // Live runtime updates fan out to every open STARK renderer. Only
   // trusted senders can invoke runtime IPC, and payloads are bounded
-  // renderer-safe summaries (no PID, env, or paths).
+  // renderer-safe summaries (no PID, env, or paths). Dropped once
+  // shutdown begins so late events never write after DB close.
   services.projectRuntimeService?.setUpdatedListener((event: ProjectRuntimeUpdatedEvent) => {
-    for (const window of BrowserWindow.getAllWindows()) {
-      try {
-        if (!window.isDestroyed()) {
-          window.webContents.send(IPC_CHANNELS.runtimeUpdated, event)
+    shutdownGuard.runIfActive(() => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        try {
+          if (!window.isDestroyed()) {
+            window.webContents.send(IPC_CHANNELS.runtimeUpdated, event)
+          }
+        } catch {
+          // Best effort streaming: a destroyed renderer stops receiving.
         }
-      } catch {
-        // Best effort streaming: a destroyed renderer stops receiving.
       }
-    }
+    })
   })
   terminalManager = new TerminalManager(createNodePtyFactory(), createTerminalEventSink())
   shutdownRuntimes = () => {
@@ -373,7 +442,8 @@ void app.whenReady().then(() => {
 
 // Single-instance lock: a second protocol launch forwards its exact
 // callback to the primary instance and exits — no duplicate windows,
-// no independent auth handling.
+// no independent auth handling. Release smoke mode uses isolated
+// userdata and must never quit over a held lock.
 const singleInstanceLock = (() => {
   try {
     return app.requestSingleInstanceLock()
@@ -381,7 +451,8 @@ const singleInstanceLock = (() => {
     return true
   }
 })()
-if (!singleInstanceLock) {
+const smokeBypassesLock = parseSmokeConfig() !== null
+if (!singleInstanceLock && !smokeBypassesLock) {
   app.quit()
 } else {
   app.on('second-instance', (_event, argv) => {
@@ -408,18 +479,72 @@ app.on('window-all-closed', () => {
   }
 })
 
-// Close the SQLite connection cleanly during shutdown. Idempotent.
-// Managed runtimes stop first with bounded cleanup (their final state
-// persists to SQLite), then terminals, then the database connection, so
-// quit never waits indefinitely on a child process.
+// Close the SQLite connection cleanly during shutdown. Ordered and
+// bounded (MAX_APP_SHUTDOWN_MS): Preview/inspection surfaces first,
+// then exact runtime trees with persisted final state, then human
+// terminals, then the database — so quit never waits indefinitely and
+// late child events never write after DB close. Idempotent.
 app.on('before-quit', () => {
-  try {
-    shutdownRuntimes?.()
-  } catch {
-    // Best effort during quit.
-  } finally {
-    shutdownRuntimes = null
+  const report = performOrderedShutdown([
+    {
+      id: 'stop-accepting-work',
+      run: () => {
+        shutdownGuard.beginShutdown()
+      }
+    },
+    {
+      id: 'close-preview-surfaces',
+      run: () => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          try {
+            if (window !== mainWindow && !window.isDestroyed()) {
+              window.destroy()
+            }
+          } catch {
+            // Best effort during quit.
+          }
+        }
+      }
+    },
+    {
+      id: 'stop-runtime-trees',
+      run: () => {
+        try {
+          shutdownRuntimes?.()
+        } catch {
+          // Best effort during quit.
+        } finally {
+          shutdownRuntimes = null
+        }
+      }
+    },
+    {
+      id: 'terminate-terminals',
+      run: () => {
+        shutdownTerminals()
+      }
+    },
+    {
+      id: 'flush-runtime-state',
+      run: () => {
+        // Runtime shutdown above already persists final session state
+        // to SQLite; this step records the flush point in order.
+      }
+    },
+    {
+      id: 'close-database',
+      run: () => {
+        starkDatabase.close()
+      }
+    },
+    {
+      id: 'exit',
+      run: () => {
+        // Exit proceeds via Electron after before-quit returns.
+      }
+    }
+  ])
+  if (!app.isPackaged && report.deadlineExceeded) {
+    console.warn('[STARK] shutdown exceeded the global deadline; finishing best-effort')
   }
-  shutdownTerminals()
-  starkDatabase.close()
 })

@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import { DatabaseError, MigrationError } from '../errors'
+import { DatabaseError, MigrationError, NewerSchemaError } from '../errors'
 import type { Migration } from '../types'
 import { migration001Initial } from './001-initial'
 import { migration002Workspaces } from './002-workspaces'
@@ -98,6 +98,10 @@ function setUserVersion(db: DatabaseSync, version: number): void {
 export function runMigrations(db: DatabaseSync, list: readonly Migration[]): number {
   validateMigrations(list)
   const current = getUserVersion(db)
+  const supported = list.length === 0 ? 0 : Math.max(...list.map((migration) => migration.version))
+  if (current > supported) {
+    throw new NewerSchemaError(current, supported)
+  }
   for (const migration of list) {
     if (migration.version <= current) {
       continue
