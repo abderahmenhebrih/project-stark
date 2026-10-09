@@ -140,6 +140,7 @@ describe('explorer content safety', () => {
     for (const forbidden of ['dangerouslySetInnerHTML', 'innerHTML', '__html']) {
       assert.ok(!source.includes(forbidden), `Search must not contain ${forbidden}`)
     }
-    assert.ok(source.includes('{match.preview}'), 'search must render preview as text')
+    assert.ok(source.includes('match.preview'), 'search must render preview as text')
+    assert.ok(source.includes('<mark'), 'literal query highlighting must use safe React segments')
   })
 })

@@ -51,6 +51,7 @@ export type SearchPanelAction =
     }
   | { readonly type: 'search-succeeded'; readonly workspaceId: number; readonly requestId: number; readonly result: WorkspaceSearchResult }
   | { readonly type: 'search-failed'; readonly workspaceId: number; readonly requestId: number; readonly message: string }
+  | { readonly type: 'search-cleared'; readonly workspaceId: number }
 
 function isCurrentRequest(state: WorkspaceSearchPanelState, workspaceId: number, requestId: number): boolean {
   return state.workspaceId === workspaceId && state.requestId === requestId
@@ -100,6 +101,23 @@ export function searchPanelReducer(
         return state
       }
       return { ...state, loading: false, error: action.message }
+    }
+    case 'search-cleared': {
+      if (state.workspaceId !== action.workspaceId) {
+        return state
+      }
+      return {
+        ...state,
+        query: '',
+        loading: false,
+        requestId: state.requestId + 1,
+        matches: [],
+        filesScanned: 0,
+        filesMatched: 0,
+        truncated: false,
+        error: null,
+        submitted: false
+      }
     }
   }
 }

@@ -146,6 +146,48 @@ export function gitDiffReducer(state: GitDiffState, action: GitDiffAction): GitD
   }
 }
 
+/** Compact single-letter Git status tone for polished file rows. */
+export type GitStatusTone = 'modified' | 'added' | 'deleted' | 'untracked' | 'conflict'
+
+/**
+ * Compact Git-style indicator derived from the existing parser output
+ * only (no parsing changes). `side` selects which porcelain code to
+ * render: staged rows show the index code, working rows the worktree
+ * code. Renames/copies/type-changes read as modifications.
+ */
+export function gitStatusLetter(input: {
+  readonly conflicted: boolean
+  readonly untracked: boolean
+  readonly indexStatus: string
+  readonly worktreeStatus: string
+  readonly side: 'staged' | 'working'
+}): { readonly letter: string; readonly tone: GitStatusTone } {
+  if (input.conflicted) {
+    return { letter: '!', tone: 'conflict' }
+  }
+  if (input.untracked || (input.side === 'working' && input.worktreeStatus === '?')) {
+    return { letter: '?', tone: 'untracked' }
+  }
+  const raw = (input.side === 'staged' ? input.indexStatus : input.worktreeStatus).trim()
+  switch (raw) {
+    case 'A':
+      return { letter: 'A', tone: 'added' }
+    case 'D':
+      return { letter: 'D', tone: 'deleted' }
+    case 'M':
+    case 'R':
+    case 'C':
+    case 'T':
+      return { letter: 'M', tone: 'modified' }
+    case 'U':
+      return { letter: '!', tone: 'conflict' }
+    case '?':
+      return { letter: '?', tone: 'untracked' }
+    default:
+      return { letter: 'M', tone: 'modified' }
+  }
+}
+
 /** Display label for a status row (concise, no raw XY dump). */
 export function gitStatusLabel(input: {
   readonly staged: boolean
