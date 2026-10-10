@@ -126,4 +126,28 @@ describe('explorer state', () => {
     assert.equal(loaded.preview?.content, hostile)
     assert.equal(typeof loaded.preview?.content, 'string')
   })
+
+  it('pane X clears the preview without touching tree or workspace', () => {
+    const start = { ...initialExplorerState(), workspaceId: 4 }
+    const loaded = explorerReducer(
+      explorerReducer(
+        explorerReducer(start, {
+          type: 'directory-loaded',
+          workspaceId: 4,
+          path: '',
+          entries: [dirEntry('src', '')]
+        }),
+        { type: 'file-selected', path: 'a.txt' }
+      ),
+      { type: 'file-loaded', workspaceId: 4, path: 'a.txt', content: 'hello', revision: 'd'.repeat(64) }
+    )
+    assert.notEqual(loaded.preview, null)
+    const cleared = explorerReducer(loaded, { type: 'preview-cleared' })
+    assert.equal(cleared.preview, null)
+    assert.equal(cleared.selectedPath, null)
+    // Tree, workspace identity, and history survive a presentation-only close.
+    assert.equal(cleared.workspaceId, 4)
+    assert.deepEqual(cleared.expanded, loaded.expanded)
+    assert.deepEqual(cleared.entries, loaded.entries)
+  })
 })

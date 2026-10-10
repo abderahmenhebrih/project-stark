@@ -6,6 +6,13 @@ import { STARK_EDITOR_THEME_NAME, registerStarkTheme } from './editor-theme'
 import { loadMonaco, type Monaco } from './editor-setup'
 import './editor.css'
 
+/** One right-click menu action contributed by the parent (Format / Attach). */
+export interface EditorMenuAction {
+  readonly id: string
+  readonly label: string
+  readonly run: () => void
+}
+
 export interface CodeEditorProps {
   /** Synthetic model URI (never a host path). Remount via key to swap documents. */
   readonly documentUri: string
@@ -23,6 +30,17 @@ export interface CodeEditorProps {
   readonly onContentChange?: (value: string) => void
   /** Fired with the cursor selection on change (Stage 15 excerpt attach). */
   readonly onSelectionChange?: (selection: EditorSelection | null) => void
+  /**
+   * Standard editor save gesture (Ctrl+S / Cmd+S): the parent runs
+   * its existing safe save flow (review proposal, never a direct
+   * write). Absent in read-only previews — no gesture is bound.
+   */
+  readonly onSaveRequest?: () => void
+  /**
+   * Right-click menu actions for the open file (Format / Attach).
+   * Registered through Monaco's native menu only; absent in previews.
+   */
+  readonly menuActions?: readonly EditorMenuAction[]
   readonly ariaLabel: string
   /** Extension diagnostics for this file (1-based Monaco ranges). */
   readonly extensionDiagnostics?: readonly ExtensionMarker[]
@@ -88,6 +106,8 @@ export function CodeEditor({
   focusRequest,
   onContentChange,
   onSelectionChange,
+  onSaveRequest,
+  menuActions,
   ariaLabel,
   extensionDiagnostics,
   extensionFilePath
@@ -96,6 +116,8 @@ export function CodeEditor({
   const instanceRef = useRef<EditorInstance | null>(null)
   const changeRef = useRef(onContentChange)
   const selectionRef = useRef(onSelectionChange)
+  const saveRef = useRef(onSaveRequest)
+  const actionsRef = useRef(menuActions)
   const focusRequestRef = useRef(focusRequest)
   const [failed, setFailed] = useState(false)
   // Mount-once document props: the parent remounts this component via
@@ -109,6 +131,8 @@ export function CodeEditor({
   useEffect(() => {
     changeRef.current = onContentChange
     selectionRef.current = onSelectionChange
+    saveRef.current = onSaveRequest
+    actionsRef.current = menuActions
     focusRequestRef.current = focusRequest
     diagnosticsRef.current = extensionDiagnostics ?? []
     extensionPathRef.current = extensionFilePath ?? null
@@ -194,6 +218,27 @@ export function CodeEditor({
           const ready: EditorInstance = { monaco, editor, model }
           instance = ready
           instanceRef.current = ready
+          // Parent-owned save gesture and right-click menu: registered
+          // once against the live editor; handlers always resolve
+          // through refs so the latest parent state applies. Monaco
+          // suppresses the browser save dialog for the bound chord.
+          if (saveRef.current !== undefined) {
+            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+              saveRef.current?.()
+            })
+          }
+          for (const action of actionsRef.current ?? []) {
+            const actionId = action.id
+            editor.addAction({
+              id: actionId,
+              label: action.label,
+              contextMenuGroupId: 'navigation',
+              contextMenuOrder: 1.5,
+              run: () => {
+                actionsRef.current?.find((entry) => entry.id === actionId)?.run()
+              }
+            })
+          }
           // Extension language features for this language: completion,
           // hover, definition, and signature help query the runtime
           // (bounded, single-flight). Snippet contributions register

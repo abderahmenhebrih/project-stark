@@ -8,8 +8,9 @@ import { describe, it } from 'node:test'
  * a bounded viewport of primary session pane + contextual secondary
  * pane (Review | Context | file) with the terminal stacked beneath the
  * secondary content. The tools drawer overlays on demand. Monaco
- * receives non-collapsing flex sizing, and the toolbar exposes Edit /
- * Review change without a direct Save.
+ * receives non-collapsing flex sizing. Files open directly editable
+ * with no file action toolbar; Ctrl+S opens Review change without a
+ * direct Save.
  * Runs against repository source (cwd is the repo root via npm).
  */
 function readSource(...parts: string[]): string {
@@ -62,22 +63,62 @@ describe('stage 31 workbench layout', () => {
     assert.ok(explorerCss.includes('flex: 1'), 'editor canvas must fill remaining height')
   })
 
-  it('Edit action is visible when a file is selected in read-only mode', () => {
+  it('files open directly editable with no Edit button or read-only step', () => {
     const source = readRenderer('features/explorer/Explorer.tsx')
     assert.ok(source.includes('<EditorToolbar'), 'file panes must render through the shared toolbar')
-    assert.ok(source.includes('Edit'), 'read-only toolbar must expose an Edit action')
-    assert.ok(source.includes('<button'), 'Edit action must be a visible button')
-    assert.ok(source.includes('handleEdit'), 'Edit action must enter edit mode')
+    assert.ok(!source.includes('handleEdit'), 'no Edit-mode entry point may remain')
+    assert.ok(!source.includes('>Edit<'), 'no Edit button may remain in the file toolbar')
+    assert.ok(source.includes('readOnly={false}'), 'the file editor must mount editable')
+    assert.ok(source.includes('createEditorState(preview.content, preview.revision)'), 'loaded files must enter edit state immediately')
   })
 
-  it('Review change is visible while editing dirty content, with no direct Save', () => {
+  it('session/secondary split is a free continuous drag with pixel minimums', () => {
     const source = readRenderer('features/explorer/Explorer.tsx')
-    assert.ok(source.includes('Review change'), 'editing toolbar must expose Review change')
-    assert.ok(source.includes('Cancel'), 'editing toolbar must expose Cancel')
+    assert.ok(source.includes('workspace__resize'), 'divider must exist')
+    assert.ok(source.includes('role="separator"'), 'divider must expose the separator role')
+    assert.ok(source.includes('col-resize') || source.includes('Resize session and workspace panes'), 'divider must be discoverable')
+    assert.ok(source.includes('onPointerDown'), 'drag must start on pointerdown')
+    assert.ok(source.includes('onPointerMove'), 'drag must track pointermove')
+    assert.ok(source.includes('onPointerUp'), 'drag must end on pointerup')
+    assert.ok(source.includes('onPointerCancel'), 'drag must end on pointercancel')
+    assert.ok(source.includes('setPointerCapture'), 'drag must capture the pointer')
+    assert.ok(source.includes('clampSplitPct'), 'drag must clamp through the shared bounds helper')
+    assert.ok(!source.includes('Math.min(68, Math.max(30'), 'no fixed preset clamp may remain')
+    // Both panes follow the dragged percentage (grow locked to zero).
+    assert.ok(source.includes('flexGrow: 0'), 'split must pin flex-grow so the ratio tracks the drag')
+    assert.ok(source.includes('100 - secondaryUi.splitPct'), 'secondary width must complement the session width')
+    const css = readRenderer('features/explorer/Explorer.css')
+    assert.ok(css.includes('min-width: 320px'), 'session keeps a usable minimum')
+    assert.ok(css.includes('min-width: 420px'), 'secondary keeps a usable minimum')
+    assert.ok(css.includes('.workspace__resize::after'), 'divider must offer an expanded invisible hit target')
+    assert.ok(css.includes('.workspace__resize:active'), 'dragging must show affordance without a permanent bright line')
+  })
+
+  it('splitter renders only with the secondary pane and cleans up listeners', () => {
+    const source = readRenderer('features/explorer/Explorer.tsx')
+    const resizeIndex = source.indexOf('workspace__resize')
+    assert.ok(resizeIndex >= 0, 'divider must exist')
+    const guardStart = source.lastIndexOf('{secondaryOpen && (', resizeIndex)
+    assert.ok(guardStart >= 0 && guardStart < resizeIndex, 'divider must render only when the secondary pane exists')
+    assert.ok(source.includes("window.addEventListener('resize'"), 'window resize must preserve the ratio')
+    assert.ok(source.includes("window.removeEventListener('resize'"), 'window listener must be removed on cleanup')
+    assert.ok(!source.includes('setInterval'), 'split must use no timers')
+  })
+
+  it('narrow single-pane behavior stays intact', () => {
+    const css = readRenderer('features/explorer/Explorer.css')
+    assert.ok(css.includes('@media (max-width: 1099px)'), 'narrow breakpoint must remain')
+    assert.ok(css.includes('.workspace[data-canvas-view="session"] .workspace__resize'), 'handle must hide in narrow session view')
+  })
+
+  it('Ctrl+S opens Review change while dirty, with no direct Save', () => {
+    const source = readRenderer('features/explorer/Explorer.tsx')
+    assert.ok(source.includes('handleSaveGesture'), 'Ctrl+S must invoke the existing Review change flow')
+    assert.ok(source.includes('handleReviewChange'), 'Review change handler must exist')
     assert.ok(source.includes('<CodeEditor'), 'editing must use Monaco, not a textarea')
     assert.ok(source.includes('<TerminalPanel'), 'terminal must stay stacked in the secondary region')
     assert.ok(!source.includes('<textarea'), 'editing must not use a separate textarea')
-    for (const forbidden of ['>Save<', '>Save file<', 'onSave', 'handleSave']) {
+    for (const forbidden of ['>Save<', '>Save file<', 'onSave={', 'handleSave(', 'writeWorkspaceTextFile']) {
       assert.ok(!source.includes(forbidden), `editing must not offer a direct Save (${forbidden})`)
     }
   })

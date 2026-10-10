@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState, type ReactElement } from 'react'
 import type { ExtensionEntry, InstalledExtensionEntry } from '../../../../shared/extension-registry/types'
 import type { ExtensionDetails, ExtensionEditProposal } from '../../../../shared/extension-management/types'
 import {
@@ -155,6 +155,8 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
   const [activeIds, setActiveIds] = useState<readonly string[]>([])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [selectedCatalogId, setSelectedCatalogId] = useState<string | null>(null)
+  /** Open per-row overflow menu (one at a time; secondary actions live here). */
+  const [menuOpenKey, setMenuOpenKey] = useState<string | null>(null)
   const [detailsCache, setDetailsCache] = useState<Readonly<Record<string, ExtensionDetails>>>({})
   const [detailsLoading, setDetailsLoading] = useState<readonly string[]>([])
   const [updateCache, setUpdateCache] = useState<Readonly<Record<string, { updateAvailable: boolean; latestVersion: string | null }>>>({})
@@ -369,31 +371,47 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
     }
   }, [view, installedByKey, autoUpdate])
 
-  function loadDetails(item: InstalledExtensionEntry): void {
-    const key = installedKeyOf(item.namespace, item.name, item.version)
-    if (detailsCache[key] !== undefined || detailsLoading.includes(key)) {
+  const loadDetails = useCallback(
+    (item: InstalledExtensionEntry): void => {
+      const key = installedKeyOf(item.namespace, item.name, item.version)
+      if (detailsCache[key] !== undefined || detailsLoading.includes(key)) {
+        return
+      }
+      setDetailsLoading((keys) => [...keys, key])
+      getExtensionDetails({ namespace: item.namespace, name: item.name, version: item.version }).then(
+        (details) => {
+          setDetailsLoading((keys) => keys.filter((other) => other !== key))
+          setDetailsCache((cache) => ({ ...cache, [key]: details }))
+          if (details.themes.length > 0) {
+            setThemeChoices((choices) => {
+              const next = choices.filter((choice) => choice.extensionId !== key)
+              for (const theme of details.themes) {
+                next.push({ extensionId: key, themeId: theme.id, label: theme.label, displayName: details.displayName })
+              }
+              return next
+            })
+          }
+        },
+        () => {
+          setDetailsLoading((keys) => keys.filter((other) => other !== key))
+        }
+      )
+    },
+    [detailsCache, detailsLoading]
+  )
+
+  // Installed rows show their real compatibility badge: resolve
+  // details for every installed version while the Installed view is
+  // open. loadDetails dedupes cached and in-flight rows, so each
+  // version resolves once and the effect settles.
+  useEffect(() => {
+    if (view !== 'installed') {
       return
     }
-    setDetailsLoading((keys) => [...keys, key])
-    getExtensionDetails({ namespace: item.namespace, name: item.name, version: item.version }).then(
-      (details) => {
-        setDetailsLoading((keys) => keys.filter((other) => other !== key))
-        setDetailsCache((cache) => ({ ...cache, [key]: details }))
-        if (details.themes.length > 0) {
-          setThemeChoices((choices) => {
-            const next = choices.filter((choice) => choice.extensionId !== key)
-            for (const theme of details.themes) {
-              next.push({ extensionId: key, themeId: theme.id, label: theme.label, displayName: details.displayName })
-            }
-            return next
-          })
-        }
-      },
-      () => {
-        setDetailsLoading((keys) => keys.filter((other) => other !== key))
-      }
-    )
-  }
+    for (const item of Object.values(installedByKey)) {
+      loadDetails(item)
+    }
+  }, [view, installedByKey, loadDetails])
 
   function handleInstall(entry: ExtensionEntry): void {
     if (installingIds.includes(entry.id)) {
@@ -784,9 +802,12 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
     )
   }
 
-  function renderCompatibility(details: ExtensionDetails | undefined, key: string): ReactElement {
+  function renderCompatibility(details: ExtensionDetails | undefined, installed: boolean): ReactElement {
     if (details === undefined) {
-      if (detailsLoading.includes(key)) {
+      // Installed rows resolve their real badge through the
+      // auto-loaded details above: the pre-install "unknown" copy
+      // must never appear on an installed item.
+      if (installed) {
         return <span className="extensions__state-label">Checking compatibility…</span>
       }
       return <CompatBadge level="unknown" />
@@ -810,28 +831,32 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
     const loaded = activeIds.includes(key)
     const details = detailsCache[key]
     const update = updateCache[key]
+    const failed = details?.failure !== undefined && details?.failure !== null
     return (
       <li key={key} className="extensions__installed-row">
-        <ExtensionIcon iconUrl={item.iconUrl} />
-        <span className="extensions__installed-details">
-          <span className="extensions__installed-name">{item.displayName}</span>
-          <span className="extensions__installed-meta">
-            {item.namespace} · {item.version}
+        <div className="extensions__installed-top">
+          <ExtensionIcon iconUrl={item.iconUrl} />
+          <span className="extensions__installed-details">
+            <span className="extensions__installed-name" title={item.displayName}>{item.displayName}</span>
+            <span className="extensions__installed-meta">
+              {item.namespace} · {item.version}
+            </span>
+            <span className="extensions__state-label">
+              {failed
+                ? 'Failed'
+                : item.enabled
+                  ? loaded
+                    ? 'Enabled · Loaded'
+                    : 'Enabled · Not loaded'
+                  : 'Disabled'}
+            </span>
+            {renderCompatibility(details, true)}
+            {update?.updateAvailable === true && update.latestVersion !== null && (
+              <span className="extensions__state-label">Update available: {update.latestVersion}</span>
+            )}
           </span>
-          <span className="extensions__state-label">
-            {details?.failure !== undefined && details?.failure !== null
-              ? 'Failed'
-              : item.enabled
-                ? loaded
-                  ? 'Enabled · Loaded'
-                  : 'Enabled · Not loaded'
-                : 'Disabled'}
-          </span>
-          {renderCompatibility(details, key)}
-          {update?.updateAvailable === true && update.latestVersion !== null && (
-            <span className="extensions__state-label">Update available: {update.latestVersion}</span>
-          )}
-        </span>
+        </div>
+        <div className="extensions__installed-actions">
         {uninstallingKeys.includes(key) ? (
           <button className="extensions__uninstall" type="button" disabled aria-label={`Uninstalling ${item.displayName}`}>
             Uninstalling…
@@ -864,52 +889,8 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
             </button>
           </span>
         ) : (
-          <span className="extensions__row-actions">
-            <button
-              className="extensions__secondary"
-              type="button"
-              onClick={() => {
-                setSelectedKey(selectedKey === key ? null : key)
-                setSelectedCatalogId(null)
-                loadDetails(item)
-              }}
-              aria-label={`Details for ${item.displayName}`}
-            >
-              {selectedKey === key ? 'Hide details' : 'Details'}
-            </button>
-            {details?.failure !== undefined && details?.failure !== null ? (
-              <button
-                className="extensions__secondary"
-                type="button"
-                disabled={runBusyKeys.includes(key)}
-                onClick={() => handleRetryFailed(item)}
-                aria-label={`Retry activation of ${item.displayName}`}
-              >
-                {runBusyKeys.includes(key) ? 'Retrying…' : 'Retry activation'}
-              </button>
-            ) : (
-              <button
-                className="extensions__secondary"
-                type="button"
-                disabled={runBusyKeys.includes(key)}
-                onClick={() => handleRun(item)}
-                aria-label={`Run ${item.displayName}`}
-              >
-                {runBusyKeys.includes(key) ? 'Running…' : 'Run'}
-              </button>
-            )}
+          <>
             {renderStateAction(item)}
-            {update?.updateAvailable === true && update.latestVersion !== null && (
-              <button
-                className="extensions__secondary"
-                type="button"
-                disabled={updatingKeys.includes(key)}
-                onClick={() => handleUpdate(item)}
-                aria-label={`Update ${item.displayName} to ${update.latestVersion}`}
-              >
-                {updatingKeys.includes(key) ? 'Updating…' : `Update to ${update.latestVersion}`}
-              </button>
-            )}
             <button
               className="extensions__uninstall"
               type="button"
@@ -918,8 +899,92 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
             >
               Uninstall
             </button>
-          </span>
+            <div className="extensions__menu">
+              <button
+                className="extensions__menu-toggle"
+                type="button"
+                onClick={() => setMenuOpenKey(menuOpenKey === key ? null : key)}
+                aria-expanded={menuOpenKey === key}
+                aria-label={`More actions for ${item.displayName}`}
+                title="More actions"
+              >
+                <StarkIcon name="more" size={16} />
+              </button>
+              {menuOpenKey === key && (
+                <div
+                  className="extensions__menu-list"
+                  role="menu"
+                  aria-label={`${item.displayName} actions`}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                      event.stopPropagation()
+                      setMenuOpenKey(null)
+                    }
+                  }}
+                >
+                  <button
+                    className="extensions__menu-item"
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpenKey(null)
+                      setSelectedKey(selectedKey === key ? null : key)
+                      setSelectedCatalogId(null)
+                      loadDetails(item)
+                    }}
+                  >
+                    {selectedKey === key ? 'Hide details' : 'Details'}
+                  </button>
+                  {failed ? (
+                    <button
+                      className="extensions__menu-item"
+                      type="button"
+                      role="menuitem"
+                      disabled={runBusyKeys.includes(key)}
+                      onClick={() => {
+                        setMenuOpenKey(null)
+                        handleRetryFailed(item)
+                      }}
+                      aria-label={`Retry activation of ${item.displayName}`}
+                    >
+                      {runBusyKeys.includes(key) ? 'Retrying…' : 'Retry activation'}
+                    </button>
+                  ) : (
+                    <button
+                      className="extensions__menu-item"
+                      type="button"
+                      role="menuitem"
+                      disabled={runBusyKeys.includes(key)}
+                      onClick={() => {
+                        setMenuOpenKey(null)
+                        handleRun(item)
+                      }}
+                      aria-label={`Run ${item.displayName}`}
+                    >
+                      {runBusyKeys.includes(key) ? 'Running…' : 'Run'}
+                    </button>
+                  )}
+                  {update?.updateAvailable === true && update.latestVersion !== null && (
+                    <button
+                      className="extensions__menu-item"
+                      type="button"
+                      role="menuitem"
+                      disabled={updatingKeys.includes(key)}
+                      onClick={() => {
+                        setMenuOpenKey(null)
+                        handleUpdate(item)
+                      }}
+                      aria-label={`Update ${item.displayName} to ${update.latestVersion}`}
+                    >
+                      {updatingKeys.includes(key) ? 'Updating…' : `Update to ${update.latestVersion}`}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </>
         )}
+        </div>
         {selectedKey === key && (
           <div className="extensions__detail">
             {details === undefined ? (
@@ -1238,6 +1303,15 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
               </span>
             </p>
           )}
+          {installedItems.length === 0 ? (
+            <p className="extensions__status" role="status">
+              No extensions installed yet. Find them in the Marketplace view.
+            </p>
+          ) : (
+            <ul className="extensions__list" aria-label="Installed extensions">
+              {installedItems.map((item) => renderInstalledRow(item))}
+            </ul>
+          )}
           {themeChoices.length > 0 && (
             <>
               <p className="extensions__group-name">Editor theme</p>
@@ -1341,15 +1415,6 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
                 <pre className="extensions__detail-meta">{outputCache[selectedChannel].join('').slice(-4000)}</pre>
               )}
             </>
-          )}
-          {installedItems.length === 0 ? (
-            <p className="extensions__status" role="status">
-              No extensions installed yet. Find them in the Marketplace view.
-            </p>
-          ) : (
-            <ul className="extensions__list" aria-label="Installed extensions">
-              {installedItems.map((item) => renderInstalledRow(item))}
-            </ul>
           )}
         </>
       )}

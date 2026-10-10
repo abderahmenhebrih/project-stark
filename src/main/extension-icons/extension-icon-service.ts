@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { EXTENSION_ICON_PROTOCOL, type ExtensionIconContent } from './protocol'
+import { sniffImageMime } from '../chat-attachments/mime'
 
 /**
  * Main-owned extension-icon delivery (icons only, never a generic
@@ -18,7 +19,12 @@ import { EXTENSION_ICON_PROTOCOL, type ExtensionIconContent } from './protocol'
  * Bounds per icon: single attempt (zero retries), 10s timeout, at
  * most 2 MiB, at most 3 validated redirect hops, accepted response
  * types image/png, image/jpeg, image/webp, image/gif only (SVG is
- * rejected — no reviewed safe SVG policy exists). Every redirect hop
+ * rejected — no reviewed safe SVG policy exists). The Eclipse content
+ * host serves some valid raster icons as `application/octet-stream`
+ * (observed live: real PNG bytes, generic type); those responses are
+ * accepted ONLY when the downloaded bytes sniff as a supported raster
+ * signature, and are then served under the sniffed type — the declared
+ * type is never trusted on its own. Every redirect hop
  * is re-validated against the two explicitly confirmed official
  * origins below; anything else resolves to null and the renderer
  * falls back once for that entry. One failure means one fallback —
@@ -198,6 +204,31 @@ function parseContentType(value: string | null): string | null {
   return (EXTENSION_ICON_ALLOWED_TYPES as readonly string[]).includes(type) ? type : null
 }
 
+/**
+ * Resolves the served icon type from the declared Content-Type plus
+ * magic-byte sniffing of the downloaded body. Magic wins when it
+ * identifies a supported raster format — this accepts valid icons
+ * the asset host labels `application/octet-stream` and corrects
+ * mismatched declarations. Anything else (including SVG text, which
+ * never matches a raster signature) falls back to the declared
+ * allowlisted type, or rejects when undeclared. The declared type is
+ * never trusted on its own.
+ */
+function resolveIconContentType(
+  rawContentType: string | null,
+  declared: string | null,
+  bytes: Buffer
+): string | null {
+  const sniffed = sniffImageMime(bytes.subarray(0, Math.min(bytes.length, 16)))
+  if (sniffed !== null) {
+    return sniffed
+  }
+  if (rawContentType !== null && rawContentType.split(';')[0]?.trim().toLowerCase() === 'application/octet-stream') {
+    return null
+  }
+  return declared
+}
+
 export class ExtensionIconService {
   private readonly fetchImpl: IconFetch
   private readonly cache = new Map<string, { readonly id: string; readonly stored: StoredExtensionIcon } | null>()
@@ -308,15 +339,16 @@ export class ExtensionIconService {
       if (!response.ok) {
         throw new Error('Icon request failed.')
       }
-      const contentType = parseContentType(response.headers.get('content-type'))
-      if (contentType === null) {
-        throw new Error('Icon response is not a supported image.')
-      }
-      const declared = parseByteLength(response.headers.get('content-length'))
-      if (declared !== null && declared > EXTENSION_ICON_MAX_BYTES) {
+      const declared = parseContentType(response.headers.get('content-type'))
+      const length = parseByteLength(response.headers.get('content-length'))
+      if (length !== null && length > EXTENSION_ICON_MAX_BYTES) {
         throw new Error('Icon exceeds the size limit.')
       }
       const bytes = await readBoundedBytes(response.body)
+      const contentType = resolveIconContentType(response.headers.get('content-type'), declared, bytes)
+      if (contentType === null) {
+        throw new Error('Icon response is not a supported image.')
+      }
       return {
         id: randomBytes(16).toString('hex'),
         stored: { bytes, contentType }

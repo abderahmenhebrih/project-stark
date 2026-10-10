@@ -11,9 +11,9 @@ interface EditorToolbarProps {
 
 /**
  * Single editor toolbar for the workbench main pane. Every editor
- * state (read-only, editing, transaction review) renders through
- * this component so the file path is always visible and the primary
- * action (Edit / Review change / Accept) is never below the fold.
+ * state (editing, read-only snapshot, transaction review) renders
+ * through this component so the file path is always visible and the
+ * primary action (Review change / Accept) is never below the fold.
  */
 export function EditorToolbar({ path, status, actions, statusLabel = 'Editor status' }: EditorToolbarProps): ReactElement {
   return (

@@ -33,7 +33,7 @@
 
 .session-frame {
   flex: 45 1 0;
-  min-width: 420px;
+  min-width: 320px;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -49,6 +49,7 @@
 }
 
 .workspace__resize {
+  position: relative;
   flex: 0 0 6px;
   align-self: stretch;
   border-radius: 3px;
@@ -56,7 +57,19 @@
   touch-action: none;
 }
 
+/* Invisible wider grab area over the 6px visual divider. */
+.workspace__resize::after {
+  content: '';
+  position: absolute;
+  inset: 0 -5px;
+  cursor: col-resize;
+}
+
 .workspace__resize:hover {
+  background: var(--stark-lime-dim);
+}
+
+.workspace__resize:active {
   background: var(--stark-lime-dim);
 }
 
@@ -68,7 +81,7 @@
 /* Contextual secondary pane: Review | Context | file + stacked terminal. */
 .workspace__secondary {
   flex: 55 1 0;
-  min-width: 480px;
+  min-width: 420px;
   min-height: 0;
   display: flex;
   flex-direction: column;

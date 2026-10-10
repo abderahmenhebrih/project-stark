@@ -124,7 +124,7 @@ describe('stage 31 D05 shell proof', () => {
 
   it('15. existing feature inventory remains reachable', () => {
     const explorer = readRenderer('features/explorer/Explorer.tsx')
-    for (const feature of ['handleEdit', 'Attach selection', 'Attach file', 'handleAccept', 'handleReject', 'handleRollback', 'onSelectDiff', 'onOpenFile']) {
+    for (const feature of ['handleReviewChange', 'Attach selection', 'Attach file', 'handleAccept', 'handleReject', 'handleRollback', 'onSelectDiff', 'onOpenFile']) {
       assert.ok(explorer.includes(feature), `explorer must keep ${feature}`)
     }
     const panel = readRenderer('features/sessions/SessionPanel.tsx')

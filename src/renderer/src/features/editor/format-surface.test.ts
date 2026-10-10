@@ -19,7 +19,7 @@ function readRenderer(relative: string): string {
 }
 
 describe('format document surface', () => {
-  it('editor exposes Format Document on the read-only preview toolbar', () => {
+  it('editor exposes Format Document on the file toolbar', () => {
     const explorer = readRenderer('features/explorer/Explorer.tsx')
     assert.ok(explorer.includes('Format Document'), 'Format Document action must exist')
     assert.ok(explorer.includes('handleFormatRequest'), 'format must run through the explicit handler')

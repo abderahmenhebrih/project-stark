@@ -58,6 +58,8 @@ export type ExplorerAction =
       readonly revision: string
     }
   | { readonly type: 'file-failed'; readonly path: string; readonly message: string }
+  /** Clears the active file preview (pane X): tree and workspace stay intact. */
+  | { readonly type: 'preview-cleared' }
 
 function without<T>(values: readonly T[], value: T): T[] {
   return values.filter((entry) => entry !== value)
@@ -141,6 +143,9 @@ export function explorerReducer(state: ExplorerState, action: ExplorerAction): E
         ...state,
         preview: { path: action.path, content: null, loading: false, error: action.message, revision: null }
       }
+    }
+    case 'preview-cleared': {
+      return { ...state, selectedPath: null, preview: null }
     }
   }
 }

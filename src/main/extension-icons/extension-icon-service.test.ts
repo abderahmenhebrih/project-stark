@@ -30,6 +30,16 @@ function bodyOf(text: string): unknown {
   return chunks()
 }
 
+function bodyOfBytes(bytes: Buffer): unknown {
+  async function* chunks(): AsyncGenerator<Buffer> {
+    yield bytes
+  }
+  return chunks()
+}
+
+const PNG_BYTES = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('icon-bytes')])
+const GIF_BYTES = Buffer.concat([Buffer.from('GIF89a', 'ascii'), Buffer.from('icon-bytes')])
+
 interface FakeResponse {
   readonly ok: boolean
   readonly status: number
@@ -202,6 +212,54 @@ describe('icon resolution (bounded, single attempt)', () => {
       )
       assert.ok(opaque !== null, contentType)
     }
+  })
+
+  it('renders the observed meta-namespace icon form end to end (Pyrefly case)', async () => {
+    // Live Open VSX serves this entry as /api/meta/<ns>/<platform>/
+    // <version>/file/<file> and 302-redirects to the matching /meta/
+    // CDN path with Content-Type application/octet-stream over real
+    // PNG bytes. All three legs must resolve to one opaque icon.
+    const identity = { namespace: 'meta', name: 'pyrefly', version: '1.3.9003' }
+    const source = 'https://open-vsx.org/api/meta/pyrefly/alpine-arm64/1.3.9003/file/pyrefly-symbol.png'
+    const cdn = 'https://openvsx.eclipsecontent.org/meta/pyrefly/alpine-arm64/1.3.9003/pyrefly-symbol.png'
+    const fetch = fakeFetch((url) => {
+      if (url === source) {
+        return { ok: false, status: 302, headers: headers({ location: cdn }), body: bodyOf('') }
+      }
+      assert.equal(url, cdn)
+      return { ok: true, status: 200, headers: headers({ 'content-type': 'application/octet-stream' }), body: bodyOfBytes(PNG_BYTES) }
+    })
+    const service = new ExtensionIconService(fetch)
+    const opaque = await service.resolveIcon(source, identity)
+    assert.ok(opaque?.startsWith(`${EXTENSION_ICON_PROTOCOL}://`), 'renderer must receive only an opaque URL')
+    assert.ok(!String(opaque).includes('open-vsx.org'), 'no remote URL may leak to the renderer')
+    assert.equal(fetch.calls.length, 2)
+    const id = String(opaque).slice(`${EXTENSION_ICON_PROTOCOL}://`.length)
+    const stored = service.readIconContent(id)
+    assert.equal(stored.contentType, 'image/png')
+    assert.ok(Buffer.from(stored.bytes).equals(PNG_BYTES), 'exact validated bytes must be served')
+  })
+
+  it('sniffs octet-stream bodies: raster accepted, junk and SVG rejected', async () => {
+    const source = 'https://open-vsx.org/api/esbenp/prettier-vscode/12.4.0/file/icon.png'
+    async function resolvesOctetStream(body: unknown): Promise<string | null> {
+      const fetch = fakeFetch(() => ({ ok: true, status: 200, headers: headers({ 'content-type': 'application/octet-stream' }), body }))
+      return new ExtensionIconService(fetch).resolveIcon(source, IDENTITY)
+    }
+    const png = await resolvesOctetStream(bodyOfBytes(PNG_BYTES))
+    assert.ok(png !== null, 'octet-stream over real PNG bytes must render')
+    assert.equal(await resolvesOctetStream(bodyOf('not-an-image')), null)
+    assert.equal(await resolvesOctetStream(bodyOf('<svg xmlns="http://www.w3.org/2000/svg"></svg>')), null)
+  })
+
+  it('prefers sniffed magic over a mismatched declaration', async () => {
+    const source = 'https://open-vsx.org/api/esbenp/prettier-vscode/12.4.0/file/icon.png'
+    const fetch = fakeFetch(() => ({ ok: true, status: 200, headers: headers({ 'content-type': 'image/png' }), body: bodyOfBytes(GIF_BYTES) }))
+    const service = new ExtensionIconService(fetch)
+    const opaque = await service.resolveIcon(source, IDENTITY)
+    assert.ok(opaque !== null)
+    const id = String(opaque).slice(`${EXTENSION_ICON_PROTOCOL}://`.length)
+    assert.equal(service.readIconContent(id).contentType, 'image/gif')
   })
 })
 

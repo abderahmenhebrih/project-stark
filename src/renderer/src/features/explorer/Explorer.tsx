@@ -59,6 +59,8 @@ import { ExtensionsPanel } from '../extensions/ExtensionsPanel'
 import type { SessionContextDraftAction } from '../sessions/session-context-state'
 import { TerminalPanel } from '../terminal/TerminalPanel'
 import { confirmDiscardUnsavedDraft, setUnsavedDraft } from './editor-guard'
+import { clampSplitPct, splitBounds } from './split-bounds'
+import { subscribeFormatRequests } from '../extensions/format-request-bus'
 import {
   applyDraftChange,
   createEditorState,
@@ -262,19 +264,20 @@ interface ExplorerProps {
 /**
  * Lazy workspace explorer with bounded project search and
  * transaction-gated single-file editing: root loads on mount,
- * directories load only when expanded, files preview on selection.
- * Files render in a local Monaco editor (read-only preview, editable
- * on Edit); editing is explicit only (Edit → modify → Review change
- * → Accept/Reject): no autosave, no formatting, no direct disk
- * writes. Reviewing a draft persists a pending change transaction
- * (disk untouched); only Accept flows through the Stage 8 writer, and
- * only Rollback restores the checkpoint. Uniform LF/CRLF endings are
- * preserved; mixed-ending files open read-only. The Git tab is
+ * directories load only when expanded, files open directly editable
+ * in a local Monaco editor (VS Code-style: place the cursor and
+ * type — no Edit button, no read-only step). Typing edits a volatile
+ * draft only (Review change → Accept/Reject): no autosave, no
+ * formatting, no direct disk writes. Reviewing a draft persists a
+ * pending change transaction (disk untouched); only Accept flows
+ * through the Stage 8 writer, and only Rollback restores the
+ * checkpoint. Uniform LF/CRLF endings are preserved; mixed-ending
+ * files stay read-only. The Git tab is
  * read-only awareness (branch/status/diff, explicit Refresh only, no
  * polling); selecting a staged/working row opens its patch in the
  * secondary pane via a read-only Monaco viewer, and Open file reuses
  * the existing file read path. Explicit chat context attaches only on
- * visible actions (preview Attach selection/file, tree Attach, search
+ * visible actions (editor right-click menu, tree Attach, search
  * Attach) through the validated prepare bridges — never on open,
  * edit, or save. All filesystem access
  * goes through workspace bridges; stale responses from a previous
@@ -312,12 +315,12 @@ export function Explorer({
     ...initialExplorerState(),
     workspaceId: id
   }))
-  const [previewLine, setPreviewLine] = useState<number | null>(null)
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [focusRequest, setFocusRequest] = useState<EditorFocus | null>(null)
-  // Latest Monaco cursor selection for the read-only preview. Cleared
-  // on every file change; edit-mode buffers are excluded because line
-  // numbers may no longer match disk (main re-reads at send time).
+  // Latest Monaco cursor selection for context attach. Cleared on
+  // every file change; dirty-draft selections are excluded from
+  // excerpt attach because line numbers may no longer match disk
+  // (main re-reads at send time).
   const [editorSelection, setEditorSelection] = useState<EditorSelection | null>(null)
   // VS Code-style root row: collapsing hides the whole tree below it.
   // Workspace switching stays on the AppChrome project button.
@@ -370,8 +373,15 @@ export function Explorer({
   const [extDiagnostics, setExtDiagnostics] = useState<{ uri: string | null; markers: readonly ExtensionMarker[] }>({ uri: null, markers: [] })
   const openDocUriRef = useRef<string | null>(null)
   const openDocVersionRef = useRef(1)
+  // Latest requested preview path: late file-read arrivals for a
+  // deselected file (superseded selection, or pane X during load)
+  // must not resurrect an editor for it.
+  const previewPathRef = useRef<string | null>(null)
   const docSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const workspaceTriggeredRef = useRef(false)
+  // Latest format handler for Command Palette requests (the palette
+  // lives at the app root; the open file lives here).
+  const formatRequestRef = useRef<() => void>(() => {})
 
   const refreshFileDiagnostics = useCallback((uri: string): void => {
     getExtensionDiagnostics(uri).then(
@@ -403,6 +413,45 @@ export function Explorer({
       setUnsavedDraft(false)
     }
   }, [editor])
+
+  // Command Palette "Format Document" reaches the open file here:
+  // the ref always points at the latest handler (current preview,
+  // draft, and trust state); delivery itself is a no-op when nothing
+  // is open. Subscribed once, unsubscribed on unmount.
+  useEffect(() => {
+    formatRequestRef.current = () => {
+      handleFormatRequest()
+    }
+  })
+  useEffect(() => subscribeFormatRequests(() => formatRequestRef.current()), [])
+
+  // Window resize keeps the percentage split (ratio preserved by the
+  // flex-basis itself) and re-clamps it when the row becomes too
+  // narrow, so the row can never overflow horizontally. Listener is
+  // added only while a split exists and always removed on cleanup.
+  useEffect(() => {
+    if (secondaryUi.splitPct === null) {
+      return
+    }
+    const onWindowResize = (): void => {
+      const root = workareaRef.current
+      if (root === null) {
+        return
+      }
+      const row = root.querySelector('.workspace__session')
+      if (!(row instanceof HTMLElement) || row.clientWidth <= 0) {
+        return
+      }
+      const clamped = clampSplitPct(secondaryUi.splitPct ?? 45, row.clientWidth)
+      if (clamped !== secondaryUi.splitPct) {
+        secondaryUiDispatch({ type: 'set-split', pct: clamped })
+      }
+    }
+    window.addEventListener('resize', onWindowResize)
+    return () => {
+      window.removeEventListener('resize', onWindowResize)
+    }
+  }, [secondaryUi.splitPct])
 
   const loadDirectory = useCallback(
     async (targetWorkspaceId: number, path: string): Promise<void> => {
@@ -682,6 +731,7 @@ export function Explorer({
 
   function loadPreviewFile(path: string): void {
     dispatch({ type: 'file-selected', path })
+    previewPathRef.current = path
     setEditor(null)
     setFocusRequest(null)
     setEditorSelection(null)
@@ -693,14 +743,23 @@ export function Explorer({
       return
     }
     api.readTextFile(workspaceId, path).then(
-      (file) =>
+      (file) => {
         dispatch({
           type: 'file-loaded',
           workspaceId: file.workspaceId,
           path: file.relativePath,
           content: file.content,
           revision: file.revision
-        }),
+        })
+        // Files open directly editable: enter edit state immediately
+        // for uniform line endings (same state the Edit button used to
+        // create). Mixed-ending files keep the read-only viewer. Late
+        // arrivals for a deselected file are ignored, matching the
+        // reducer's stale guard.
+        if (file.relativePath === previewPathRef.current && isEditableEol(classifyEol(file.content))) {
+          setEditor(createEditorState(file.content, file.revision))
+        }
+      },
       (error: unknown) =>
         dispatch({
           type: 'file-failed',
@@ -714,7 +773,6 @@ export function Explorer({
     if (!confirmDiscardUnsavedDraft()) {
       return
     }
-    setPreviewLine(null)
     loadPreviewFile(path)
     secondaryUiDispatch({ type: 'open-tab', tab: 'file' })
     onCanvasViewChange('editor')
@@ -759,7 +817,6 @@ export function Explorer({
     if (!confirmDiscardUnsavedDraft()) {
       return
     }
-    setPreviewLine(null)
     onActivityChange('explorer')
     secondaryUiDispatch({ type: 'open-tab', tab: 'file' })
     onCanvasViewChange('editor')
@@ -770,7 +827,6 @@ export function Explorer({
     if (!confirmDiscardUnsavedDraft()) {
       return
     }
-    setPreviewLine(line)
     loadPreviewFile(path)
     secondaryUiDispatch({ type: 'open-tab', tab: 'file' })
     onCanvasViewChange('editor')
@@ -797,7 +853,9 @@ export function Explorer({
 
   function handleAttachPreviewSelection(): void {
     const preview = state.preview
-    if (preview === null || editorSelection === null || editor !== null) {
+    // Excerpt attach tracks the visible selection, which matches disk
+    // only while the draft is clean — dirty selections stay disabled.
+    if (preview === null || editorSelection === null || (editor !== null && isEditorDirty(editor))) {
       return
     }
     const lineStart = Math.min(editorSelection.startLineNumber, editorSelection.endLineNumber)
@@ -807,7 +865,7 @@ export function Explorer({
 
   function handleAttachPreviewFile(): void {
     const preview = state.preview
-    if (preview === null || editor !== null) {
+    if (preview === null) {
       return
     }
     handleAttachDraft(prepareContextFile({ workspaceId, relativePath: preview.path }))
@@ -821,20 +879,6 @@ export function Explorer({
     handleAttachDraft(
       prepareContextSearchMatch({ workspaceId, relativePath: match.relativePath, line: match.line })
     )
-  }
-
-  function handleEdit(): void {
-    const preview = state.preview
-    if (
-      preview === null ||
-      preview.content === null ||
-      preview.revision === null ||
-      editor !== null ||
-      !isEditableEol(classifyEol(preview.content))
-    ) {
-      return
-    }
-    setEditor(createEditorState(preview.content, preview.revision))
   }
 
   function handleMonacoChange(value: string): void {
@@ -857,19 +901,6 @@ export function Explorer({
     }, EXTENSION_DOC_SYNC_DEBOUNCE_MS)
   }
 
-  function handleCancel(): void {
-    const preview = state.preview
-    if (editor === null || preview === null) {
-      return
-    }
-    if (isEditorDirty(editor) && !confirmDiscardUnsavedDraft()) {
-      return
-    }
-    // Discard the draft and reload the actual disk version so the UI
-    // never pretends drafted text was kept.
-    loadPreviewFile(preview.path)
-  }
-
   async function handleReviewChange(): Promise<void> {
     const preview = state.preview
     if (editor === null || preview === null || editor.saving || !isEditorDirty(editor)) {
@@ -888,7 +919,13 @@ export function Explorer({
         expectedRevision: saving.revision,
         proposedContent: saving.draftContent
       })
-      setEditor(null)
+      // Disk is untouched by the proposal, so the file tab keeps a
+      // clean editable draft of the same content when the user returns.
+      if (preview.content !== null && preview.revision !== null && isEditableEol(classifyEol(preview.content))) {
+        setEditor(createEditorState(preview.content, preview.revision))
+      } else {
+        setEditor(null)
+      }
       changesDispatch({ type: 'review-opened', transaction })
       secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
       void refreshHistory()
@@ -902,8 +939,20 @@ export function Explorer({
   }
 
   /**
+   * Standard editor save gesture (Ctrl+S in the open file): opens the
+   * EXISTING Review change flow for dirty files — never a direct disk
+   * write. Clean files safely no-op without creating a transaction.
+   */
+  function handleSaveGesture(): void {
+    if (editor === null || !isEditorDirty(editor) || editor.saving) {
+      return
+    }
+    void handleReviewChange()
+  }
+
+  /**
    * Format Document (generic activation): explicit user action on the
-   * read-only preview. First execution per extension per mount asks
+   * open file. First execution per extension per mount asks
    * the generic trust question ("STARK is about to run <Extension
    * Name>."); the file is never written here. Main returns the
    * snapshot revision it formatted plus formatted text; a mismatch
@@ -913,7 +962,19 @@ export function Explorer({
    */
   function handleFormatRequest(): void {
     const preview = state.preview
-    if (preview === null || preview.content === null || preview.revision === null || editor !== null || formatBusy) {
+    // Format runs against disk state, so it is available only while
+    // the draft is clean — unsaved edits must be reviewed or
+    // discarded first.
+    if (
+      preview === null ||
+      preview.content === null ||
+      preview.revision === null ||
+      formatBusy
+    ) {
+      return
+    }
+    if (editor !== null && isEditorDirty(editor)) {
+      setFormatNotice('Review or discard your unsaved changes before formatting.')
       return
     }
     setFormatNotice(null)
@@ -934,8 +995,18 @@ export function Explorer({
 
   function handleFormatTrustConfirm(): void {
     const preview = state.preview
-    if (preview === null || preview.content === null || preview.revision === null || editor !== null || formatBusy) {
+    if (
+      preview === null ||
+      preview.content === null ||
+      preview.revision === null ||
+      formatBusy
+    ) {
       setFormatTrustOpen(false)
+      return
+    }
+    if (editor !== null && isEditorDirty(editor)) {
+      setFormatTrustOpen(false)
+      setFormatNotice('Review or discard your unsaved changes before formatting.')
       return
     }
     const trustKey = 'esbenp.prettier-vscode'
@@ -946,6 +1017,9 @@ export function Explorer({
   async function runFormatDocument(relativePath: string, startedRevision: string, startedContent: string): Promise<void> {
     setFormatTrustOpen(false)
     setFormatBusy(true)
+    // Transient busy copy in the notice line (cleared below unless an
+    // outcome overwrote it).
+    setFormatNotice('Formatting…')
     try {
       let result: { revision: string; afterText: string }
       try {
@@ -980,6 +1054,7 @@ export function Explorer({
       }
     } finally {
       setFormatBusy(false)
+      setFormatNotice((current) => (current === 'Formatting…' ? null : current))
     }
   }
 
@@ -1125,6 +1200,11 @@ export function Explorer({
   }
 
   function handleCloseSecondaryPane(): void {
+    // Unsaved human edits are never silently discarded: declining
+    // keeps the file open (same guard as every other navigation).
+    if (!confirmDiscardUnsavedDraft()) {
+      return
+    }
     if (terminalOpen) {
       onToggleTerminal()
     }
@@ -1132,6 +1212,14 @@ export function Explorer({
     handleCloseGitDiff()
     handleCloseReview()
     handleCloseChangeSet()
+    // Clear the active file/editor so the secondary pane unmounts and
+    // the layout returns to the Session-only view. Workspace, tree,
+    // session, and disk files are untouched — presentation only.
+    previewPathRef.current = null
+    dispatch({ type: 'preview-cleared' })
+    setEditor(null)
+    setEditorSelection(null)
+    setFocusRequest(null)
   }
 
   function handleResizeStart(event: React.PointerEvent): void {
@@ -1142,17 +1230,39 @@ export function Explorer({
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
+  /** Measured width of the Session | secondary flex row (0 when hidden). */
+  function measureSplitRow(): number {
+    const root = workareaRef.current
+    if (root === null) {
+      return 0
+    }
+    const row = root.querySelector('.workspace__session')
+    if (row instanceof HTMLElement && row.clientWidth > 0) {
+      return row.clientWidth
+    }
+    return 0
+  }
+
   function handleResizeMove(event: React.PointerEvent): void {
     if (!draggingRef.current) {
       return
     }
-    const container = workareaRef.current
-    if (container === null || container.clientWidth === 0) {
+    const root = workareaRef.current
+    if (root === null) {
       return
     }
-    const rect = container.getBoundingClientRect()
+    const row = root.querySelector('.workspace__session')
+    if (!(row instanceof HTMLElement)) {
+      return
+    }
+    const rect = row.getBoundingClientRect()
+    if (rect.width <= 0) {
+      return
+    }
+    // Continuous percentage — never snapped to presets — clamped to
+    // the pixel minimums of the measured row.
     const pct = ((event.clientX - rect.left) / rect.width) * 100
-    secondaryUiDispatch({ type: 'set-split', pct: Math.min(68, Math.max(30, pct)) })
+    secondaryUiDispatch({ type: 'set-split', pct: clampSplitPct(pct, rect.width) })
   }
 
   function handleResizeEnd(): void {
@@ -1164,16 +1274,9 @@ export function Explorer({
       return
     }
     event.preventDefault()
-    const container = workareaRef.current
-    const base =
-      secondaryUi.splitPct ??
-      (container !== null && container.clientWidth > 0
-        ? (container.querySelector('.workspace__session')?.getBoundingClientRect().width ?? 0) /
-          container.clientWidth /
-          0.01
-        : 45)
+    const base = secondaryUi.splitPct ?? 45
     const next = event.key === 'ArrowLeft' ? base - 2 : base + 2
-    secondaryUiDispatch({ type: 'set-split', pct: Math.min(68, Math.max(30, next)) })
+    secondaryUiDispatch({ type: 'set-split', pct: clampSplitPct(next, measureSplitRow()) })
   }
 
   const dirty = editor !== null && isEditorDirty(editor)
@@ -1183,12 +1286,10 @@ export function Explorer({
     [previewContent]
   )
   const previewEditable = previewEol !== null && isEditableEol(previewEol)
-  const previewPathLabel = state.preview === null ? '' : state.preview.path === '' ? '/' : state.preview.path
   // Diagnostics follow the open file only: stale markers from a
   // previous document never render (derived during render, no effect).
   const openDocUriForView = state.preview === null ? null : extensionDocUri(state.preview.path)
   const visibleExtDiagnostics = extDiagnostics.uri !== null && extDiagnostics.uri === openDocUriForView ? extDiagnostics.markers : []
-  const readOnlyStatus = !previewEditable ? 'Mixed line endings — read-only' : previewLine !== null ? `Line ${previewLine} · Read-only` : 'Read-only'
 
   const hasReviewContent =
     changes.detail !== null ||
@@ -1208,7 +1309,9 @@ export function Explorer({
   }
   tabs.push({ kind: 'context', label: 'Context' })
   if (hasFile) {
-    tabs.push({ kind: 'file', label: fileBasename(state.preview?.path ?? '') })
+    const base = fileBasename(state.preview?.path ?? '')
+    // Subtle dirty dot on the file tab — the only dirty indication.
+    tabs.push({ kind: 'file', label: dirty ? `${base} ●` : base })
   }
   const effectiveTab: SecondaryTabKind = tabs.some((tab) => tab.kind === secondaryUi.tab)
     ? secondaryUi.tab
@@ -1340,30 +1443,39 @@ export function Explorer({
       )
     }
     if (editor !== null && state.preview.content !== null && state.preview.revision !== null) {
+      // No file action toolbar: Monaco begins directly beneath the tab
+      // strip. Typing edits the volatile draft; Ctrl+S opens the
+      // existing review flow; Format / Attach live in the editor
+      // right-click menu. Review-before-write is unchanged.
+      const fileMenuActions = [
+        { id: 'stark.formatDocument', label: 'Format Document', run: () => handleFormatRequest() },
+        { id: 'stark.attachSelection', label: 'Attach selection', run: () => handleAttachPreviewSelection() },
+        { id: 'stark.attachFile', label: 'Attach file', run: () => handleAttachPreviewFile() }
+      ]
       return (
         <div className="workbench__editor-body">
-          <EditorToolbar
-            path={previewPathLabel}
-            status={dirty ? 'Unsaved changes' : 'No unsaved changes'}
-            actions={
-              <>
-                <button
-                  className="explorer__primary"
-                  type="button"
-                  disabled={!dirty || editor.saving}
-                  onClick={() => void handleReviewChange()}
-                >
-                  {editor.saving ? 'Reviewing…' : 'Review change'}
-                </button>
-                <button className="explorer__secondary" type="button" onClick={handleCancel}>
-                  Cancel
-                </button>
-              </>
-            }
-          />
           {editor.saveError !== null && (
             <p className="explorer__error explorer__inline-alert" role="alert">
               {editor.saveError}
+            </p>
+          )}
+          {formatTrustOpen && (
+            <div className="explorer__inline-alert explorer__confirm" role="alertdialog" aria-label={`Run ${formatTrustExtensionName} in the Extension Host?`}>
+              <p className="explorer__confirm-title">STARK is about to run {formatTrustExtensionName} in the Extension Host.</p>
+              <p className="explorer__confirm-copy">VS Code extensions can execute code on your computer.</p>
+              <div className="explorer__confirm-actions">
+                <button className="explorer__secondary" type="button" onClick={handleFormatTrustCancel}>
+                  Cancel
+                </button>
+                <button className="explorer__primary" type="button" onClick={handleFormatTrustConfirm}>
+                  Run {formatTrustExtensionName}
+                </button>
+              </div>
+            </div>
+          )}
+          {formatNotice !== null && !formatTrustOpen && (
+            <p className="explorer__status explorer__inline-alert" role="status">
+              {formatNotice}
             </p>
           )}
           <div className="editor-canvas">
@@ -1374,8 +1486,11 @@ export function Explorer({
               initialValue={editor.draftContent}
               eol={previewEol === 'crlf' ? 'CRLF' : 'LF'}
               readOnly={false}
-              focusRequest={null}
+              focusRequest={focusRequest}
               onContentChange={handleMonacoChange}
+              onSelectionChange={setEditorSelection}
+              onSaveRequest={handleSaveGesture}
+              menuActions={fileMenuActions}
               ariaLabel="File editor"
               extensionDiagnostics={visibleExtDiagnostics}
               extensionFilePath={state.preview.path}
@@ -1384,61 +1499,10 @@ export function Explorer({
         </div>
       )
     }
+    // Mixed-ending files (and any loaded preview without a draft)
+    // stay read-only with no editing affordances.
     return (
       <div className="workbench__editor-body">
-        <EditorToolbar
-          path={previewPathLabel}
-          status={readOnlyStatus}
-          actions={
-            state.preview.revision !== null && previewEditable && editor === null ? (
-              <>
-                <button className="explorer__primary" type="button" onClick={handleEdit}>
-                  Edit
-                </button>
-                <button
-                  className="explorer__secondary"
-                  type="button"
-                  onClick={handleFormatRequest}
-                  disabled={formatBusy}
-                  title="Format with Prettier (review before anything is written)"
-                >
-                  {formatBusy ? 'Formatting…' : 'Format Document'}
-                </button>
-                <button
-                  className="explorer__secondary"
-                  type="button"
-                  onClick={handleAttachPreviewSelection}
-                  disabled={editorSelection === null}
-                  title={editorSelection === null ? 'Select text in the preview first' : 'Attach the selected lines to chat'}
-                >
-                  Attach selection
-                </button>
-                <button className="explorer__secondary" type="button" onClick={handleAttachPreviewFile}>
-                  Attach file
-                </button>
-              </>
-            ) : null
-          }
-        />
-        {formatTrustOpen && (
-          <div className="explorer__inline-alert explorer__confirm" role="alertdialog" aria-label={`Run ${formatTrustExtensionName} in the Extension Host?`}>
-            <p className="explorer__confirm-title">STARK is about to run {formatTrustExtensionName} in the Extension Host.</p>
-            <p className="explorer__confirm-copy">VS Code extensions can execute code on your computer.</p>
-            <div className="explorer__confirm-actions">
-              <button className="explorer__secondary" type="button" onClick={handleFormatTrustCancel}>
-                Cancel
-              </button>
-              <button className="explorer__primary" type="button" onClick={handleFormatTrustConfirm}>
-                Run {formatTrustExtensionName}
-              </button>
-            </div>
-          </div>
-        )}
-        {formatNotice !== null && !formatTrustOpen && (
-          <p className="explorer__status explorer__inline-alert" role="status">
-            {formatNotice}
-          </p>
-        )}
         {previewEol !== null && !previewEditable && (
           <p className="explorer__error explorer__inline-alert" role="alert">
             {MIXED_EOL_MESSAGE}
@@ -1549,7 +1613,14 @@ export function Explorer({
         </button>
       </div>
       <section className="workspace__session" aria-label="Session">
-        <div className="session-frame" style={secondaryUi.splitPct !== null ? { flexBasis: `${secondaryUi.splitPct}%` } : undefined}>
+        <div
+          className="session-frame"
+          style={
+            secondaryUi.splitPct !== null
+              ? { flexGrow: 0, flexBasis: `${secondaryUi.splitPct}%` }
+              : undefined
+          }
+        >
           {sessionNode}
         </div>
         {secondaryOpen && (
@@ -1558,9 +1629,9 @@ export function Explorer({
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize session and workspace panes"
-            aria-valuenow={secondaryUi.splitPct ?? 45}
-            aria-valuemin={30}
-            aria-valuemax={68}
+            aria-valuenow={Math.round(secondaryUi.splitPct ?? 45)}
+            aria-valuemin={Math.round(splitBounds(measureSplitRow()).min)}
+            aria-valuemax={Math.round(splitBounds(measureSplitRow()).max)}
             tabIndex={0}
             onPointerDown={handleResizeStart}
             onPointerMove={handleResizeMove}
@@ -1577,6 +1648,11 @@ export function Explorer({
             onOpenDrawer={onOpenSidebar}
             onClosePane={handleCloseSecondaryPane}
             terminalOpen={terminalOpen}
+            style={
+              secondaryUi.splitPct !== null
+                ? { flexGrow: 0, flexBasis: `${100 - secondaryUi.splitPct}%` }
+                : undefined
+            }
             terminalNode={
               <div className="terminal-stack">
                 <div className="terminal-stack__bar">

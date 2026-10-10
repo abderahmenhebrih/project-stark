@@ -134,8 +134,7 @@ describe('extensions install surface', () => {
     assert.ok(!api.includes('vsix'), 'bridge helpers must not handle archives')
   })
 
-  it('host UI is read-only status (no manual host management)', () => {
-    const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
+  it('host UI is read-only status (no manual host management)', () => {    const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
     assert.ok(panel.includes('Extension Host'), 'host block must be present')
     assert.ok(panel.includes('Status: {hostState}'), 'status text must render')
     assert.ok(!panel.includes('Start host') && !panel.includes('Stop host'), 'normal users must not manage the host')
@@ -149,8 +148,20 @@ describe('extensions install surface', () => {
     assert.ok(settings.includes('Extension Host:'), 'developer diagnostics must retain host status under Settings About')
   })
 
-  it('only normalized shapes cross the bridge', () => {
-    const types = readSource('src', 'shared', 'extension-registry', 'types.ts')
+  it('palette offers built-in Format Document through the open file, never the runtime', () => {
+    const overlays = readRenderer('features/extensions/ExtensionOverlays.tsx')
+    assert.ok(overlays.includes('stark.formatDocument'), 'palette must list the built-in format command')
+    assert.ok(overlays.includes('Format Document'), 'built-in entry must carry its title')
+    assert.ok(overlays.includes('requestFormatDocument'), 'built-in run must publish through the format bus')
+    assert.ok(overlays.includes("startsWith('stark.')"), 'built-ins must bypass extension invocation')
+    const explorer = readRenderer('features/explorer/Explorer.tsx')
+    assert.ok(explorer.includes('subscribeFormatRequests'), 'the open file must subscribe to palette requests')
+    assert.ok(explorer.includes('handleFormatRequest'), 'palette requests must run the existing format handler')
+    assert.ok(!overlays.includes('formatDocumentWithPrettier'), 'palette must not call the formatter directly')
+    assert.ok(!overlays.includes('createFileChange'), 'palette must not write or propose directly')
+  })
+
+  it('only normalized shapes cross the bridge', () => {    const types = readSource('src', 'shared', 'extension-registry', 'types.ts')
     for (const field of ['namespace', 'name', 'version', 'displayName', 'status', 'enabled', 'setEnabled']) {
       assert.ok(types.includes(field), `install contract must carry ${field}`)
     }

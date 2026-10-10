@@ -413,7 +413,7 @@ describe('stage 31 frontend shell', () => {
       assert.ok(home.includes(region), `shell must keep ${region}`)
     }
     const explorer = readRenderer('features/explorer/Explorer.tsx')
-    for (const feature of ['<WorkspaceToolsDrawer', '<SearchPanel', '<GitPanel', '<ChangesPanel', '<CodeEditor', '<TerminalPanel', 'Review change', '<ContextTab']) {
+    for (const feature of ['<WorkspaceToolsDrawer', '<SearchPanel', '<GitPanel', '<ChangesPanel', '<CodeEditor', '<TerminalPanel', 'handleSaveGesture', '<ContextTab']) {
       assert.ok(explorer.includes(feature), `workbench must keep ${feature}`)
     }
     const panel = readRenderer('features/sessions/SessionPanel.tsx')

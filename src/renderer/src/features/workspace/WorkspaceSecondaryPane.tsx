@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from 'react'
+import type { CSSProperties, ReactElement, ReactNode } from 'react'
 import { StarkIcon } from '../../components/icons/StarkIcon'
 
 export type SecondaryTabKind = 'review' | 'context' | 'file'
@@ -17,6 +17,8 @@ interface WorkspaceSecondaryPaneProps {
   readonly children: ReactNode
   readonly terminalNode: ReactNode
   readonly terminalOpen: boolean
+  /** Optional flex sizing from the parent split state (drag divider). */
+  readonly style?: CSSProperties
 }
 
 /**
@@ -34,10 +36,11 @@ export function WorkspaceSecondaryPane({
   onClosePane,
   children,
   terminalNode,
-  terminalOpen
+  terminalOpen,
+  style
 }: WorkspaceSecondaryPaneProps): ReactElement {
   return (
-    <section className="workspace__secondary" aria-label="Workspace">
+    <section className="workspace__secondary" aria-label="Workspace" style={style}>
       <div className="workspace__tabs" role="tablist" aria-label="Workspace views">
         {tabs.map((tab) => (
           <button

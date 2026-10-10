@@ -162,3 +162,47 @@ installers, and the human GUI confirmation pass). Do not represent
 this RC as release-ready.
 
 (End of file — Stage 31 outcome recorded 2026-10-09.)
+
+---
+
+## Final V1 Release QA addendum (post–Stage 31 feature pass, 2026-10-10)
+
+Product scope grew after the Stage 31 record above: chat attachments
+(schema v19, migration 019), AI image/file understanding, attachment
+→ workspace mobility, voice-to-text, and single/multi image
+generation. This addendum records the final verification truth; the
+Stage 31 sections above are preserved verbatim as history.
+
+- Commit: `d54b2d7` (v027). Schema: **v19** (migrations 001–019 only;
+  no migration 020). Upgrade paths fresh→v19 and v5/v9/v13/v15/v17/v18→v19
+  covered by `upgrade-matrix` + per-migration suites.
+- Automated baseline (this host, clean tree): `typecheck` PASS,
+  `lint` PASS, `build` PASS (out/main, out/preload, out/renderer +
+  Extension Host modules), `npm test` **388 suites / 2365 tests /
+  0 failures**, `release:check` ALL CHECKS PASSED,
+  `release:smoke` ready marker ok (schema v19).
+- Worker tools now number ten (workspace_read, workspace_search,
+  git_read, change_propose, attachment_import, image_generate,
+  terminal_execute, runtime_start, runtime_observe, preview_inspect);
+  capabilities number nine (image.generate added, deny/ask only).
+- Voice: mic control, audio-only permission gate, 5 min / 25 MiB
+  bounds, 60 s transcription budget with 0 retries, no audio
+  persistence. Image generation: ASK-only image_generate tool,
+  1–4 images as normal chat attachments, Heart capability routing,
+  review-before-write mobility preserved.
+- Security invariants from Stage 31 hold, extended by suite: no
+  generic IPC (exact production channel set asserted), audio-only
+  media grants, fixed provider endpoints plus allowlisted image-URL
+  origins, no secret leakage (redaction suites), attachment boundary
+  (resolver-only byte reads), at-most-once paid executions.
+- Manual acceptance status for the new scope: GUI/voice-hardware/
+  live-provider/installer checks remain MANUAL REQUIRED —
+  ENVIRONMENT (headless QA host; no microphone, display session,
+  provider key, or installer run here). No reproducible software
+  defect was found; static audits (IPC, renderer, processes,
+  network, secrets, attachments, extensions, anti-hang) are clean.
+- Remaining external prerequisites from Stage 31 are unchanged
+  (code signing, official icon assets, OAuth backend, provider-key
+  smoke, target-platform installers, human GUI confirmation pass).
+
+(Final QA addendum recorded 2026-10-10.)

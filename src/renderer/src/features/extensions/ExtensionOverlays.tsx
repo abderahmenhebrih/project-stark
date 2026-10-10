@@ -11,6 +11,7 @@ import {
   setExtensionTrust
 } from '../../lib/stark-api'
 import { removeTrustRequest, requestExtensionTrust, subscribeTrustQueue, type TrustRequest } from './extension-trust-bus'
+import { requestFormatDocument } from './format-request-bus'
 
 /**
  * Global extension overlays (Steps 8+9): command palette, extension
@@ -28,6 +29,21 @@ import { removeTrustRequest, requestExtensionTrust, subscribeTrustQueue, type Tr
 const MAX_PALETTE_RESULTS = 50
 const MAX_TOASTS = 4
 const TOAST_DISMISS_MS = 6000
+
+/**
+ * STARK built-in palette commands (not extension-contributed): run
+ * through renderer-owned flows, never the extension runtime. The
+ * Format Document entry fires the open file's existing format
+ * handler (trust, stale guards, review pipeline) via the
+ * format-request bus.
+ */
+const BUILT_IN_PALETTE_COMMANDS: readonly ExtensionCommand[] = [
+  { command: 'stark.formatDocument', title: 'Format Document', category: 'STARK', extensionId: 'stark.builtin' }
+]
+
+function isBuiltInCommand(command: string): boolean {
+  return command.startsWith('stark.')
+}
 
 interface Toast {
   readonly id: number
@@ -68,10 +84,17 @@ function Palette({ onClose }: { readonly onClose: () => void }): ReactElement {
   }, [])
 
   const query = input.trim().toLowerCase()
-  const results = (query === '' ? commands : commands.filter((command) => `${command.title} ${command.command} ${command.category ?? ''}`.toLowerCase().includes(query))).slice(0, MAX_PALETTE_RESULTS)
+  const pool = [...BUILT_IN_PALETTE_COMMANDS, ...commands]
+  const results = (query === '' ? pool : pool.filter((command) => `${command.title} ${command.command} ${command.category ?? ''}`.toLowerCase().includes(query))).slice(0, MAX_PALETTE_RESULTS)
 
   function handleRun(command: ExtensionCommand): void {
     if (running !== null) {
+      return
+    }
+    if (isBuiltInCommand(command.command)) {
+      // Built-in: renderer-owned flow (never the extension runtime).
+      requestFormatDocument()
+      onClose()
       return
     }
     setRunning(command.command)
