@@ -73,6 +73,15 @@ function requireEmpty(payload: unknown): void {
 export interface ExtensionInstallHooks {
   readonly onEnabledStateChanged?: (identity: { namespace: string; name: string; version: string }, enabled: boolean) => void
   readonly onUninstalled?: (identity: { namespace: string; name: string; version: string }) => void
+  /**
+   * Runs BEFORE the files are removed: deactivates the exact
+   * instance when active (bounded DEACTIVATE + disposal), stopping
+   * the owned host when a clean deactivate cannot be established.
+   * Failures never block the safe uninstall itself (the host stop
+   * already unloaded modules). Defaults to a no-op so older
+   * harnesses stay unaffected.
+   */
+  readonly beforeUninstall?: (identity: { namespace: string; name: string; version: string }) => Promise<void>
 }
 
 function notify(hook: (() => void) | undefined): void {
@@ -119,15 +128,19 @@ export function createExtensionInstallBindings(
         Promise.resolve()
           .then(() => readIdentity(payload))
           .then((identity) =>
-            service.uninstall(identity).then((result) => {
-              if (result.status === 'uninstalled') {
-                const hook = hooks?.onUninstalled
-                if (hook !== undefined) {
-                  notify(() => hook({ namespace: identity.namespace, name: identity.name, version: identity.version }))
+            Promise.resolve()
+              .then(() => hooks?.beforeUninstall?.({ namespace: identity.namespace, name: identity.name, version: identity.version }))
+              .catch(() => undefined)
+              .then(() => service.uninstall(identity))
+              .then((result) => {
+                if (result.status === 'uninstalled') {
+                  const hook = hooks?.onUninstalled
+                  if (hook !== undefined) {
+                    notify(() => hook({ namespace: identity.namespace, name: identity.name, version: identity.version }))
+                  }
                 }
-              }
-              return result
-            })
+                return result
+              })
           )
           .catch((error: unknown) => {
             throw toPublicExtensionInstallError(error)

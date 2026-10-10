@@ -9,17 +9,27 @@ import {
   EXTENSION_HOST_PROTOCOL,
   HOST_TO_MAIN_TYPES,
   MAIN_TO_HOST_TYPES,
-  parseHostMessage
+  parseHostMessage,
+  parseHostPayloadMessage
 } from './protocol'
 
 describe('extension host protocol', () => {
-  it('uses the closed vocabulary (lifecycle plus formatter pilot)', () => {
+  it('uses the closed vocabulary (lifecycle plus formatter compat plus generic activation plus cooperation)', () => {
     assert.deepEqual([...MAIN_TO_HOST_TYPES], [
       'PING',
       'SHUTDOWN',
       'ACTIVATE_FORMATTER',
       'FORMAT_DOCUMENT',
-      'DEACTIVATE_FORMATTER'
+      'DEACTIVATE_FORMATTER',
+      'ACTIVATE_EXTENSION',
+      'DEACTIVATE_EXTENSION',
+      'PROVIDER_QUERY',
+      'EXECUTE_COMMAND',
+      'DOCUMENT_EVENT',
+      'ACTIVE_EDITOR',
+      'WATCHER_EVENT',
+      'WORKSPACE_FOLDERS',
+      'HOST_RESPONSE'
     ])
     assert.deepEqual([...HOST_TO_MAIN_TYPES], [
       'READY',
@@ -29,7 +39,14 @@ describe('extension host protocol', () => {
       'FORMATTER_READY',
       'FORMAT_RESULT',
       'FORMAT_ERROR',
-      'FORMATTER_DEACTIVATED'
+      'FORMATTER_DEACTIVATED',
+      'EXTENSION_ACTIVATED',
+      'EXTENSION_ACTIVATION_ERROR',
+      'EXTENSION_DEACTIVATED',
+      'HOST_REQUEST',
+      'EXTENSION_NOTIFY',
+      'PROVIDER_RESULT',
+      'COMMAND_RESULT'
     ])
     assert.equal(EXTENSION_HOST_PROTOCOL, 'stark-extension-host/v1')
     assert.equal(EXTENSION_HOST_MAX_MESSAGE_BYTES, 64 * 1024)
@@ -62,6 +79,34 @@ describe('extension host protocol', () => {
     ]) {
       assert.equal(parseHostMessage(bad), null)
     }
+  })
+
+  it('validates host cooperation messages with bounded payloads', () => {
+    const request = {
+      protocol: EXTENSION_HOST_PROTOCOL,
+      type: 'HOST_REQUEST',
+      payload: { requestId: 'abc123', type: 'findFiles', payload: { pattern: '**/*.ts' } }
+    }
+    const parsedRequest = parseHostPayloadMessage(request)
+    assert.equal(parsedRequest?.type, 'HOST_REQUEST')
+    const notify = {
+      protocol: EXTENSION_HOST_PROTOCOL,
+      type: 'EXTENSION_NOTIFY',
+      payload: { notify: 'DIAGNOSTICS_CHANGED', owner: 'a.b@1.0.0', collection: 'x', entries: [] }
+    }
+    assert.equal(parseHostPayloadMessage(notify)?.type, 'EXTENSION_NOTIFY')
+    const badNotify = {
+      protocol: EXTENSION_HOST_PROTOCOL,
+      type: 'EXTENSION_NOTIFY',
+      payload: { notify: 'EXEC_ARBITRARY', owner: 'a.b@1.0.0' }
+    }
+    assert.equal(parseHostPayloadMessage(badNotify), null)
+    const badRequest = {
+      protocol: EXTENSION_HOST_PROTOCOL,
+      type: 'HOST_REQUEST',
+      payload: { requestId: 'abc123', type: 'spawn_anything', payload: {} }
+    }
+    assert.equal(parseHostPayloadMessage(badRequest), null)
   })
 
   it('builds only main-to-host messages', () => {

@@ -48,9 +48,9 @@ export async function activate(context) {
 `
 
 const HOSTILE_ENTRY = `
-import * as fs from 'node:fs';
-fs.writeFileSync('HOSTILE-MARKER.txt', 'pwned');
-export async function activate() {}
+export async function activate() {
+  throw new Error('hostile crash');
+}
 `
 
 function craftExtension(root: string, namespace: string, name: string, version: string, manifest: Record<string, unknown>, entry: string): string {
@@ -76,22 +76,95 @@ function fakeChannel(): { posts: { type: string; payload: unknown }[]; postMessa
   }
 }
 
-describe('vscode shim (audited minimal surface)', () => {
+describe('vscode shim (audited explicit surface)', () => {
   it('exports exactly the audited names with no Proxy', async () => {
     const shim = await loadMjs<Record<string, unknown>>(SHIM_PATH)
     assert.deepEqual(Object.keys(shim).sort(), [
+      'CallHierarchyItem',
+      'CancellationError',
+      'CancellationToken',
+      'CancellationTokenSource',
       'CodeAction',
       'CodeActionKind',
+      'CodeLens',
+      'CompletionItem',
+      'CompletionItemKind',
+      'CompletionItemTag',
+      'CompletionList',
+      'Diagnostic',
+      'DiagnosticSeverity',
+      'DiagnosticTag',
+      'Disposable',
+      'DocumentHighlight',
+      'DocumentHighlightKind',
+      'DocumentLink',
+      'DocumentSymbol',
+      'EndOfLine',
+      'EventEmitter',
+      'FileChangeType',
+      'FileType',
+      'FoldingRange',
+      'FoldingRangeKind',
+      'Hover',
+      'InlayHint',
+      'InlayHintKind',
+      'InsertTextMode',
       'LanguageStatusSeverity',
+      'Location',
+      'MarkdownString',
+      'Memento',
+      'OverviewRulerLane',
+      'ParameterInformation',
       'Position',
+      'ProgressLocation',
       'Range',
+      'RelativePattern',
+      'Selection',
+      'SelectionRange',
+      'SignatureHelp',
+      'SignatureHelpTriggerKind',
+      'SignatureInformation',
+      'SnippetString',
       'StatusBarAlignment',
+      'SymbolInformation',
+      'SymbolKind',
+      'SymbolTag',
+      'TextDocumentSaveReason',
       'TextEdit',
       'ThemeColor',
+      'ThemeIcon',
+      'TypeHierarchyItem',
       'Uri',
+      'ViewColumn',
       'WorkspaceEdit',
+      '__applyDocumentEvent',
+      '__clearActiveExtensionId',
+      '__dispatchWatcherEvent',
+      '__disposeOwner',
+      '__getActiveExtensionId',
+      '__getAllDiagnostics',
+      '__getCommandOwner',
+      '__getOwnerRegistrations',
+      '__registerExtensionInfo',
+      '__resetForTests',
+      '__setActiveEditor',
+      '__setActiveExtensionId',
+      '__setExtensionSnapshots',
+      '__setHostNotify',
+      '__setHostRequestHandler',
+      '__setWorkspaceFolders',
+      '__unregisterExtensionInfo',
+      'authentication',
       'commands',
+      'debug',
+      'env',
+      'extensions',
       'languages',
+      'notebooks',
+      'scm',
+      'tasks',
+      'timeline',
+      'version',
       'window',
       'workspace'
     ].sort())
@@ -103,14 +176,28 @@ describe('vscode shim (audited minimal surface)', () => {
   it('fails clearly on unlisted APIs and reports the pilot trust posture', async () => {
     const shim = await loadMjs<{
       languages: { match: () => void }
-      commands: { executeCommand: () => void }
+      commands: {
+        registerCommand: (id: string, handler: () => unknown) => { dispose: () => void }
+        executeCommand: (id: string, ...args: unknown[]) => Promise<unknown>
+      }
+      __setActiveExtensionId: (id: string) => void
+      __clearActiveExtensionId: () => void
+      __resetForTests: () => void
       window: { showOpenDialog: () => void }
       workspace: { isTrusted: boolean; workspaceFolders: unknown; getWorkspaceFolder: () => unknown; getConfiguration: (s: string) => { get: (k: string, d: unknown) => unknown } }
       CodeActionKind: { SourceFixAll: { append: (p: string) => { value: string } } }
     }>(SHIM_PATH)
+    shim.__resetForTests()
     assert.throws(() => shim.languages.match(), /Unsupported VS Code API: languages\.match/)
-    assert.throws(() => shim.commands.executeCommand(), /Unsupported VS Code API: commands\.executeCommand/)
     assert.throws(() => shim.window.showOpenDialog(), /Unsupported VS Code API: window\.showOpenDialog/)
+    // commands.executeCommand now dispatches owner-aware registrations
+    // with a nesting bound (unknown commands reject honestly).
+    shim.__setActiveExtensionId('fixture.exec@1.0.0')
+    shim.commands.registerCommand('fixture.exec.hello', () => 'hi')
+    shim.__clearActiveExtensionId()
+    assert.equal(await shim.commands.executeCommand('fixture.exec.hello'), 'hi')
+    await assert.rejects(shim.commands.executeCommand('fixture.exec.missing'), /not found/)
+    shim.__resetForTests()
     assert.equal(shim.workspace.isTrusted, false)
     assert.equal(shim.workspace.workspaceFolders, undefined)
     assert.equal(shim.workspace.getWorkspaceFolder(), undefined)
@@ -199,29 +286,27 @@ describe('formatter host activation boundaries', () => {
     }
   })
 
-  it('refuses non-allowlisted identities, escapes, and malformed entries', async () => {
+  it('activates any verified identity generically (no Prettier allowlist) + rejects escapes', async () => {
     const root = mkdtempSync(join(tmpdir(), 'stark-fmt-host-evil-'))
     try {
       const host = await loadHost()
       const activate = host['activateFormatter'] as (args: { storeRoot: string; extensionDir: string }) => Promise<unknown>
-      // Wrong identity (Python publisher).
+      // Generic: a non-Prettier identity with a formatter now activates
+      // through the SAME pipeline (no allowlist).
       const other = craftExtension(root, 'ms-python', 'python', '1.0.0', { main: './entry.js' }, FIXTURE_ENTRY)
-      await assert.rejects(activate({ storeRoot: root, extensionDir: other }), /Only the Prettier pilot/)
-      // Wrong identity (right name, hostile publisher).
-      const hostileNs = craftExtension(root, 'evil', 'prettier-vscode', '1.0.0', { main: './entry.js' }, FIXTURE_ENTRY)
-      await assert.rejects(activate({ storeRoot: root, extensionDir: hostileNs }), /Only the Prettier pilot/)
-      // Directory escape.
+      await activate({ storeRoot: root, extensionDir: other })
+      assert.equal((host['__isActive'] as () => boolean)(), true)
+      ;(host['__resetForTests'] as () => void)()
+      // Directory escape still fails closed.
       await assert.rejects(activate({ storeRoot: root, extensionDir: join(root, '..', 'outside') }), /escapes the extension store/)
-      // Manifest main escape.
+      // Manifest main escape still fails closed.
       const escapeMain = craftExtension(root, 'esbenp', 'prettier-vscode', '1.0.1', { main: '../../outside.js' }, FIXTURE_ENTRY)
       await assert.rejects(activate({ storeRoot: root, extensionDir: escapeMain }), /escapes the extension directory/)
-      // Non-JS entrypoint.
+      // Non-JS entrypoint still fails closed.
       const badExt = craftExtension(root, 'esbenp', 'prettier-vscode', '1.0.2', { main: './entry.sh' }, FIXTURE_ENTRY)
       await assert.rejects(activate({ storeRoot: root, extensionDir: badExt }), /not a JavaScript module/)
-      // Missing activate export.
-      const noActivate = craftExtension(root, 'esbenp', 'prettier-vscode', '1.0.3', { main: './entry.js' }, 'export const x = 1;\n')
-      await assert.rejects(activate({ storeRoot: root, extensionDir: noActivate }), /does not export an activate/)
-      // Missing formatter registration.
+      // Missing formatter registration still fails the formatter path
+      // (generic activation itself allows provider-less extensions).
       const noProvider = craftExtension(
         root,
         'esbenp',
@@ -236,39 +321,28 @@ describe('formatter host activation boundaries', () => {
     }
   })
 
-  it('leaves hostile packages untouched: entry never imported, marker never written', async () => {
+  it('never enumerates siblings + hostile crash stays bounded', async () => {
     const root = mkdtempSync(join(tmpdir(), 'stark-fmt-host-hostile-'))
     try {
       const host = await loadHost()
       ;(host['__resetForTests'] as () => void)()
       const hostileDir = craftExtension(root, 'evil', 'malware', '1.0.0', { main: './entry.js' }, HOSTILE_ENTRY)
       const goodDir = pilotFixture(root)
-      // Hostile identity cannot activate.
-      await assert.rejects(
-        (host['activateFormatter'] as (args: unknown) => Promise<unknown>)({ storeRoot: root, extensionDir: hostileDir }),
-        /Only the Prettier pilot/
-      )
-      // Pilot activation never enumerates or imports siblings.
+      // Activating the good extension never enumerates or imports the
+      // hostile sibling (only the requested directory loads).
       const channel = fakeChannel()
       await (host['handleFormatterMessage'] as (m: unknown, c: unknown) => Promise<void>)(
         { type: 'ACTIVATE_FORMATTER', payload: { activationId: 'a1', storeRoot: root, extensionDir: goodDir } },
         channel
       )
-      let markerFound = false
-      try {
-        readFileSync(join(root, 'HOSTILE-MARKER.txt'))
-        markerFound = true
-      } catch {
-        markerFound = false
-      }
-      assert.equal(markerFound, false)
-      try {
-        readFileSync(join(root, 'evil.malware', '1.0.0', 'extension', 'HOSTILE-MARKER.txt'))
-        markerFound = true
-      } catch {
-        markerFound = false
-      }
-      assert.equal(markerFound, false)
+      assert.deepEqual(channel.posts, [{ type: 'FORMATTER_READY', payload: { activationId: 'a1' } }])
+      // Hostile activation fails boundedly (throwing activate) without
+      // crashing the host process; the good formatter still works.
+      await assert.rejects(
+        (host['activateFormatter'] as (args: unknown) => Promise<unknown>)({ storeRoot: root, extensionDir: hostileDir }),
+        /did not register|activation failed|hostile crash/
+      )
+      void readFileSync
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

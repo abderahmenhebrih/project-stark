@@ -1,4 +1,4 @@
-import { useEffect, useRef, type Dispatch, type ReactElement } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type ReactElement } from 'react'
 import type { ProviderConnectionStatus } from '../../../../shared/providers/types'
 import { useApp } from '../../app/app-context'
 import { useAppInfo } from '../../hooks/useAppInfo'
@@ -26,8 +26,7 @@ const SECTIONS: readonly { readonly kind: SettingsSection; readonly label: strin
   { kind: 'about', label: 'About' }
 ]
 
-function connectionStatusLabel(status: ProviderConnectionStatus): string {
-  switch (status) {
+function connectionStatusLabel(status: ProviderConnectionStatus): string {  switch (status) {
     case 'connected':
       return 'Connected.'
     case 'invalid-credential':
@@ -83,6 +82,42 @@ interface StarkSettingsSurfaceProps {
  * presentation only. Account reuses the existing AccountSection;
  * Profile reuses the existing ProfileSection via the app store.
  */
+/**
+ * Developer diagnostics (read-only): Extension Host lifecycle state.
+ * Normal users never manage the host here — it starts on demand and
+ * stops by lifecycle policy. Status text only, no process details.
+ */
+function DeveloperDiagnostics(): ReactElement {
+  const [hostState, setHostState] = useState<string>('unknown')
+  useEffect(() => {
+    let cancelled = false
+    void import('../../lib/stark-api').then(
+      (api) => {
+        api.getExtensionHostStatus().then(
+          (status) => {
+            if (!cancelled) {
+              setHostState(status.state)
+            }
+          },
+          () => {}
+        )
+      },
+      () => {}
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return (
+    <div className="session__settings-row">
+      <span className="session__provider-name">Developer</span>
+      <p className="session__hint" role="note">
+        Extension Host: {hostState}. The host starts on demand when an extension runs.
+      </p>
+    </div>
+  )
+}
+
 export function StarkSettingsSurface(props: StarkSettingsSurfaceProps): ReactElement {
   const { workspaceId, section, onSectionChange, onClose } = props
   const { provider, heart, recovery, usage, capabilities } = props
@@ -1002,6 +1037,7 @@ export function StarkSettingsSurface(props: StarkSettingsSurfaceProps): ReactEle
                 <p className="session__hint" role="note">
                   Local-first coding workspace. Your projects and local STARK data remain on this device.
                 </p>
+                <DeveloperDiagnostics />
               </section>
             )}
           </div>

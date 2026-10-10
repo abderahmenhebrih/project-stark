@@ -14,6 +14,7 @@ export type FormatterErrorKind =
   | 'not-installed'
   | 'disabled'
   | 'unsupported-language'
+  | 'unsupported-api'
   | 'busy'
   | 'timeout'
   | 'generic'
@@ -28,6 +29,7 @@ const MAIN_INVALID_MESSAGE = 'That format request is not valid.'
 const MAIN_NOT_INSTALLED_MESSAGE = 'Install Prettier from Extensions to format this document.'
 const MAIN_DISABLED_MESSAGE = 'Prettier is disabled.'
 const MAIN_UNSUPPORTED_MESSAGE = 'No formatter is available for this file.'
+const MAIN_UNSUPPORTED_API_MESSAGE = 'This extension requires a VS Code API that STARK does not support yet.'
 const MAIN_BUSY_MESSAGE = 'Formatting is already running for this file.'
 const MAIN_TIMEOUT_MESSAGE = 'Formatting timed out. No changes were made.'
 const MAIN_GENERIC_MESSAGE = 'Formatting failed. No changes were made.'
@@ -36,6 +38,7 @@ export const FORMAT_INVALID_MESSAGE = MAIN_INVALID_MESSAGE
 export const FORMAT_NOT_INSTALLED_MESSAGE = MAIN_NOT_INSTALLED_MESSAGE
 export const FORMAT_DISABLED_MESSAGE = MAIN_DISABLED_MESSAGE
 export const FORMAT_UNSUPPORTED_MESSAGE = MAIN_UNSUPPORTED_MESSAGE
+export const FORMAT_UNSUPPORTED_API_MESSAGE = MAIN_UNSUPPORTED_API_MESSAGE
 export const FORMAT_BUSY_MESSAGE = MAIN_BUSY_MESSAGE
 export const FORMAT_TIMEOUT_MESSAGE = MAIN_TIMEOUT_MESSAGE
 export const FORMAT_GENERIC_MESSAGE = MAIN_GENERIC_MESSAGE
@@ -49,6 +52,7 @@ const KNOWN_OUTCOMES: readonly {
   { kind: 'not-installed', mainMessage: MAIN_NOT_INSTALLED_MESSAGE, message: FORMAT_NOT_INSTALLED_MESSAGE },
   { kind: 'disabled', mainMessage: MAIN_DISABLED_MESSAGE, message: FORMAT_DISABLED_MESSAGE },
   { kind: 'unsupported-language', mainMessage: MAIN_UNSUPPORTED_MESSAGE, message: FORMAT_UNSUPPORTED_MESSAGE },
+  { kind: 'unsupported-api', mainMessage: MAIN_UNSUPPORTED_API_MESSAGE, message: FORMAT_UNSUPPORTED_API_MESSAGE },
   { kind: 'busy', mainMessage: MAIN_BUSY_MESSAGE, message: FORMAT_BUSY_MESSAGE },
   { kind: 'timeout', mainMessage: MAIN_TIMEOUT_MESSAGE, message: FORMAT_TIMEOUT_MESSAGE },
   { kind: 'generic', mainMessage: MAIN_GENERIC_MESSAGE, message: FORMAT_GENERIC_MESSAGE }

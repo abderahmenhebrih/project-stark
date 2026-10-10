@@ -34,12 +34,23 @@ import { ChangeSetReview } from '../changes/ChangeSetReview'
 import { changeSetPanelReducer, initialChangeSetPanelState } from '../changes/change-set-state'
 import { TransactionReview } from '../changes/TransactionReview'
 import { changesReducer, initialChangesState } from '../changes/changes-state'
-import { CodeEditor, type EditorSelection } from '../editor/CodeEditor'
+import { CodeEditor, type EditorSelection, type ExtensionMarker } from '../editor/CodeEditor'
 import { EditorToolbar } from '../editor/EditorToolbar'
 import { buildDocumentUri } from '../editor/editor-document'
 import { classifyEol, isEditableEol, MIXED_EOL_MESSAGE } from '../editor/editor-eol'
 import { toEditorFocus, type EditorFocus } from '../editor/editor-focus'
-import { detectEditorLanguage } from '../editor/editor-language'
+import { detectEditorLanguageWithOverrides } from '../editor/editor-language'
+import {
+  fireExtensionTrigger,
+  getExtensionDiagnostics,
+  onExtensionManagementEvent,
+  pushExtensionDocumentEvent,
+  setExtensionActiveEditor,
+  setExtensionWorkspaceFolders
+} from '../../lib/stark-api'
+import { fetchIconThemeCached, fetchLanguageOverrides, resolveTreeFileIcon, type IconThemeSnapshot } from '../extensions/extension-language-bridge'
+import { extensionDocUri, requestExtensionTrust, EXTENSION_DOC_SYNC_DEBOUNCE_MS } from '../extensions/extension-trust-bus'
+import { getSelectedExtensionThemes } from '../../lib/stark-api'
 import { GitDiffViewer } from '../git/GitDiffViewer'
 import { GitPanel } from '../git/GitPanel'
 import { gitDiffReducer, initialGitDiffState } from '../git/git-state'
@@ -67,9 +78,11 @@ interface TreeNodeProps {
   readonly onToggle: (path: string) => void
   readonly onSelectFile: (path: string) => void
   readonly onAttachFile: (path: string) => void
+  /** Selected Explorer icon theme (null = STARK default glyphs). */
+  readonly fileIconTheme?: IconThemeSnapshot | null
 }
 
-function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile }: TreeNodeProps): ReactElement | null {
+function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile, fileIconTheme = null }: TreeNodeProps): ReactElement | null {
   const entries = state.entries[path]
   const loading = state.loading.includes(path)
   const error = state.errors[path] ?? null
@@ -118,7 +131,7 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile }: TreeNod
               >
                 <span className="explorer__chevron explorer__chevron--spacer" aria-hidden="true" />
                 <span className="explorer__file-icon" aria-hidden="true">
-                  <img src={FILE_ICON_URLS[getFileIconKind(entry.name)]} alt="" draggable={false} />
+                  <img src={resolveTreeFileIcon(entry.name, fileIconTheme) ?? FILE_ICON_URLS[getFileIconKind(entry.name)]} alt="" draggable={false} />
                 </span>
                 <span className="explorer__name">{entry.name}</span>
               </button>
@@ -141,7 +154,7 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile }: TreeNod
           )}
           {entry.kind === 'directory' && state.expanded.includes(entry.relativePath) && (
             <div className="explorer__children">
-              <TreeNode path={entry.relativePath} state={state} onToggle={onToggle} onSelectFile={onSelectFile} onAttachFile={onAttachFile} />
+              <TreeNode path={entry.relativePath} state={state} onToggle={onToggle} onSelectFile={onSelectFile} onAttachFile={onAttachFile} fileIconTheme={fileIconTheme} />
             </div>
           )}
         </li>
@@ -335,14 +348,52 @@ export function Explorer({
   const consumedContextRequestRef = useRef(0)
   const workareaRef = useRef<HTMLDivElement | null>(null)
   const draggingRef = useRef(false)
-  // Document formatting (Prettier pilot): explicit user action only.
-  // Trust is session-scoped (asked once per mount, never persisted);
-  // busy/error/notice are renderer-local; the file itself is never
-  // written here — results become reviewable change transactions.
-  const [prettierTrusted, setPrettierTrusted] = useState(false)
+  // Document formatting (generic activation): explicit user action only.
+  // Trust is generic and session-scoped (asked once per extension per
+  // mount, never persisted): before executing an extension for the
+  // first time in the session, STARK shows "STARK is about to run
+  // <Extension Name>." plus the code-execution risk. Busy/error/notice
+  // are renderer-local; the file itself is never written here —
+  // results become reviewable change transactions.
+  const [trustedExtensions, setTrustedExtensions] = useState<readonly string[]>([])
   const [formatTrustOpen, setFormatTrustOpen] = useState(false)
+  const [formatTrustExtensionName, setFormatTrustExtensionName] = useState('Prettier')
   const [formatBusy, setFormatBusy] = useState(false)
   const [formatNotice, setFormatNotice] = useState<string | null>(null)
+  // Generic extension runtime sync (Steps 8+9): contributed language
+  // detection, host document snapshots, active-editor tracking,
+  // demand-driven language triggers, and editor diagnostics. All
+  // renderer-owned facts pushed through the narrow bridge; failures
+  // degrade to a standalone editor (never errors, never retries).
+  const [languageOverrides, setLanguageOverrides] = useState<Readonly<Record<string, string>> | null>(null)
+  const [fileIconTheme, setFileIconTheme] = useState<IconThemeSnapshot | null>(null)
+  const [extDiagnostics, setExtDiagnostics] = useState<{ uri: string | null; markers: readonly ExtensionMarker[] }>({ uri: null, markers: [] })
+  const openDocUriRef = useRef<string | null>(null)
+  const openDocVersionRef = useRef(1)
+  const docSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const workspaceTriggeredRef = useRef(false)
+
+  const refreshFileDiagnostics = useCallback((uri: string): void => {
+    getExtensionDiagnostics(uri).then(
+      (diagnostics) => {
+        if (openDocUriRef.current !== uri) {
+          return
+        }
+        setExtDiagnostics({
+          uri,
+          markers: diagnostics.slice(0, 2000).map((diagnostic) => ({
+            startLineNumber: diagnostic.range.start.line + 1,
+            startColumn: diagnostic.range.start.character + 1,
+            endLineNumber: diagnostic.range.end.line + 1,
+            endColumn: Math.max(1, diagnostic.range.end.character + 1),
+            severity: diagnostic.severity,
+            message: diagnostic.message
+          }))
+        })
+      },
+      () => {}
+    )
+  }, [])
 
   // Publish the derived dirty flag so file selection, search-result
   // selection, and workspace switching share one discard guard.
@@ -384,6 +435,143 @@ export function Explorer({
     dispatch({ type: 'workspace-changed', workspaceId })
     void loadDirectory(workspaceId, '')
   }, [workspaceId, loadDirectory])
+
+  // Contributed languages + selected icon theme (session-cached).
+  useEffect(() => {
+    let cancelled = false
+    fetchLanguageOverrides().then(
+      (overrides) => {
+        if (!cancelled) {
+          setLanguageOverrides(overrides)
+        }
+      },
+      () => {}
+    )
+    getSelectedExtensionThemes().then(
+      (selected) => {
+        if (cancelled || selected.icon === null) {
+          return
+        }
+        void fetchIconThemeCached(selected.icon).then(
+          (theme) => {
+            if (!cancelled) {
+              setFileIconTheme(theme)
+            }
+          },
+          () => {}
+        )
+      },
+      () => {}
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Workspace folders for extensions (renderer-owned fact, main
+  // re-validates the directory before the host ever sees it).
+  useEffect(() => {
+    setExtensionWorkspaceFolders([{ uri: `file:${workspaceRootPath}`, name: workspaceName }]).then(
+      () => {},
+      () => {}
+    )
+  }, [workspaceId, workspaceRootPath, workspaceName])
+
+  // Workspace trigger (once per workspace): main lists the root and
+  // considers workspaceContains candidates; untrusted ones surface
+  // as trust requests instead of auto-running.
+  useEffect(() => {
+    if (workspaceTriggeredRef.current) {
+      return
+    }
+    workspaceTriggeredRef.current = true
+    fireExtensionTrigger({ kind: 'workspace' }).then(
+      (outcome) => {
+        for (const id of outcome.needsTrust) {
+          const at = id.lastIndexOf('@')
+          const head = id.slice(0, at)
+          const dot = head.indexOf('.')
+          requestExtensionTrust({
+            namespace: head.slice(0, dot),
+            name: head.slice(dot + 1),
+            version: id.slice(at + 1),
+            displayName: head
+          })
+        }
+      },
+      () => {}
+    )
+  }, [workspaceId])
+
+  const previewSyncPath = state.preview?.path ?? null
+  const previewSyncContent = state.preview?.content ?? null
+  const previewSyncRevision = state.preview?.revision ?? null
+  const previewLanguageId = previewSyncPath === null ? null : detectEditorLanguageWithOverrides(previewSyncPath, languageOverrides)
+
+  // Host document sync for the open file: opened on selection,
+  // closed on navigation, plus active-editor tracking.
+  useEffect(() => {
+    const previous = openDocUriRef.current
+    if (previous !== null) {
+      openDocUriRef.current = null
+      pushExtensionDocumentEvent({ kind: 'closed', uri: previous }).then(
+        () => {},
+        () => {}
+      )
+    }
+    if (previewSyncPath === null || previewSyncContent === null) {
+      setExtensionActiveEditor(null).then(
+        () => {},
+        () => {}
+      )
+      return
+    }
+    const uri = extensionDocUri(previewSyncPath)
+    openDocUriRef.current = uri
+    openDocVersionRef.current = 1
+    const languageId = detectEditorLanguageWithOverrides(previewSyncPath, languageOverrides)
+    pushExtensionDocumentEvent({ kind: 'opened', uri, languageId, text: previewSyncContent, version: 1 }).then(
+      () => refreshFileDiagnostics(uri),
+      () => {}
+    )
+    setExtensionActiveEditor({ uri, languageId }).then(
+      () => {},
+      () => {}
+    )
+  }, [workspaceId, previewSyncPath, previewSyncRevision, previewSyncContent, languageOverrides, refreshFileDiagnostics])
+
+  // Demand-driven language trigger (separate effect so late-arriving
+  // contributed-language overrides still fire correctly).
+  useEffect(() => {
+    if (previewLanguageId === null) {
+      return
+    }
+    fireExtensionTrigger({ kind: 'language', value: previewLanguageId }).then(
+      (outcome) => {
+        for (const id of outcome.needsTrust) {
+          const at = id.lastIndexOf('@')
+          const head = id.slice(0, at)
+          const dot = head.indexOf('.')
+          requestExtensionTrust({
+            namespace: head.slice(0, dot),
+            name: head.slice(dot + 1),
+            version: id.slice(at + 1),
+            displayName: head
+          })
+        }
+      },
+      () => {}
+    )
+  }, [workspaceId, previewSyncPath, previewLanguageId])
+
+  // Extension diagnostics follow host pushes for the open file.
+  useEffect(() => {
+    return onExtensionManagementEvent((event) => {
+      if (event.kind === 'diagnostics' && openDocUriRef.current !== null) {
+        refreshFileDiagnostics(openDocUriRef.current)
+      }
+    })
+  }, [refreshFileDiagnostics])
 
   const refreshHistory = useCallback(async (): Promise<void> => {
     const targetWorkspaceId = workspaceId
@@ -651,6 +839,22 @@ export function Explorer({
 
   function handleMonacoChange(value: string): void {
     setEditor((current) => (current === null ? current : applyDraftChange(current, value)))
+    // Extension document sync (debounced trailing): the host snapshot
+    // follows local edits so providers and diagnostics stay current.
+    const uri = openDocUriRef.current
+    if (uri === null) {
+      return
+    }
+    if (docSyncTimerRef.current !== null) {
+      clearTimeout(docSyncTimerRef.current)
+    }
+    docSyncTimerRef.current = setTimeout(() => {
+      openDocVersionRef.current += 1
+      pushExtensionDocumentEvent({ kind: 'changed', uri, text: value, version: openDocVersionRef.current }).then(
+        () => refreshFileDiagnostics(uri),
+        () => {}
+      )
+    }, EXTENSION_DOC_SYNC_DEBOUNCE_MS)
   }
 
   function handleCancel(): void {
@@ -698,9 +902,10 @@ export function Explorer({
   }
 
   /**
-   * Format Document (Prettier pilot): explicit user action on the
-   * read-only preview. First activation per mount asks the one-time
-   * trust question; the file is never written here. Main returns the
+   * Format Document (generic activation): explicit user action on the
+   * read-only preview. First execution per extension per mount asks
+   * the generic trust question ("STARK is about to run <Extension
+   * Name>."); the file is never written here. Main returns the
    * snapshot revision it formatted plus formatted text; a mismatch
    * with the click-time revision rejects as stale, identical output
    * reports "already formatted", and anything else becomes a
@@ -712,7 +917,11 @@ export function Explorer({
       return
     }
     setFormatNotice(null)
-    if (!prettierTrusted) {
+    // Generic trust key for the formatter extension (stable across
+    // versions; session-only). Future extensions use their own keys.
+    const trustKey = 'esbenp.prettier-vscode'
+    setFormatTrustExtensionName('Prettier')
+    if (!trustedExtensions.includes(trustKey)) {
       setFormatTrustOpen(true)
       return
     }
@@ -729,7 +938,8 @@ export function Explorer({
       setFormatTrustOpen(false)
       return
     }
-    setPrettierTrusted(true)
+    const trustKey = 'esbenp.prettier-vscode'
+    setTrustedExtensions((trusted) => (trusted.includes(trustKey) ? trusted : [...trusted, trustKey]))
     void runFormatDocument(preview.path, preview.revision, preview.content)
   }
 
@@ -959,6 +1169,10 @@ export function Explorer({
   )
   const previewEditable = previewEol !== null && isEditableEol(previewEol)
   const previewPathLabel = state.preview === null ? '' : state.preview.path === '' ? '/' : state.preview.path
+  // Diagnostics follow the open file only: stale markers from a
+  // previous document never render (derived during render, no effect).
+  const openDocUriForView = state.preview === null ? null : extensionDocUri(state.preview.path)
+  const visibleExtDiagnostics = extDiagnostics.uri !== null && extDiagnostics.uri === openDocUriForView ? extDiagnostics.markers : []
   const readOnlyStatus = !previewEditable ? 'Mixed line endings — read-only' : previewLine !== null ? `Line ${previewLine} · Read-only` : 'Read-only'
 
   const hasReviewContent =
@@ -1141,13 +1355,15 @@ export function Explorer({
             <CodeEditor
               key={`edit:${workspaceId}:${state.preview.path}:${state.preview.revision}`}
               documentUri={buildDocumentUri(workspaceId, state.preview.path)}
-              language={detectEditorLanguage(state.preview.path)}
+              language={detectEditorLanguageWithOverrides(state.preview.path, languageOverrides)}
               initialValue={editor.draftContent}
               eol={previewEol === 'crlf' ? 'CRLF' : 'LF'}
               readOnly={false}
               focusRequest={null}
               onContentChange={handleMonacoChange}
               ariaLabel="File editor"
+              extensionDiagnostics={visibleExtDiagnostics}
+              extensionFilePath={state.preview.path}
             />
           </div>
         </div>
@@ -1190,15 +1406,15 @@ export function Explorer({
           }
         />
         {formatTrustOpen && (
-          <div className="explorer__inline-alert explorer__confirm" role="alertdialog" aria-label="Run Prettier in the Extension Host?">
-            <p className="explorer__confirm-title">STARK is about to run Prettier in the Extension Host.</p>
+          <div className="explorer__inline-alert explorer__confirm" role="alertdialog" aria-label={`Run ${formatTrustExtensionName} in the Extension Host?`}>
+            <p className="explorer__confirm-title">STARK is about to run {formatTrustExtensionName} in the Extension Host.</p>
             <p className="explorer__confirm-copy">VS Code extensions can execute code on your computer.</p>
             <div className="explorer__confirm-actions">
               <button className="explorer__secondary" type="button" onClick={handleFormatTrustCancel}>
                 Cancel
               </button>
               <button className="explorer__primary" type="button" onClick={handleFormatTrustConfirm}>
-                Run Prettier
+                Run {formatTrustExtensionName}
               </button>
             </div>
           </div>
@@ -1218,13 +1434,15 @@ export function Explorer({
             <CodeEditor
               key={`view:${workspaceId}:${state.preview.path}:${state.preview.revision}`}
               documentUri={buildDocumentUri(workspaceId, state.preview.path)}
-              language={detectEditorLanguage(state.preview.path)}
+              language={detectEditorLanguageWithOverrides(state.preview.path, languageOverrides)}
               initialValue={state.preview.content}
               eol={previewEol === 'crlf' ? 'CRLF' : 'LF'}
               readOnly
               focusRequest={focusRequest}
               onSelectionChange={setEditorSelection}
               ariaLabel="File preview"
+              extensionDiagnostics={visibleExtDiagnostics}
+              extensionFilePath={state.preview.path}
             />
           </div>
         )}
@@ -1256,7 +1474,7 @@ export function Explorer({
                 <span className="explorer__root-name">{workspaceName}</span>
               </button>
               {!rootCollapsed && (
-                <TreeNode path="" state={state} onToggle={handleToggle} onSelectFile={handleSelectFile} onAttachFile={handleAttachTreeFile} />
+                <TreeNode path="" state={state} onToggle={handleToggle} onSelectFile={handleSelectFile} onAttachFile={handleAttachTreeFile} fileIconTheme={fileIconTheme} />
               )}
             </>
           ) : activity === 'search' ? (
@@ -1274,7 +1492,7 @@ export function Explorer({
               onOpenFile={handleOpenGitFile}
             />
           ) : activity === 'extensions' ? (
-            <ExtensionsPanel />
+            <ExtensionsPanel workspaceId={workspaceId} rootPath={workspaceRootPath} />
           ) : (
             <>
               <ChangeSetPanel

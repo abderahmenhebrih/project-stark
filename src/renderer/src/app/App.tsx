@@ -2,6 +2,7 @@ import type { ReactElement } from 'react'
 import { AppProvider } from './AppProvider'
 import { useApp } from './app-context'
 import { OnboardingPage } from '../features/onboarding/OnboardingPage'
+import { ExtensionOverlays } from '../features/extensions/ExtensionOverlays'
 import { MainLayout } from '../layouts/MainLayout'
 import { HomePage } from '../pages/HomePage'
 import './App.css'
@@ -44,6 +45,7 @@ function BootRouter(): ReactElement {
   return (
     <MainLayout>
       <HomePage />
+      <ExtensionOverlays />
     </MainLayout>
   )
 }

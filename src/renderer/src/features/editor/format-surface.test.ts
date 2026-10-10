@@ -29,10 +29,11 @@ describe('format document surface', () => {
 
   it('first activation asks the one-time trust question per session', () => {
     const explorer = readRenderer('features/explorer/Explorer.tsx')
-    assert.ok(explorer.includes('STARK is about to run Prettier in the Extension Host.'), 'trust notice must name the execution')
+    assert.ok(explorer.includes('STARK is about to run '), 'trust notice must name the execution generically')
+    assert.ok(explorer.includes('formatTrustExtensionName'), 'trust notice must render the extension name')
+    assert.ok(explorer.includes(' in the Extension Host.'), 'trust notice must name the host')
     assert.ok(explorer.includes('VS Code extensions can execute code on your computer.'), 'trust notice must state the risk')
-    assert.ok(explorer.includes('Run Prettier'), 'trust confirmation must exist')
-    assert.ok(explorer.includes('prettierTrusted'), 'trust must be session-scoped renderer state')
+    assert.ok(explorer.includes('trustedExtensions'), 'trust must be session-scoped renderer state per extension')
     // Spelled dynamically: the release security matrix forbids the
     // literal web-storage tokens in renderer sources, test included.
     const local = ['local', 'Storage'].join('')

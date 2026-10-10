@@ -97,6 +97,16 @@ export interface FormatterServiceOptions {
   readonly formatterModuleUrl: string
   readonly requestTimeoutMs?: number
   readonly activationTimeoutMs?: number
+  /**
+   * Generic activation service (Step 7 primary pipeline). When
+   * provided, Format Document activates Prettier through the SAME
+   * generic ACTIVATE_EXTENSION flow as every other extension;
+   * otherwise the legacy ACTIVATE_FORMATTER adapter is used
+   * (older harnesses and unit tests).
+   */
+  readonly activationService?: {
+    activateExtension(identity: { namespace: string; name: string; version: string }): Promise<{ extensionId: string }>
+  }
 }
 
 export class FormatterService {
@@ -107,6 +117,7 @@ export class FormatterService {
   private readonly formatterModuleUrl: string
   private readonly requestTimeoutMs: number
   private readonly activationTimeoutMs: number
+  private readonly activationService?: FormatterServiceOptions['activationService']
   private readonly inFlight = new Map<string, Promise<FormatDocumentResult>>()
   private readonly pending = new Map<string, PendingWaiter>()
   private activationFlight: Promise<string> | null = null
@@ -121,6 +132,7 @@ export class FormatterService {
     this.formatterModuleUrl = options.formatterModuleUrl
     this.requestTimeoutMs = options.requestTimeoutMs ?? FORMATTER_REQUEST_TIMEOUT_MS
     this.activationTimeoutMs = options.activationTimeoutMs ?? FORMATTER_ACTIVATION_TIMEOUT_MS
+    this.activationService = options.activationService
     this.unsubscribe = this.manager.onHostEvent((event) => {
       if (event.kind === 'exit') {
         this.failAllPending(new FormatterError('host_unavailable'))
@@ -177,6 +189,8 @@ export class FormatterService {
     clearTimeout(waiter.timer)
     if (outcome.ok) {
       waiter.resolve(outcome.edits)
+    } else if (outcome.code === 'unsupported-api') {
+      waiter.reject(new FormatterError('unsupported_api', { cause: new Error(`host code: ${outcome.code}`) }))
     } else {
       waiter.reject(new FormatterError('format_failed', { cause: new Error(`host code: ${outcome.code}`) }))
     }
@@ -392,6 +406,62 @@ export class FormatterService {
         return
       }
       throw new FormatterError('format_failed')
+    }
+    // Generic pipeline (Step 7 primary): Prettier activates through
+    // the SAME generic service as every other extension (no
+    // Prettier-only host gate). The legacy adapter remains for older
+    // harnesses without an activation service.
+    if (this.activationService !== undefined) {
+      const flight = (async (): Promise<string> => {
+        try {
+          await this.activationService?.activateExtension({
+            namespace: PILOT_FORMATTER_NAMESPACE,
+            name: PILOT_FORMATTER_NAME,
+            version: extensionPackage.version
+          })
+        } catch (error: unknown) {
+          const code = (error as { code?: unknown })?.code
+          if (code === 'disabled') {
+            throw new FormatterError('disabled', { cause: error })
+          }
+          if (code === 'not-installed' || code === 'uninstalled') {
+            throw new FormatterError('not_installed', { cause: error })
+          }
+          if (code === 'unsupported-api') {
+            throw new FormatterError('unsupported_api', { cause: error })
+          }
+          if (code === 'unsupported-extension-kind') {
+            throw new FormatterError('format_failed', { cause: error })
+          }
+          if (code === 'timeout') {
+            throw new FormatterError('timeout', { cause: error })
+          }
+          if (code === 'host-unavailable') {
+            throw new FormatterError('host_unavailable', { cause: error })
+          }
+          throw error
+        }
+        this.activatedExtensionDir = extensionPackage.extensionDir
+        return extensionPackage.extensionDir
+      })()
+      this.activationFlight = flight
+      try {
+        await flight
+      } catch (error: unknown) {
+        this.activatedExtensionDir = null
+        if (error instanceof FormatterError) {
+          throw error
+        }
+        if (error instanceof ExtensionHostError) {
+          throw new FormatterError('host_unavailable', { cause: error })
+        }
+        throw error
+      } finally {
+        if (this.activationFlight === flight) {
+          this.activationFlight = null
+        }
+      }
+      return
     }
     const activationId = randomBytes(8).toString('hex')
     const flight = (async (): Promise<string> => {

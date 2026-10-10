@@ -12,6 +12,7 @@ export type FormatterErrorCode =
   | 'not_installed'
   | 'disabled'
   | 'unsupported_language'
+  | 'unsupported_api'
   | 'busy'
   | 'timeout'
   | 'host_unavailable'
@@ -23,6 +24,7 @@ export const FORMATTER_PUBLIC_COPY: Record<FormatterErrorCode, string> = {
   not_installed: 'Install Prettier from Extensions to format this document.',
   disabled: 'Prettier is disabled.',
   unsupported_language: 'No formatter is available for this file.',
+  unsupported_api: 'This extension requires a VS Code API that STARK does not support yet.',
   busy: 'Formatting is already running for this file.',
   timeout: 'Formatting timed out. No changes were made.',
   host_unavailable: 'Formatting failed. No changes were made.',

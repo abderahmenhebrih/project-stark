@@ -22,7 +22,7 @@ export interface StarkTokenRule {
 }
 
 export interface StarkEditorTheme {
-  readonly base: 'vs-dark'
+  readonly base: 'vs' | 'vs-dark'
   readonly inherit: boolean
   // Mutable containers on purpose: this shape must satisfy Monaco's
   // IStandaloneThemeData so registration typechecks directly.
@@ -73,4 +73,94 @@ export function starkEditorTheme(): StarkEditorTheme {
 export function registerStarkTheme(api: MonacoThemeApi): void {
   api.editor.defineTheme(STARK_EDITOR_THEME_NAME, starkEditorTheme())
   api.editor.setTheme(STARK_EDITOR_THEME_NAME)
+}
+
+/** Extension-contributed editor theme data (bounded, renderer-safe). */
+export interface ExtensionThemeData {
+  readonly uiTheme: string
+  readonly colors: Record<string, string>
+  readonly tokenColors: readonly {
+    readonly scope?: string | readonly string[]
+    readonly settings: { readonly foreground?: string; readonly fontStyle?: string }
+  }[]
+}
+
+const VALID_FONT_STYLE = /^(italic|bold|underline)(\s+(italic|bold|underline))*$/
+
+function cleanHex(value: string): string | null {
+  const hex = value.startsWith('#') ? value.slice(1) : value
+  if (/^[0-9a-fA-F]{6}$/.test(hex) || /^[0-9a-fA-F]{8}$/.test(hex)) {
+    return hex.toLowerCase()
+  }
+  return null
+}
+
+/**
+ * Converts a VS Code color-theme contribution into Monaco theme data
+ * (pure, bounded, best-effort). Only editor colors apply — STARK's
+ * application shell and security indicators are never touched. Token
+ * scopes map to their last dotted segment (Monaco's flat token
+ * model). Returns null when nothing usable survives.
+ */
+export function convertExtensionTheme(data: ExtensionThemeData): StarkEditorTheme | null {
+  const rules: StarkTokenRule[] = []
+  const seen = new Set<string>()
+  for (const entry of data.tokenColors.slice(0, 256)) {
+    const foreground = entry.settings.foreground !== undefined ? cleanHex(entry.settings.foreground) : null
+    const fontStyle = entry.settings.fontStyle !== undefined && VALID_FONT_STYLE.test(entry.settings.fontStyle)
+      ? entry.settings.fontStyle
+      : undefined
+    if (foreground === null && fontStyle === undefined) {
+      continue
+    }
+    const scopes: string[] = typeof entry.scope === 'string' ? entry.scope.split(',') : Array.isArray(entry.scope) ? [...entry.scope] : []
+    for (const scope of scopes.slice(0, 8)) {
+      const token = scope.trim().split(/[\s.]/).filter((part) => part !== '').pop() ?? ''
+      if (token === '' || token.length > 64 || seen.has(token)) {
+        continue
+      }
+      seen.add(token)
+      rules.push({ token, foreground: foreground ?? 'ffffff', fontStyle })
+      if (rules.length >= 256) {
+        break
+      }
+    }
+    if (rules.length >= 256) {
+      break
+    }
+  }
+  const colors: Record<string, string> = {}
+  for (const [key, value] of Object.entries(data.colors).slice(0, 256)) {
+    if (!/^[a-zA-Z][a-zA-Z0-9.]*$/.test(key)) {
+      continue
+    }
+    const hex = cleanHex(value)
+    if (hex !== null) {
+      colors[key] = `#${hex}`
+    }
+  }
+  if (rules.length === 0 && Object.keys(colors).length === 0) {
+    return null
+  }
+  return {
+    base: data.uiTheme === 'vs' ? 'vs' : 'vs-dark',
+    inherit: true,
+    rules,
+    colors
+  }
+}
+
+/**
+ * Defines and activates one contributed editor theme under a stable
+ * `stark-ext-theme` name. Returns false when the data converts to
+ * nothing (caller keeps the STARK default).
+ */
+export function applyExtensionTheme(api: MonacoThemeApi, data: ExtensionThemeData): boolean {
+  const converted = convertExtensionTheme(data)
+  if (converted === null) {
+    return false
+  }
+  api.editor.defineTheme('stark-ext-theme', converted)
+  api.editor.setTheme('stark-ext-theme')
+  return true
 }

@@ -24,6 +24,21 @@ export interface CodeEditorProps {
   /** Fired with the cursor selection on change (Stage 15 excerpt attach). */
   readonly onSelectionChange?: (selection: EditorSelection | null) => void
   readonly ariaLabel: string
+  /** Extension diagnostics for this file (1-based Monaco ranges). */
+  readonly extensionDiagnostics?: readonly ExtensionMarker[]
+  /** Workspace-relative path for extension provider queries (or null). */
+  readonly extensionFilePath?: string | null
+}
+
+/** One extension diagnostic marker (normalized, renderer-safe). */
+export interface ExtensionMarker {
+  readonly startLineNumber: number
+  readonly startColumn: number
+  readonly endLineNumber: number
+  readonly endColumn: number
+  /** VS Code DiagnosticSeverity (0 error … 3 hint). */
+  readonly severity: number
+  readonly message: string
 }
 
 /** Minimal cursor-selection snapshot (1-based, Monaco convention). */
@@ -73,7 +88,9 @@ export function CodeEditor({
   focusRequest,
   onContentChange,
   onSelectionChange,
-  ariaLabel
+  ariaLabel,
+  extensionDiagnostics,
+  extensionFilePath
 }: CodeEditorProps): ReactElement {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const instanceRef = useRef<EditorInstance | null>(null)
@@ -86,18 +103,40 @@ export function CodeEditor({
   // NEVER re-trigger model creation — recreating the model on every
   // keystroke would destroy focus and the undo stack.
   const [mountProps] = useState(() => ({ documentUri, language, initialValue, eol, readOnly }))
+  const diagnosticsRef = useRef<readonly ExtensionMarker[]>(extensionDiagnostics ?? [])
+  const extensionPathRef = useRef<string | null>(extensionFilePath ?? null)
 
   useEffect(() => {
     changeRef.current = onContentChange
     selectionRef.current = onSelectionChange
     focusRequestRef.current = focusRequest
+    diagnosticsRef.current = extensionDiagnostics ?? []
+    extensionPathRef.current = extensionFilePath ?? null
   })
 
   useEffect(() => {
     let cancelled = false
     let instance: EditorInstance | null = null
+    let extensionProviders: { dispose: () => void } | null = null
+    function onEditorThemeChanged(): void {
+      const ready = instanceRef.current
+      if (ready === null) {
+        return
+      }
+      void import('../extensions/extension-language-bridge').then(
+        (bridge) => {
+          try {
+            bridge.ensureExtensionTheme(ready.monaco)
+          } catch {
+            // Theme fallback is best-effort.
+          }
+        },
+        () => {}
+      )
+    }
+    window.addEventListener('stark:editor-theme-changed', onEditorThemeChanged)
     loadMonaco().then(
-      (monaco) => {
+      async (monaco) => {
         if (cancelled || containerRef.current === null) {
           return
         }
@@ -155,6 +194,21 @@ export function CodeEditor({
           const ready: EditorInstance = { monaco, editor, model }
           instance = ready
           instanceRef.current = ready
+          // Extension language features for this language: completion,
+          // hover, definition, and signature help query the runtime
+          // (bounded, single-flight). Snippet contributions register
+          // once per language. Failures degrade to no providers.
+          try {
+            const bridge = await import('../extensions/extension-language-bridge')
+            if (!cancelled) {
+              extensionProviders = bridge.registerExtensionLanguageProviders(monaco, mountProps.language, extensionPathRef.current ?? mountProps.documentUri)
+              bridge.ensureExtensionSnippets(monaco, mountProps.language)
+              bridge.ensureExtensionTheme(monaco)
+              bridge.applyExtensionMarkers(monaco, model, diagnosticsRef.current)
+            }
+          } catch {
+            // Extension features are best-effort; the editor stands alone.
+          }
           // The focus request often predates Monaco init (async module
           // load + editor creation); apply the latest one on readiness
           // instead of dropping it. Applied immediately (covers pages
@@ -183,6 +237,12 @@ export function CodeEditor({
     return () => {
       cancelled = true
       instanceRef.current = null
+      window.removeEventListener('stark:editor-theme-changed', onEditorThemeChanged)
+      try {
+        extensionProviders?.dispose()
+      } catch {
+        // Best effort during teardown.
+      }
       // Model before editor: the editor must never outlive its model.
       try {
         instance?.model.dispose()
@@ -204,6 +264,27 @@ export function CodeEditor({
     }
     applyFocusRequest(instance, focusRequest)
   }, [focusRequest])
+
+  // Extension diagnostics follow the latest prop value against the
+  // live model (markers are STARK-owned Monaco state, never HTML).
+  useEffect(() => {
+    const instance = instanceRef.current
+    if (instance === null || extensionDiagnostics === undefined) {
+      return
+    }
+    void import('../extensions/extension-language-bridge').then(
+      (bridge) => {
+        try {
+          if (instanceRef.current === instance) {
+            bridge.applyExtensionMarkers(instance.monaco, instance.model, extensionDiagnostics)
+          }
+        } catch {
+          // Markers are best-effort.
+        }
+      },
+      () => {}
+    )
+  }, [extensionDiagnostics])
 
   if (failed) {
     return (

@@ -34,6 +34,8 @@ import type { WorkspaceSearchService } from '../workspace-search/workspace-searc
 import type { ExtensionRegistryService } from '../extension-registry/extension-registry-service'
 import type { ExtensionInstallService } from '../extension-install/extension-install-service'
 import type { ExtensionHostManager } from '../extension-host/extension-host-manager'
+import type { ExtensionActivationService } from '../extension-host/extension-activation-service'
+import type { ExtensionRuntimeService } from '../extension-host/extension-runtime-service'
 import type { FormatterService } from '../formatter/formatter-service'
 import type { AttachmentPicker } from '../chat-attachments/picker'
 import type { ChatAttachmentService } from '../chat-attachments/service'
@@ -64,6 +66,8 @@ import { createWorkspaceSearchBindings } from './workspace-search'
 import { createExtensionsBindings } from './extensions'
 import { createExtensionInstallBindings } from './extension-install'
 import { createExtensionHostBindings } from './extension-host'
+import { createExtensionActivationBindings } from './extension-activation'
+import { createExtensionManagementBindings } from './extension-management'
 import { createFormatterBindings } from './formatter'
 import { createAttachmentBindings } from './attachments'
 import { createAccountBindings } from './account'
@@ -108,6 +112,19 @@ export interface IpcDependencies {
   readonly extensionInstallService?: ExtensionInstallService
   /** Extension Host broker (foundation only). Optional in older harnesses; absent means no host channels. */
   readonly extensionHostManager?: ExtensionHostManager
+  /**
+   * Generic activation service (demand-driven only). Optional in
+   * older harnesses; absent means no activate/deactivate/list-active
+   * channels. Constructed in main/index.ts from the host manager
+   * plus the install service.
+   */
+  readonly extensionActivationService?: ExtensionActivationService
+  /**
+   * Generic runtime coordinator (trust, triggers, providers, prompts,
+   * diagnostics, proposals). Optional in older harnesses; absent
+   * means no extension-management channels.
+   */
+  readonly extensionRuntimeService?: ExtensionRuntimeService
   /**
    * Document formatter (Prettier pilot). Optional; absent means no
    * formatter channel. Constructed in main/index.ts from the host
@@ -215,13 +232,58 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
   }
   if (deps.extensionInstallService !== undefined) {
     const formatter = deps.formatterService
+    const activation = deps.extensionActivationService
+    const runtime = deps.extensionRuntimeService
+    const hostManager = deps.extensionHostManager
+    const deactivateExact = (identity: { namespace: string; name: string; version: string }): Promise<unknown> => {
+      // The runtime path additionally releases watchers and caches;
+      // the activation path is the older harness fallback.
+      if (runtime !== undefined) {
+        return runtime.deactivateExtension(identity)
+      }
+      if (activation !== undefined) {
+        return activation.deactivateExtension(identity)
+      }
+      return Promise.resolve(true)
+    }
     bindings.push(
       ...createExtensionInstallBindings(deps.extensionInstallService, {
-        onEnabledStateChanged: (_identity, enabled) => {
+        onEnabledStateChanged: (identity, enabled) => {
           // Unload on disable only; enabling needs no host action.
-          // Fire-and-forget by design (best-effort unload).
+          // Fire-and-forget by design (best-effort unload). The
+          // generic service deactivates the exact instance (bounded
+          // deactivate + disposal, host stop on hang); the formatter
+          // adapter unloads its legacy registration the same way.
           if (!enabled) {
-            void formatter?.noteExtensionDisabled()
+            void (async () => {
+              try {
+                await deactivateExact(identity)
+              } catch {
+                // Best effort: the host stop below still unloads.
+              }
+              void formatter?.noteExtensionDisabled()
+            })()
+          }
+        },
+        beforeUninstall: async (identity) => {
+          // Active modules cannot be deleted live: deactivate the
+          // exact instance first (bounded); a hang stops the owned
+          // host before the safe file removal below.
+          try {
+            const deactivated = await deactivateExact(identity)
+            if (deactivated === false && hostManager !== undefined) {
+              try {
+                await hostManager.stop()
+              } catch {
+                // Best effort: removal proceeds regardless.
+              }
+            }
+          } catch {
+            try {
+              await hostManager?.stop()
+            } catch {
+              // Best effort.
+            }
           }
         },
         onUninstalled: () => {
@@ -232,6 +294,12 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
   }
   if (deps.extensionHostManager !== undefined) {
     bindings.push(...createExtensionHostBindings(deps.extensionHostManager))
+  }
+  if (deps.extensionActivationService !== undefined) {
+    bindings.push(...createExtensionActivationBindings(deps.extensionActivationService))
+  }
+  if (deps.extensionRuntimeService !== undefined) {
+    bindings.push(...createExtensionManagementBindings(deps.extensionRuntimeService))
   }
   if (deps.formatterService !== undefined) {
     bindings.push(...createFormatterBindings(deps.formatterService))

@@ -56,7 +56,7 @@ describe('extensions install surface', () => {
     assert.ok(panel.includes('No extensions installed yet'), 'empty Installed view must guide to Marketplace')
     assert.ok(panel.includes('>Installed</p>'), 'Installed view must carry its heading')
     assert.ok(panel.includes('listInstalledExtensions'), 'installed list must load from the bridge')
-    assert.ok(panel.includes('nothing runs yet'), 'installed packages must read as inert')
+    assert.ok(panel.includes('nothing runs at startup'), 'installed packages must read as on-demand only')
   })
 
   it('uninstall requires confirmation and sends identity only', () => {
@@ -102,44 +102,51 @@ describe('extensions install surface', () => {
     const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
     assert.ok(panel.includes('>Enable<') || panel.includes('Enable\n'), 'disabled rows must offer Enable')
     assert.ok(panel.includes('>Disable<') || panel.includes('Disable\n'), 'enabled rows must offer Disable')
-    assert.ok(panel.includes('>Enabled<') || panel.includes("'Enabled'"), 'enabled state label must render')
-    assert.ok(panel.includes('>Disabled<') || panel.includes("'Disabled'"), 'disabled state label must render')
+    assert.ok(panel.includes('Enabled · ') || panel.includes("'Enabled'"), 'enabled state label must render (with Loaded distinction)')
+    assert.ok(panel.includes('Disabled'), 'disabled state label must render')
     assert.ok(panel.includes('aria-label={`Enable ${item.displayName}`}'), 'Enable must be labelled')
     assert.ok(panel.includes('aria-label={`Disable ${item.displayName}`}'), 'Disable must be labelled')
     assert.ok(panel.includes('setExtensionEnabled'), 'state flips must go through the narrow bridge')
     assert.ok(panel.includes('Couldn’t update extension state.'), 'state failure copy must exist')
     assert.ok(panel.includes('stateChangingKeys.includes(key)'), 'rapid repeats must share one in-flight change')
-    assert.ok(panel.includes('Extension activation support is still in development.'), 'installed view must carry the single subtle activation note')
-    for (const falseClaim of ['>Running<', '>Active<', '>Loaded<', 'is running', 'is now active']) {
+    assert.ok(panel.includes('nothing runs at startup'), 'installed view must note on-demand activation only')
+    assert.ok(panel.includes('Enabled · Loaded') || panel.includes('Not loaded'), 'installed view may distinguish Loaded when main knows it')
+    for (const falseClaim of ['>Running<', '>Active<', 'is running', 'is now active']) {
       assert.ok(!panel.includes(falseClaim), `panel must never claim execution (${falseClaim})`)
     }
     const api = readRenderer('lib/stark-api.ts')
     assert.ok(api.includes('setExtensionEnabled'), 'bridge must expose the enable/disable helper')
   })
 
-  it('no execution, host takeover, or update surface exists', () => {
+  it('management surfaces stay narrow (details, updates, trust — never raw execution)', () => {
     const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
-    // Enable/Disable are management-state flips only (approved for
-    // activation, never running). Everything that would load, run, or
-    // update third-party code stays forbidden.
-    for (const forbidden of ['>Run<', '>Running<', '>Update<', 'Enable extensions', 'auto-update', 'Auto-update', '.vsix', 'activationEvents', 'postinstall', 'deactivate', 'child_process', 'require(', 'import(']) {
+    // Step 8+9 completion surfaces: details, manual updates with
+    // install-alongside semantics, explicit trust, proposals inbox.
+    // Everything that would load, run, or fetch third-party code from
+    // the renderer stays forbidden.
+    for (const forbidden of ['child_process', 'require(', 'import(', 'postinstall', '.vsix', 'activationEvents', 'dangerouslySetInnerHTML', 'innerHTML', '__html', 'fetch(']) {
       assert.ok(!panel.includes(forbidden), `panel must not contain ${forbidden}`)
+    }
+    for (const expected of ['Details', 'Update to', 'Automatically update extensions', 'Trust this extension', 'Proposed edits', 'Disable all', 'Enable all']) {
+      assert.ok(panel.includes(expected), `panel must contain ${expected}`)
     }
     const api = readRenderer('lib/stark-api.ts')
     assert.ok(!api.includes('vsix'), 'bridge helpers must not handle archives')
   })
 
-  it('host foundation UI shows status with start/stop only', () => {
+  it('host UI is read-only status (no manual host management)', () => {
     const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
     assert.ok(panel.includes('Extension Host'), 'host block must be present')
     assert.ok(panel.includes('Status: {hostState}'), 'status text must render')
-    assert.ok(panel.includes('Start host') && panel.includes('Stop host'), 'start/stop controls must exist')
-    assert.ok(panel.includes('cannot run yet'), 'panel must not imply extensions can run')
+    assert.ok(!panel.includes('Start host') && !panel.includes('Stop host'), 'normal users must not manage the host')
+    assert.ok(panel.includes('run on demand'), 'panel must describe on-demand execution')
     assert.ok(!panel.includes('Enable extensions'), 'must never be labeled Enable extensions')
     const api = readRenderer('lib/stark-api.ts')
-    for (const helper of ['getExtensionHostStatus', 'startExtensionHost', 'stopExtensionHost']) {
+    for (const helper of ['getExtensionHostStatus']) {
       assert.ok(api.includes(helper), `bridge must expose ${helper}`)
     }
+    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    assert.ok(settings.includes('Extension Host:'), 'developer diagnostics must retain host status under Settings About')
   })
 
   it('only normalized shapes cross the bridge', () => {
@@ -150,7 +157,7 @@ describe('extensions install surface', () => {
     assert.ok(!types.includes('downloadUrl') && !types.includes('vsix') && !types.includes('installPath'), 'paths and archives must not exist in the contract')
   })
 
-  it('only the extension channels exist; schema stays v18', () => {
+  it('only the extension channels exist; schema stays v19', () => {
     for (const file of ['features/extensions/ExtensionsPanel.tsx', 'lib/stark-api.ts']) {
       const source = readRenderer(file)
       assert.ok(!source.includes('ipcRenderer'), `${file} must not touch IPC directly`)
@@ -166,11 +173,26 @@ describe('extensions install surface', () => {
       "extensionsSetEnabled: 'stark:extensions:set-enabled'",
       "extensionsHostStatus: 'stark:extensions:host-status'",
       "extensionsHostStart: 'stark:extensions:host-start'",
-      "extensionsHostStop: 'stark:extensions:host-stop'"
+      "extensionsHostStop: 'stark:extensions:host-stop'",
+      "extensionsGetDetails: 'stark:extensions:get-details'",
+      "extensionsSetTrust: 'stark:extensions:set-trust'",
+      "extensionsAcknowledgeAndActivate: 'stark:extensions:acknowledge-and-activate'",
+      "extensionsFireTrigger: 'stark:extensions:fire-trigger'",
+      "extensionsListCommands: 'stark:extensions:list-commands'",
+      "extensionsInvokeCommand: 'stark:extensions:invoke-command'",
+      "extensionsQueryProviders: 'stark:extensions:query-providers'",
+      "extensionsGetDiagnostics: 'stark:extensions:get-diagnostics'",
+      "extensionsListEditProposals: 'stark:extensions:list-edit-proposals'",
+      "extensionsCheckUpdate: 'stark:extensions:check-update'",
+      "extensionsGetAutoUpdate: 'stark:extensions:get-auto-update'",
+      "extensionsSetAutoUpdate: 'stark:extensions:set-auto-update'",
+      "extensionsListPrompts: 'stark:extensions:list-prompts'",
+      "extensionsResolvePrompt: 'stark:extensions:resolve-prompt'",
+      "extensionsPushDocumentEvent: 'stark:extensions:push-document-event'",
+      "extensionsSetWorkspaceFolders: 'stark:extensions:set-workspace-folders'"
     ]) {
       assert.ok(constants.includes(channel), `${channel} must be narrowly scoped`)
-    }
-    const dir = join(process.cwd(), 'src', 'main', 'database', 'migrations')
+    }    const dir = join(process.cwd(), 'src', 'main', 'database', 'migrations')
     const files = readdirSync(dir).filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
     assert.ok(files.includes('019-message-attachments.ts'), 'migration 019 must exist (schema v19)')
     assert.ok(!files.some((file) => file.startsWith('020')), 'no migration 020 may appear')

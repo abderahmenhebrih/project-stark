@@ -124,7 +124,36 @@ import type {
   InstalledExtensionEntry,
   UninstalledExtensionEntry
 } from '../shared/extension-registry/types'
-import type { ExtensionHostStatus, ExtensionHostApi } from '../shared/extension-host/types'
+import type {
+  ExtensionActivationApi,
+  ExtensionActivationIdentity,
+  ExtensionActivationResult,
+  ExtensionDeactivationResult,
+  ExtensionHostApi,
+  ExtensionHostStatus
+} from '../shared/extension-host/types'
+import type {
+  ExtensionDetails,
+  ExtensionDiagnostic,
+  ExtensionDocumentEvent,
+  ExtensionEditProposal,
+  ExtensionIdentity,
+  ExtensionIconTheme,
+  ExtensionLanguage,
+  ExtensionManagementApi,
+  ExtensionNotification,
+  ExtensionPrompt,
+  ExtensionPromptResolution,
+  ExtensionProviderQuery,
+  ExtensionSnippet,
+  ExtensionStatusItem,
+  ExtensionThemeData,
+  ExtensionTrigger,
+  ExtensionTriggerOutcome,
+  ExtensionUpdateCheck,
+  ExtensionCommand,
+  SelectedThemeRef
+} from '../shared/extension-management/types'
 import type { FormatDocumentRequest, FormatDocumentResult, FormatterApi } from '../shared/formatter/types'
 import type { ChatAttachmentsApi, ChatAttachment, ChooseAttachmentsRequest } from '../shared/chat-attachments/types'
 import { isCloudAccountStatus } from '../shared/cloud-account/types'
@@ -418,6 +447,101 @@ function createFormatterApi(): FormatterApi {
   }
 }
 
+function createExtensionActivationApi(): ExtensionActivationApi {
+  return {
+    activate: (identity: ExtensionActivationIdentity): Promise<ExtensionActivationResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsActivate, identity) as Promise<ExtensionActivationResult>,
+    deactivate: (identity: ExtensionActivationIdentity): Promise<ExtensionDeactivationResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsDeactivate, identity) as Promise<ExtensionDeactivationResult>,
+    listActive: (): Promise<readonly string[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsListActive) as Promise<readonly string[]>
+  }
+}
+
+function isExtensionManagementEvent(value: unknown): value is { kind: string; payload: Record<string, unknown> } {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+  const record = value as Record<string, unknown>
+  return typeof record['kind'] === 'string' && typeof record['payload'] === 'object' && record['payload'] !== null
+}
+
+function createExtensionManagementApi(): ExtensionManagementApi {
+  return {
+    getDetails: (identity: ExtensionIdentity): Promise<ExtensionDetails> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsGetDetails, identity) as Promise<ExtensionDetails>,
+    setTrust: (identity: ExtensionIdentity, trusted: boolean): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsSetTrust, { ...identity, trusted }) as Promise<boolean>,
+    acknowledgeAndActivate: (identity: ExtensionIdentity): Promise<ExtensionActivationResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsAcknowledgeAndActivate, identity) as Promise<ExtensionActivationResult>,
+    fireTrigger: (trigger: ExtensionTrigger): Promise<ExtensionTriggerOutcome> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsFireTrigger, trigger) as Promise<ExtensionTriggerOutcome>,
+    listCommands: (): Promise<readonly ExtensionCommand[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsListCommands) as Promise<readonly ExtensionCommand[]>,
+    invokeCommand: (command: string, args?: readonly unknown[]): Promise<unknown> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsInvokeCommand, { command, args: args ?? [] }) as Promise<unknown>,
+    queryProviders: (query: ExtensionProviderQuery): Promise<Record<string, unknown> | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsQueryProviders, query) as Promise<Record<string, unknown> | null>,
+    getDiagnostics: (uri?: string): Promise<readonly ExtensionDiagnostic[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsGetDiagnostics, uri === undefined ? undefined : { uri }) as Promise<readonly ExtensionDiagnostic[]>,
+    getOutput: (channel: string): Promise<readonly string[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsGetOutput, { channel }) as Promise<readonly string[]>,
+    listOutputChannels: (): Promise<readonly string[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsListOutputChannels) as Promise<readonly string[]>,
+    getStatusItems: (): Promise<readonly ExtensionStatusItem[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsGetStatusItems) as Promise<readonly ExtensionStatusItem[]>,
+    listNotifications: (): Promise<readonly ExtensionNotification[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsListNotifications) as Promise<readonly ExtensionNotification[]>,
+    listEditProposals: (): Promise<readonly ExtensionEditProposal[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsListEditProposals) as Promise<readonly ExtensionEditProposal[]>,
+    dismissProposal: (proposalId: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsDismissProposal, { proposalId }) as Promise<boolean>,
+    getConfig: (extensionId: string): Promise<Record<string, string | number | boolean | null | readonly string[]>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsGetConfig, { extensionId }) as Promise<Record<string, string | number | boolean | null | readonly string[]>>,
+    updateConfig: (extensionId: string, key: string, value: string | number | boolean | null): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsUpdateConfig, { extensionId, key, value }) as Promise<void>,
+    checkUpdate: (identity: ExtensionIdentity): Promise<ExtensionUpdateCheck> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsCheckUpdate, identity) as Promise<ExtensionUpdateCheck>,
+    getAutoUpdate: (): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsGetAutoUpdate) as Promise<boolean>,
+    setAutoUpdate: (enabled: boolean): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsSetAutoUpdate, { enabled }) as Promise<boolean>,
+    listPrompts: (): Promise<readonly ExtensionPrompt[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsListPrompts) as Promise<readonly ExtensionPrompt[]>,
+    resolvePrompt: (resolution: ExtensionPromptResolution): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsResolvePrompt, resolution) as Promise<boolean>,
+    pushDocumentEvent: (event: ExtensionDocumentEvent): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsPushDocumentEvent, event) as Promise<void>,
+    setActiveEditor: (editor: { uri: string; languageId: string } | null): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsSetActiveEditor, editor) as Promise<void>,
+    setWorkspaceFolders: (folders: readonly { uri: string; name: string }[] | null): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsSetWorkspaceFolders, folders) as Promise<void>,
+    listLanguages: (): Promise<readonly ExtensionLanguage[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsListLanguages) as Promise<readonly ExtensionLanguage[]>,
+    getSnippets: (languageId?: string): Promise<readonly ExtensionSnippet[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsGetSnippets, languageId === undefined ? undefined : { languageId }) as Promise<readonly ExtensionSnippet[]>,
+    getThemeData: (identity: ExtensionIdentity, themeId: string): Promise<ExtensionThemeData | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsGetThemeData, { ...identity, themeId }) as Promise<ExtensionThemeData | null>,
+    getIconTheme: (identity: ExtensionIdentity, themeId: string): Promise<ExtensionIconTheme | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsGetIconTheme, { ...identity, themeId }) as Promise<ExtensionIconTheme | null>,
+    getSelectedThemes: (): Promise<{ editor: SelectedThemeRef | null; icon: SelectedThemeRef | null }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsGetSelectedThemes) as Promise<{ editor: SelectedThemeRef | null; icon: SelectedThemeRef | null }>,
+    setSelectedTheme: (kind: 'editor' | 'icon', ref: SelectedThemeRef | null): Promise<{ editor: SelectedThemeRef | null; icon: SelectedThemeRef | null }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsSetSelectedTheme, { kind, ref }) as Promise<{ editor: SelectedThemeRef | null; icon: SelectedThemeRef | null }>,
+    onEvent: (listener: (event: { kind: string; payload: Record<string, unknown> }) => void): (() => void) => {
+      const handler = (_event: unknown, payload: unknown): void => {
+        if (isExtensionManagementEvent(payload)) {
+          listener(payload)
+        }
+      }
+      ipcRenderer.on(IPC_CHANNELS.extensionsEvent, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.extensionsEvent, handler)
+      }
+    }
+  }
+}
+
 function createAttachmentsApi(): ChatAttachmentsApi {
   return {
     choose: (request: ChooseAttachmentsRequest): Promise<readonly ChatAttachment[]> =>
@@ -526,6 +650,8 @@ const starkApi: StarkApi = {
   account: createAccountApi(),
   extensions: createExtensionsApi(),
   extensionHost: createExtensionHostApi(),
+  extensionActivation: createExtensionActivationApi(),
+  extensionManagement: createExtensionManagementApi(),
   formatter: createFormatterApi(),
   attachments: createAttachmentsApi()
 }

@@ -29,6 +29,8 @@ import type { CredentialProtector } from '../ai/credential-protector'
 import type { AiProviderAdapter, ProviderGenerateRequest, ProviderGenerateResult } from '../ai/provider-adapter'
 import { ProviderRegistry } from '../ai/provider-adapter'
 import { ExtensionHostManager } from '../extension-host/extension-host-manager'
+import { ExtensionActivationService } from '../extension-host/extension-activation-service'
+import { ExtensionRuntimeService } from '../extension-host/extension-runtime-service'
 import { FormatterService } from '../formatter/formatter-service'
 import { ChatAttachmentService } from '../chat-attachments/service'
 import type { ProviderModel } from '../../shared/providers/types'
@@ -185,6 +187,39 @@ const EXPECTED_PRODUCTION_CHANNELS: readonly string[] = [
   IPC_CHANNELS.extensionsHostStatus,
   IPC_CHANNELS.extensionsHostStart,
   IPC_CHANNELS.extensionsHostStop,
+  IPC_CHANNELS.extensionsActivate,
+  IPC_CHANNELS.extensionsDeactivate,
+  IPC_CHANNELS.extensionsListActive,
+  IPC_CHANNELS.extensionsGetDetails,
+  IPC_CHANNELS.extensionsSetTrust,
+  IPC_CHANNELS.extensionsAcknowledgeAndActivate,
+  IPC_CHANNELS.extensionsFireTrigger,
+  IPC_CHANNELS.extensionsListCommands,
+  IPC_CHANNELS.extensionsInvokeCommand,
+  IPC_CHANNELS.extensionsQueryProviders,
+  IPC_CHANNELS.extensionsGetDiagnostics,
+  IPC_CHANNELS.extensionsGetOutput,
+  IPC_CHANNELS.extensionsListOutputChannels,
+  IPC_CHANNELS.extensionsGetStatusItems,
+  IPC_CHANNELS.extensionsListNotifications,
+  IPC_CHANNELS.extensionsListEditProposals,
+  IPC_CHANNELS.extensionsDismissProposal,
+  IPC_CHANNELS.extensionsGetConfig,
+  IPC_CHANNELS.extensionsUpdateConfig,
+  IPC_CHANNELS.extensionsCheckUpdate,
+  IPC_CHANNELS.extensionsGetAutoUpdate,
+  IPC_CHANNELS.extensionsSetAutoUpdate,
+  IPC_CHANNELS.extensionsListPrompts,
+  IPC_CHANNELS.extensionsResolvePrompt,
+  IPC_CHANNELS.extensionsPushDocumentEvent,
+  IPC_CHANNELS.extensionsSetActiveEditor,
+  IPC_CHANNELS.extensionsSetWorkspaceFolders,
+  IPC_CHANNELS.extensionsListLanguages,
+  IPC_CHANNELS.extensionsGetSnippets,
+  IPC_CHANNELS.extensionsGetThemeData,
+  IPC_CHANNELS.extensionsGetIconTheme,
+  IPC_CHANNELS.extensionsGetSelectedThemes,
+  IPC_CHANNELS.extensionsSetSelectedTheme,
   IPC_CHANNELS.formatterFormatDocument
 ]
 
@@ -201,6 +236,21 @@ describe('authoritative production IPC surface', () => {
         },
         { sendData: () => {}, sendExit: () => {} }
       )
+      const installServiceForSurface = new ExtensionInstallService(installRoot)
+      const hostManagerForSurface = new ExtensionHostManager({
+        bootstrapPath: join(installRoot, 'extension-host-bootstrap.js'),
+        userDataDir: installRoot,
+        launcher: {
+          fork: () => {
+            throw new Error('spawn must not run in surface tests')
+          }
+        }
+      })
+      const activationServiceForSurface = new ExtensionActivationService({
+        manager: hostManagerForSurface,
+        installService: installServiceForSurface,
+        installRoot
+      })
       const channels = createIpcBindings({
         settingsService: services.settingsService,
         profileService: services.profileService,
@@ -230,15 +280,14 @@ describe('authoritative production IPC surface', () => {
         usageService: services.usageService,
         cloudAccountService: services.cloudAccountService,
         extensionRegistryService: services.extensionRegistryService,
-        extensionInstallService: new ExtensionInstallService(installRoot),
-        extensionHostManager: new ExtensionHostManager({
-          bootstrapPath: join(installRoot, 'extension-host-bootstrap.js'),
-          userDataDir: installRoot,
-          launcher: {
-            fork: () => {
-              throw new Error('spawn must not run in surface tests')
-            }
-          }
+        extensionInstallService: installServiceForSurface,
+        extensionHostManager: hostManagerForSurface,
+        extensionActivationService: activationServiceForSurface,
+        extensionRuntimeService: new ExtensionRuntimeService({
+          manager: hostManagerForSurface,
+          activationService: activationServiceForSurface,
+          installService: installServiceForSurface,
+          installRoot
         }),
         formatterService: new FormatterService({
           manager: new ExtensionHostManager({
@@ -278,7 +327,7 @@ describe('authoritative production IPC surface', () => {
     // Channels outside createIpcBindings by design: getAppInfo is
     // registered directly, terminal data/exit and runtime/account updates are
     // main-to-renderer events, never invoke bindings.
-    for (const standalone of [IPC_CHANNELS.getAppInfo, IPC_CHANNELS.terminalData, IPC_CHANNELS.terminalExit, IPC_CHANNELS.runtimeUpdated, IPC_CHANNELS.accountUpdated]) {
+    for (const standalone of [IPC_CHANNELS.getAppInfo, IPC_CHANNELS.terminalData, IPC_CHANNELS.terminalExit, IPC_CHANNELS.runtimeUpdated, IPC_CHANNELS.accountUpdated, IPC_CHANNELS.extensionsEvent]) {
       assert.ok(all.delete(standalone), `${standalone} must exist`)
     }
     assert.deepEqual([...all].sort(), [...EXPECTED_PRODUCTION_CHANNELS].sort())

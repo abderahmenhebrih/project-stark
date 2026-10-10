@@ -213,6 +213,47 @@ export class ExtensionRegistryService {
     return this.fetchCatalog(buildFeaturedUrl())
   }
 
+  /**
+   * Latest catalog version for one extension (Step 9 manual updates).
+   * One bounded metadata request, zero retries; failures resolve to
+   * null (offline-safe) so callers show no update instead of errors.
+   */
+  async latestVersion(namespace: string, name: string): Promise<string | null> {
+    if (typeof namespace !== 'string' || typeof name !== 'string' || namespace === '' || name === '') {
+      return null
+    }
+    const url = new URL(
+      `/api/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+      OPEN_VSX_BASE_URL
+    ).toString()
+    let response: { readonly ok: boolean; readonly status: number; json(): Promise<unknown> }
+    try {
+      response = await this.fetchImpl(url, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(EXTENSION_REGISTRY_TIMEOUT_MS)
+      })
+    } catch {
+      return null
+    }
+    if (!response.ok) {
+      return null
+    }
+    let payload: unknown
+    try {
+      payload = await response.json()
+    } catch {
+      return null
+    }
+    if (typeof payload !== 'object' || payload === null) {
+      return null
+    }
+    const version = (payload as Record<string, unknown>)['version']
+    if (typeof version !== 'string' || version === '' || version.length > 64) {
+      return null
+    }
+    return version
+  }
+
   private async fetchCatalog(url: string): Promise<ExtensionSearchResult> {
     let response: { readonly ok: boolean; readonly status: number; json(): Promise<unknown> }
     try {

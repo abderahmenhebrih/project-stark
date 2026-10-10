@@ -46,6 +46,19 @@ const BASENAME_LANGUAGES: Readonly<Record<string, string>> = {
 
 /** Monaco language id for a workspace-relative path, or 'plaintext'. */
 export function detectEditorLanguage(relativePath: string): string {
+  return detectEditorLanguageWithOverrides(relativePath, null)
+}
+
+/**
+ * Override-aware detection: contributed languages map extra file
+ * extensions to Monaco ids. Overrides win over built-ins only for
+ * exact extension matches; unknown extensions still fall back to
+ * plaintext. Pure and bounded.
+ */
+export function detectEditorLanguageWithOverrides(
+  relativePath: string,
+  overrides: Readonly<Record<string, string>> | null
+): string {
   const normalized = relativePath.replace(/\\/g, '/').toLowerCase()
   const segments = normalized.split('/')
   const basename = segments[segments.length - 1] ?? ''
@@ -58,5 +71,37 @@ export function detectEditorLanguage(relativePath: string): string {
     return 'plaintext'
   }
   const extension = basename.slice(dot + 1)
+  if (overrides !== null) {
+    const override = overrides[extension]
+    if (typeof override === 'string' && override !== '' && /^[A-Za-z0-9_-]+$/.test(override)) {
+      return override
+    }
+  }
   return EXTENSION_LANGUAGES[extension] ?? 'plaintext'
+}
+
+/**
+ * Builds the detection override map from contributed languages
+ * (extension → language id, bounded, first registration wins).
+ */
+export function buildLanguageOverrides(
+  languages: readonly { id: string; extensions: readonly string[] }[]
+): Record<string, string> {
+  const overrides: Record<string, string> = {}
+  for (const language of languages.slice(0, 128)) {
+    if (typeof language.id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(language.id)) {
+      continue
+    }
+    for (const extension of language.extensions.slice(0, 32)) {
+      if (typeof extension !== 'string') {
+        continue
+      }
+      const key = extension.toLowerCase().replace(/^\./, '')
+      if (key === '' || key.length > 32 || overrides[key] !== undefined) {
+        continue
+      }
+      overrides[key] = language.id
+    }
+  }
+  return overrides
 }

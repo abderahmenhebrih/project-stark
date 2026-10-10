@@ -17,10 +17,13 @@ const DEST_DIR = join(ROOT, 'out', 'main');
 const SHIPPED_HOST_FILES = [
   // Bootstrap entrypoint (forked by Electron utilityProcess).
   { src: 'bootstrap.js', dest: 'extension-host-bootstrap.js' },
-  // Formatter pilot modules (loaded only via the bootstrap's narrow
-  // dynamic import of a main-supplied STARK-owned file URL). Copied
-  // under identical names so the formatter module's relative loader
-  // resolution (`./vscode-loader.mjs`) holds in src and in out/.
+  // Generic activation core + formatter adapter (loaded only via the
+  // bootstrap's narrow dynamic imports of STARK-owned sibling URLs).
+  // Copied under identical names so relative loader resolution
+  // (`./vscode-loader.mjs`, `./generic-host.mjs`) holds in src and
+  // in out/.
+  { src: 'generic-host.mjs', dest: 'generic-host.mjs' },
+  { src: 'extension-process.mjs', dest: 'extension-process.mjs' },
   { src: 'formatter-host.mjs', dest: 'formatter-host.mjs' },
   { src: 'vscode-shim.mjs', dest: 'vscode-shim.mjs' },
   { src: 'vscode-loader.mjs', dest: 'vscode-loader.mjs' }

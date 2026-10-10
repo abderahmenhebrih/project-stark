@@ -18,6 +18,9 @@ import {
   ExtensionInstallService
 } from './extension-install/extension-install-service'
 import { ExtensionHostManager, type ExtensionHostLauncher } from './extension-host/extension-host-manager'
+import { ExtensionActivationService } from './extension-host/extension-activation-service'
+import { ExtensionRuntimeService } from './extension-host/extension-runtime-service'
+import { createWorkspaceFileAccess } from './extension-host/extension-workspace-access'
 import { FormatterService } from './formatter/formatter-service'
 import { electronAttachmentPicker } from './chat-attachments/picker'
 import { ATTACHMENT_PROTOCOL, serveAttachmentRequest } from './chat-attachments/protocol'
@@ -134,6 +137,23 @@ function broadcastAccountStatus(status: CloudAccountStatus): void {
     try {
       if (!window.isDestroyed()) {
         window.webContents.send(IPC_CHANNELS.accountUpdated, status)
+      }
+    } catch {
+      // Best effort streaming: a destroyed renderer stops receiving.
+    }
+  }
+}
+
+/**
+ * Fans extension runtime events (prompts, notifications, clipboard,
+ * diagnostics, proposals) out to every open renderer. Payloads are
+ * bounded, validated management records only — no paths, no code.
+ */
+function broadcastExtensionEvent(event: { kind: string; payload: Record<string, unknown> }): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    try {
+      if (!window.isDestroyed()) {
+        window.webContents.send(IPC_CHANNELS.extensionsEvent, event)
       }
     } catch {
       // Best effort streaming: a destroyed renderer stops receiving.
@@ -439,12 +459,64 @@ void app.whenReady().then(() => {
     undefined,
     services.extensionIconService
   )
+  // Generic activation core (demand-driven only, never at startup):
+  // any installed + enabled extension with a verified `main`
+  // entrypoint may activate inside the isolated host. Prettier uses
+  // the same pipeline (no allowlist).
+  const extensionActivationService = new ExtensionActivationService({
+    manager: extensionHostManager,
+    installService: extensionInstallService,
+    installRoot: join(app.getPath('userData'), EXTENSION_INSTALL_DIR_NAME)
+  })
+  // Generic runtime coordinator (trust, triggers, providers, prompts,
+  // diagnostics, proposals, updates). Workspace file access is
+  // root-contained and read-only; catalog versions feed manual update
+  // checks (offline-safe). Events fan out to renderers above.
+  const extensionWorkspaceFiles = createWorkspaceFileAccess({
+    workspaceRootProvider: () => {
+      try {
+        return starkDatabase.getWorkspaces().getMostRecentlyOpened()?.rootPath ?? null
+      } catch {
+        return null
+      }
+    }
+  })
+  const extensionRuntimeService = new ExtensionRuntimeService({
+    manager: extensionHostManager,
+    activationService: extensionActivationService,
+    installService: extensionInstallService,
+    installRoot: join(app.getPath('userData'), EXTENSION_INSTALL_DIR_NAME),
+    workspaceFiles: extensionWorkspaceFiles,
+    workspaceRootProvider: () => {
+      try {
+        return starkDatabase.getWorkspaces().getMostRecentlyOpened()?.rootPath ?? null
+      } catch {
+        return null
+      }
+    },
+    catalogVersions: {
+      latestVersion: ({ namespace, name }: { namespace: string; name: string }): Promise<string | null> => {
+        const registry = services.extensionRegistryService
+        if (registry === undefined) {
+          return Promise.resolve(null)
+        }
+        return registry.latestVersion(namespace, name)
+      }
+    }
+  })
+  extensionRuntimeService.setPromptListener((prompt) => {
+    broadcastExtensionEvent({ kind: 'prompt', payload: { ...(prompt as unknown as Record<string, unknown>) } })
+  })
+  extensionRuntimeService.setEventListener((event) => {
+    broadcastExtensionEvent(event)
+  })
   const formatterService = new FormatterService({
     manager: extensionHostManager,
     installService: extensionInstallService,
     filesService: services.workspaceFilesService,
     workspaces: starkDatabase.getWorkspaces(),
-    formatterModuleUrl: pathToFileURL(join(__dirname, 'formatter-host.mjs')).href
+    formatterModuleUrl: pathToFileURL(join(__dirname, 'formatter-host.mjs')).href,
+    activationService: extensionActivationService
   })
   registerIpcHandlers({    settingsService: services.settingsService,
     profileService: services.profileService,
@@ -455,6 +527,8 @@ void app.whenReady().then(() => {
     extensionRegistryService: services.extensionRegistryService,
     extensionInstallService,
     extensionHostManager,
+    extensionActivationService,
+    extensionRuntimeService,
     formatterService,
     attachmentService: services.chatAttachmentService,
     attachmentPicker: electronAttachmentPicker,
