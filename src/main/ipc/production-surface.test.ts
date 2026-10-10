@@ -221,6 +221,7 @@ const EXPECTED_PRODUCTION_CHANNELS: readonly string[] = [
   IPC_CHANNELS.extensionsGetIconTheme,
   IPC_CHANNELS.extensionsGetSelectedThemes,
   IPC_CHANNELS.extensionsSetSelectedTheme,
+  IPC_CHANNELS.extensionsListJsonSchemas,
   IPC_CHANNELS.formatterFormatDocument
 ]
 

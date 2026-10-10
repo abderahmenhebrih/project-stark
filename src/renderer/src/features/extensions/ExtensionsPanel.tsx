@@ -73,7 +73,13 @@ function formatDownloads(count: number): string {
 }
 
 function ExtensionIcon({ iconUrl }: { readonly iconUrl: string | null }): ReactElement {
-  const [failed, setFailed] = useState(false)
+  // Catalog rows reuse component instances across icon-URL changes
+  // (row keys omit the version): failure is recorded per URL, so a
+  // once-failed entry retries a new opaque URL instead of sticking
+  // on the generic fallback. No effect needed — a URL change reads
+  // as a fresh (unfailed) entry on the next render.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
+  const failed = iconUrl !== null && failedUrl === iconUrl
   if (iconUrl === null || failed) {
     return (
       <span className="extensions__icon-fallback" aria-hidden="true">
@@ -88,7 +94,11 @@ function ExtensionIcon({ iconUrl }: { readonly iconUrl: string | null }): ReactE
       alt=""
       draggable={false}
       loading="lazy"
-      onError={() => setFailed(true)}
+      onError={() => {
+        if (iconUrl !== null) {
+          setFailedUrl(iconUrl)
+        }
+      }}
     />
   )
 }
@@ -802,15 +812,14 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
     )
   }
 
-  function renderCompatibility(details: ExtensionDetails | undefined, installed: boolean): ReactElement {
+  /**
+   * Compatibility diagnostics for the Details drawer ONLY (never the
+   * Installed card): badge plus the exact technical reasons. The
+   * card shows a compact state word instead.
+   */
+  function renderCompatibility(details: ExtensionDetails | undefined): ReactElement {
     if (details === undefined) {
-      // Installed rows resolve their real badge through the
-      // auto-loaded details above: the pre-install "unknown" copy
-      // must never appear on an installed item.
-      if (installed) {
-        return <span className="extensions__state-label">Checking compatibility…</span>
-      }
-      return <CompatBadge level="unknown" />
+      return <span className="extensions__state-label">Checking compatibility…</span>
     }
     return (
       <span>
@@ -824,6 +833,37 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
         )}
       </span>
     )
+  }
+
+  /**
+   * Compact status word for the Installed card (truthful, no
+   * diagnostics): Failed only on a recorded activation failure,
+   * Loaded only from host-active ids, Needs attention when the
+   * resolved compatibility is partial/unsupported. Exact reasons
+   * live in Details.
+   */
+  function installedStatusCopy(
+    item: InstalledExtensionEntry,
+    loaded: boolean,
+    details: ExtensionDetails | undefined,
+    failed: boolean
+  ): string {
+    if (failed) {
+      return 'Failed'
+    }
+    if (!item.enabled) {
+      return 'Disabled'
+    }
+    if (loaded) {
+      return 'Enabled · Loaded'
+    }
+    if (details === undefined) {
+      return 'Enabled'
+    }
+    if (details.compatibility === 'partial' || details.compatibility === 'unsupported') {
+      return 'Enabled · Needs attention'
+    }
+    return 'Enabled · Not loaded'
   }
 
   function renderInstalledRow(item: InstalledExtensionEntry): ReactElement {
@@ -842,19 +882,92 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
               {item.namespace} · {item.version}
             </span>
             <span className="extensions__state-label">
-              {failed
-                ? 'Failed'
-                : item.enabled
-                  ? loaded
-                    ? 'Enabled · Loaded'
-                    : 'Enabled · Not loaded'
-                  : 'Disabled'}
+              {installedStatusCopy(item, loaded, details, failed)}
             </span>
-            {renderCompatibility(details, true)}
-            {update?.updateAvailable === true && update.latestVersion !== null && (
-              <span className="extensions__state-label">Update available: {update.latestVersion}</span>
-            )}
           </span>
+          <div className="extensions__menu">
+            <button
+              className="extensions__menu-toggle"
+              type="button"
+              onClick={() => setMenuOpenKey(menuOpenKey === key ? null : key)}
+              aria-expanded={menuOpenKey === key}
+              aria-label={`More actions for ${item.displayName}`}
+              title="More actions"
+            >
+              <StarkIcon name="more" size={16} />
+            </button>
+            {menuOpenKey === key && (
+              <div
+                className="extensions__menu-list"
+                role="menu"
+                aria-label={`${item.displayName} actions`}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.stopPropagation()
+                    setMenuOpenKey(null)
+                  }
+                }}
+              >
+                <button
+                  className="extensions__menu-item"
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpenKey(null)
+                    setSelectedKey(selectedKey === key ? null : key)
+                    setSelectedCatalogId(null)
+                    loadDetails(item)
+                  }}
+                >
+                  {selectedKey === key ? 'Hide details' : 'Details'}
+                </button>
+                {failed ? (
+                  <button
+                    className="extensions__menu-item"
+                    type="button"
+                    role="menuitem"
+                    disabled={runBusyKeys.includes(key)}
+                    onClick={() => {
+                      setMenuOpenKey(null)
+                      handleRetryFailed(item)
+                    }}
+                    aria-label={`Retry activation of ${item.displayName}`}
+                  >
+                    {runBusyKeys.includes(key) ? 'Retrying…' : 'Retry activation'}
+                  </button>
+                ) : (
+                  <button
+                    className="extensions__menu-item"
+                    type="button"
+                    role="menuitem"
+                    disabled={runBusyKeys.includes(key)}
+                    onClick={() => {
+                      setMenuOpenKey(null)
+                      handleRun(item)
+                    }}
+                    aria-label={`Run ${item.displayName}`}
+                  >
+                    {runBusyKeys.includes(key) ? 'Running…' : 'Run'}
+                  </button>
+                )}
+                {update?.updateAvailable === true && update.latestVersion !== null && (
+                  <button
+                    className="extensions__menu-item"
+                    type="button"
+                    role="menuitem"
+                    disabled={updatingKeys.includes(key)}
+                    onClick={() => {
+                      setMenuOpenKey(null)
+                      handleUpdate(item)
+                    }}
+                    aria-label={`Update ${item.displayName} to ${update.latestVersion}`}
+                  >
+                    {updatingKeys.includes(key) ? 'Updating…' : `Update to ${update.latestVersion}`}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
         <div className="extensions__installed-actions">
         {uninstallingKeys.includes(key) ? (
@@ -899,89 +1012,6 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
             >
               Uninstall
             </button>
-            <div className="extensions__menu">
-              <button
-                className="extensions__menu-toggle"
-                type="button"
-                onClick={() => setMenuOpenKey(menuOpenKey === key ? null : key)}
-                aria-expanded={menuOpenKey === key}
-                aria-label={`More actions for ${item.displayName}`}
-                title="More actions"
-              >
-                <StarkIcon name="more" size={16} />
-              </button>
-              {menuOpenKey === key && (
-                <div
-                  className="extensions__menu-list"
-                  role="menu"
-                  aria-label={`${item.displayName} actions`}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Escape') {
-                      event.stopPropagation()
-                      setMenuOpenKey(null)
-                    }
-                  }}
-                >
-                  <button
-                    className="extensions__menu-item"
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setMenuOpenKey(null)
-                      setSelectedKey(selectedKey === key ? null : key)
-                      setSelectedCatalogId(null)
-                      loadDetails(item)
-                    }}
-                  >
-                    {selectedKey === key ? 'Hide details' : 'Details'}
-                  </button>
-                  {failed ? (
-                    <button
-                      className="extensions__menu-item"
-                      type="button"
-                      role="menuitem"
-                      disabled={runBusyKeys.includes(key)}
-                      onClick={() => {
-                        setMenuOpenKey(null)
-                        handleRetryFailed(item)
-                      }}
-                      aria-label={`Retry activation of ${item.displayName}`}
-                    >
-                      {runBusyKeys.includes(key) ? 'Retrying…' : 'Retry activation'}
-                    </button>
-                  ) : (
-                    <button
-                      className="extensions__menu-item"
-                      type="button"
-                      role="menuitem"
-                      disabled={runBusyKeys.includes(key)}
-                      onClick={() => {
-                        setMenuOpenKey(null)
-                        handleRun(item)
-                      }}
-                      aria-label={`Run ${item.displayName}`}
-                    >
-                      {runBusyKeys.includes(key) ? 'Running…' : 'Run'}
-                    </button>
-                  )}
-                  {update?.updateAvailable === true && update.latestVersion !== null && (
-                    <button
-                      className="extensions__menu-item"
-                      type="button"
-                      role="menuitem"
-                      disabled={updatingKeys.includes(key)}
-                      onClick={() => {
-                        setMenuOpenKey(null)
-                        handleUpdate(item)
-                      }}
-                      aria-label={`Update ${item.displayName} to ${update.latestVersion}`}
-                    >
-                      {updatingKeys.includes(key) ? 'Updating…' : `Update to ${update.latestVersion}`}
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
           </>
         )}
         </div>
@@ -996,6 +1026,10 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
                   {details.namespace} · {details.version} · {details.trusted ? 'Trusted' : 'Not trusted'}
                   {details.active ? ' · Active now' : ''}
                 </p>
+                {renderCompatibility(details)}
+                {update?.updateAvailable === true && update.latestVersion !== null && (
+                  <p className="extensions__detail-meta">Update available: {update.latestVersion}</p>
+                )}
                 {details.capabilities.length > 0 && (
                   <p className="extensions__detail-meta">Capabilities: {details.capabilities.join(' · ')}</p>
                 )}
@@ -1243,7 +1277,17 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
         <>
           <p className="extensions__group-name">Installed</p>
           <p className="extensions__note">Extensions activate on demand only — nothing runs at startup.</p>
-          <div className="extensions__row-actions">
+          {installedItems.length === 0 ? (
+            <p className="extensions__status" role="status">
+              No extensions installed yet. Find them in the Marketplace view.
+            </p>
+          ) : (
+            <ul className="extensions__list" aria-label="Installed extensions">
+              {installedItems.map((item) => renderInstalledRow(item))}
+            </ul>
+          )}
+          <p className="extensions__group-name">Extension management</p>
+          <div className="extensions__management">
             <button
               className="extensions__secondary"
               type="button"
@@ -1302,15 +1346,6 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
                 </button>
               </span>
             </p>
-          )}
-          {installedItems.length === 0 ? (
-            <p className="extensions__status" role="status">
-              No extensions installed yet. Find them in the Marketplace view.
-            </p>
-          ) : (
-            <ul className="extensions__list" aria-label="Installed extensions">
-              {installedItems.map((item) => renderInstalledRow(item))}
-            </ul>
           )}
           {themeChoices.length > 0 && (
             <>

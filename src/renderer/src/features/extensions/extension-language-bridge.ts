@@ -1,5 +1,6 @@
 import type * as MonacoApi from 'monaco-editor/editor/editor.api'
-import { getExtensionIconTheme, getExtensionSnippets, getExtensionThemeData, getSelectedExtensionThemes, listExtensionLanguages, queryExtensionProviders } from '../../lib/stark-api'
+import { getExtensionIconTheme, getExtensionSnippets, getExtensionThemeData, getSelectedExtensionThemes, listExtensionJsonSchemas, listExtensionLanguages, queryExtensionProviders } from '../../lib/stark-api'
+import { mapJsonSchemasForMonaco } from './json-schema-mapping'
 import { applyExtensionTheme, registerStarkTheme } from '../editor/editor-theme'
 import { buildLanguageOverrides } from '../editor/editor-language'
 
@@ -608,6 +609,50 @@ export function notifyEditorThemeChanged(): void {
   } catch {
     // Best effort fan-out.
   }
+}
+
+interface BridgeJsonDefaults {  diagnosticsOptions?: { schemas?: readonly unknown[]; validate?: boolean; enableSchemaRequest?: boolean }
+  setDiagnosticsOptions?: (options: Record<string, unknown>) => void
+}
+
+/**
+ * Applies contributed `jsonValidation` schemas into Monaco's JSON
+ * language defaults (once per in-flight refresh, demand-driven on
+ * editor mount — never polled). Schemas arrive inline from
+ * main-owned resolution (local containment reads + bounded
+ * main-owned remote fetch); the renderer performs no schema
+ * networking (`enableSchemaRequest: false`). Owner identity is
+ * encoded in each schema URI so disable/uninstall (which drops the
+ * entry main-side) removes it on the next refresh. STARK shell
+ * configuration is preserved: existing diagnostics options are
+ * spread underneath and only `schemas` + `enableSchemaRequest` are
+ * set. No-ops when the Monaco JSON contribution is absent.
+ */
+export function ensureExtensionJsonSchemas(monaco: BridgeMonaco): void {
+  void queryWithSingleFlight('json-schemas', () =>
+    listExtensionJsonSchemas().then(
+      (schemas) => ({ schemas }) as unknown as Record<string, unknown> | null,
+      () => null
+    )
+  ).then((result) => {
+    try {
+      const json = (monaco.languages as unknown as { json?: { jsonDefaults?: BridgeJsonDefaults } }).json
+      const defaults = json?.jsonDefaults
+      if (defaults === undefined || typeof defaults.setDiagnosticsOptions !== 'function') {
+        return
+      }
+      const incoming = ((result as unknown as { schemas?: readonly unknown[] } | null)?.schemas ?? []) as readonly unknown[]
+      const mapped = mapJsonSchemasForMonaco(incoming)
+      const current = (defaults.diagnosticsOptions ?? {}) as Record<string, unknown>
+      defaults.setDiagnosticsOptions({
+        ...current,
+        schemas: mapped,
+        enableSchemaRequest: false
+      })
+    } catch {
+      // Schema wiring is best-effort; the editor stands alone.
+    }
+  })
 }
 
 export interface ExtensionMarkerInput {

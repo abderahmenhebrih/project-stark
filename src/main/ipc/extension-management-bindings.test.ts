@@ -62,7 +62,8 @@ describe('extension management IPC bindings', () => {
         IPC_CHANNELS.extensionsGetThemeData,
         IPC_CHANNELS.extensionsGetIconTheme,
         IPC_CHANNELS.extensionsGetSelectedThemes,
-        IPC_CHANNELS.extensionsSetSelectedTheme
+        IPC_CHANNELS.extensionsSetSelectedTheme,
+        IPC_CHANNELS.extensionsListJsonSchemas
       ]) {
         assert.ok(channels.includes(expected), `management bindings must include ${expected}`)
       }
@@ -110,6 +111,7 @@ describe('extension management IPC bindings', () => {
       assert.deepEqual(await byChannel.get(IPC_CHANNELS.extensionsListEditProposals)?.invoke(undefined), [])
       assert.deepEqual(await byChannel.get(IPC_CHANNELS.extensionsGetAutoUpdate)?.invoke(undefined), false)
       assert.deepEqual(await byChannel.get(IPC_CHANNELS.extensionsListPrompts)?.invoke(undefined), [])
+      assert.deepEqual(await byChannel.get(IPC_CHANNELS.extensionsListJsonSchemas)?.invoke(undefined), [])
     } finally {
       runtime.dispose()
       rmSync(dir, { recursive: true, force: true })

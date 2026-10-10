@@ -144,6 +144,7 @@ export const IPC_CHANNELS = {
   extensionsGetIconTheme: 'stark:extensions:get-icon-theme',
   extensionsGetSelectedThemes: 'stark:extensions:get-selected-themes',
   extensionsSetSelectedTheme: 'stark:extensions:set-selected-theme',
+  extensionsListJsonSchemas: 'stark:extensions:list-json-schemas',
   extensionsEvent: 'stark:extensions:event',
   formatterFormatDocument: 'stark:formatter:format-document'
 } as const

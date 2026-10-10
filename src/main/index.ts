@@ -20,6 +20,12 @@ import {
 import { ExtensionHostManager, type ExtensionHostLauncher } from './extension-host/extension-host-manager'
 import { ExtensionActivationService } from './extension-host/extension-activation-service'
 import { ExtensionRuntimeService } from './extension-host/extension-runtime-service'
+import {
+  devExtensionHostSourceDir,
+  ensureExtensionHostArtifacts,
+  extensionHostArtifactsComplete,
+  missingExtensionHostArtifacts
+} from './extension-host/extension-host-paths'
 import { createWorkspaceFileAccess } from './extension-host/extension-workspace-access'
 import { FormatterService } from './formatter/formatter-service'
 import { electronAttachmentPicker } from './chat-attachments/picker'
@@ -428,6 +434,33 @@ void app.whenReady().then(() => {
   // STARK-owned bootstrap only. Never autostarted; the renderer may
   // start/stop it explicitly through narrow IPC. No extension code
   // is ever loaded here.
+  //
+  // Artifact guarantee (corrective pass): the fork path below must
+  // exist BEFORE any activation attempt. A missing bootstrap
+  // previously surfaced as a bare `host-unavailable` with stderr
+  // suppressed — in dev the artifacts self-heal here from the
+  // audited source tree (app-path-derived, never hardcoded); in
+  // packaged builds a missing artifact logs an actionable main-side
+  // error (the build copy step owns delivery there).
+  if (!extensionHostArtifactsComplete(__dirname)) {
+    if (!app.isPackaged) {
+      try {
+        const copied = ensureExtensionHostArtifacts(__dirname, devExtensionHostSourceDir(app.getAppPath()))
+        if (copied.length > 0 && !app.isPackaged) {
+          console.log(`[STARK] extension host artifacts restored: ${copied.join(', ')}`)
+        }
+      } catch (error: unknown) {
+        console.error(
+          `[STARK] extension host artifacts are missing and could not be restored: ${missingExtensionHostArtifacts(__dirname).join(', ')}`
+        )
+        void error
+      }
+    } else {
+      console.error(
+        `[STARK] extension host artifacts are missing from the package: ${missingExtensionHostArtifacts(__dirname).join(', ')}`
+      )
+    }
+  }
   const extensionHostLauncher: ExtensionHostLauncher = {
     fork: (modulePath, options) => utilityProcess.fork(modulePath, [], options)
   }

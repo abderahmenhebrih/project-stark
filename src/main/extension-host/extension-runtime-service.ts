@@ -32,6 +32,14 @@ import { readExtensionConfigs, writeExtensionConfigValue, type ExtensionConfigVa
 import { writeStorageValue } from './extension-storage'
 import { analyzeCompatibility, type CompatibilityLevel } from './extension-compat'
 import { parseContributions } from './extension-contributions'
+import {
+  JSON_SCHEMA_MAX_MERGED,
+  fetchRemoteJsonSchema,
+  isLocalSchemaUrl,
+  readLocalJsonSchema,
+  toMonacoFilePatterns,
+  type ResolvedJsonSchema
+} from './extension-json-validation'
 import { checkExtensionUpdate, type CatalogVersionSource } from './extension-updates'
 import { readExtensionPrefs, writeExtensionPrefs, type SelectedThemeRef } from './extension-prefs'
 import { ExtensionWatcherService } from './extension-watchers'
@@ -247,6 +255,8 @@ export class ExtensionRuntimeService {
   private readonly unsupportedApis = new Map<string, Set<string>>()
   private readonly childProcessCounts = new Map<string, number>()
   private readonly registrationCounts = new Map<string, { commands: number; providers: readonly string[] }>()
+  /** Session cache of remote JSON schemas (url → schema or null-unavailable; no retries, no TTL). */
+  private readonly remoteSchemaCache = new Map<string, Record<string, unknown> | null>()
   private readonly unsubscribe: () => void
   private promptListener: ((prompt: PromptRecord) => void) | null = null
   private eventListener: ((event: { kind: string; payload: Record<string, unknown> }) => void) | null = null
@@ -748,13 +758,18 @@ export class ExtensionRuntimeService {
       : null
     const unsupported = [...(this.unsupportedApis.get(id) ?? [])]
     const failure = this.failures.get(id)
+    // One requirement → one reason: manifest keys already contain
+    // every contribution class (otherKeys is a subset for reporting),
+    // so merging both without dedupe double-flagged keys such as
+    // jsonValidation. Dedupe here; the analyzer dedupes again.
+    const contributesKeys = [
+      ...(manifest?.contributes !== null && manifest?.contributes !== undefined ? Object.keys(manifest.contributes) : []),
+      ...(contributes?.otherKeys ?? [])
+    ]
     const compat = analyzeCompatibility({
       hasMain: manifest?.main !== null && manifest?.main !== undefined,
       hasBrowserOnly: (manifest?.main === null || manifest === null) && manifest?.browser !== null && manifest?.browser !== undefined,
-      contributesKeys: [
-        ...(manifest?.contributes !== null && manifest?.contributes !== undefined ? Object.keys(manifest.contributes) : []),
-        ...(contributes?.otherKeys ?? [])
-      ].slice(0, 32),
+      contributesKeys: [...new Set(contributesKeys)].slice(0, 32),
       unsupportedApis: unsupported.slice(0, 16),
       proposedApis: [],
       hasNativeModules: false,
@@ -1104,9 +1119,92 @@ export class ExtensionRuntimeService {
     return { fileExtensions, fileNames, icons }
   }
 
+  /**
+   * Merged `contributes.jsonValidation` schemas across enabled
+   * installed extensions (bounded, deterministic). Local schemas are
+   * read containment-checked from the owning extension directory;
+   * remote schemas resolve through the session-cached bounded
+   * main-owned fetch (offline/unreachable entries are skipped, never
+   * renderer-fetched). Derived from current enabled state on every
+   * call, so disable/uninstall drops that owner's entries with no
+   * separate unregister path. Returns inline schemas for Monaco —
+   * the renderer performs no schema networking.
+   */
+  async listJsonSchemas(): Promise<readonly ResolvedJsonSchema[]> {
+    const snapshots = await this.installedManifests()
+    let enabledFlags: Map<string, boolean>
+    try {
+      const listed = await this.installService.listInstalled()
+      enabledFlags = new Map(
+        listed.map((entry) => [`${entry.namespace}.${entry.name}@${entry.version}`, entry.enabled])
+      )
+    } catch {
+      enabledFlags = new Map()
+    }
+    const out: ResolvedJsonSchema[] = []
+    const sorted = snapshots.sort((a, b) => extensionInstanceId(a.identity).localeCompare(extensionInstanceId(b.identity)))
+    for (const snapshot of sorted) {
+      if (out.length >= JSON_SCHEMA_MAX_MERGED) {
+        break
+      }
+      const owner = extensionInstanceId(snapshot.identity)
+      if (enabledFlags.get(owner) === false) {
+        continue
+      }
+      if (snapshot.manifest?.contributes == null) {
+        continue
+      }
+      const parsed = parseContributions(snapshot.manifest.contributes)
+      if (parsed.jsonValidation.length === 0) {
+        continue
+      }
+      const extensionBase = join(this.installRoot, `${snapshot.identity.namespace}.${snapshot.identity.name}`, snapshot.identity.version, 'extension')
+      for (const entry of parsed.jsonValidation) {
+        if (out.length >= JSON_SCHEMA_MAX_MERGED) {
+          break
+        }
+        const fileMatch = toMonacoFilePatterns(entry.fileMatch)
+        if (fileMatch.length === 0) {
+          continue
+        }
+        if (isLocalSchemaUrl(entry.url)) {
+          const schema = readLocalJsonSchema(extensionBase, entry.url)
+          if (schema === null) {
+            continue
+          }
+          out.push({ owner, fileMatch, url: entry.url, schema })
+          continue
+        }
+        const cached = this.remoteSchemaCache.get(entry.url)
+        if (cached !== undefined) {
+          if (cached !== null) {
+            out.push({ owner, fileMatch, url: entry.url, schema: cached })
+          }
+          continue
+        }
+        let fetched: Record<string, unknown> | null
+        try {
+          fetched = await fetchRemoteJsonSchema(entry.url)
+        } catch {
+          fetched = null
+        }
+        if (this.remoteSchemaCache.size >= 64) {
+          const oldest = this.remoteSchemaCache.keys().next()
+          if (!oldest.done) {
+            this.remoteSchemaCache.delete(oldest.value)
+          }
+        }
+        this.remoteSchemaCache.set(entry.url, fetched)
+        if (fetched !== null) {
+          out.push({ owner, fileMatch, url: entry.url, schema: fetched })
+        }
+      }
+    }
+    return out
+  }
+
   /** Selected editor + icon themes (null = STARK defaults). */
-  getSelectedThemes(): { editor: SelectedThemeRef | null; icon: SelectedThemeRef | null } {
-    const prefs = readExtensionPrefs(this.installRoot)
+  getSelectedThemes(): { editor: SelectedThemeRef | null; icon: SelectedThemeRef | null } {    const prefs = readExtensionPrefs(this.installRoot)
     return { editor: prefs.selectedEditorTheme, icon: prefs.selectedIconTheme }
   }
 

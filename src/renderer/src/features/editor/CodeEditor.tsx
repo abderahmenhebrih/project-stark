@@ -249,6 +249,7 @@ export function CodeEditor({
               extensionProviders = bridge.registerExtensionLanguageProviders(monaco, mountProps.language, extensionPathRef.current ?? mountProps.documentUri)
               bridge.ensureExtensionSnippets(monaco, mountProps.language)
               bridge.ensureExtensionTheme(monaco)
+              bridge.ensureExtensionJsonSchemas(monaco)
               bridge.applyExtensionMarkers(monaco, model, diagnosticsRef.current)
             }
           } catch {

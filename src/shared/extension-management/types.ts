@@ -208,6 +208,19 @@ export interface SelectedThemeRef {
   readonly themeId: string
 }
 
+/**
+ * One resolved JSON-schema mapping (`contributes.jsonValidation`):
+ * Monaco file patterns with an inline schema object. Renderer-safe
+ * (bounded patterns, JSON-serializable schema); the renderer never
+ * fetches schema URLs itself.
+ */
+export interface ExtensionJsonSchema {
+  readonly owner: string
+  readonly fileMatch: readonly string[]
+  readonly url: string
+  readonly schema: Record<string, unknown>
+}
+
 /** Renderer-facing extension-management bridge (see StarkApi). */
 export interface ExtensionManagementApi {
   getDetails: (identity: ExtensionIdentity) => Promise<ExtensionDetails>
@@ -240,5 +253,6 @@ export interface ExtensionManagementApi {
   getIconTheme: (identity: ExtensionIdentity, themeId: string) => Promise<ExtensionIconTheme | null>
   getSelectedThemes: () => Promise<{ editor: SelectedThemeRef | null; icon: SelectedThemeRef | null }>
   setSelectedTheme: (kind: 'editor' | 'icon', ref: SelectedThemeRef | null) => Promise<{ editor: SelectedThemeRef | null; icon: SelectedThemeRef | null }>
+  listJsonSchemas: () => Promise<readonly ExtensionJsonSchema[]>
   onEvent: (listener: (event: { kind: string; payload: Record<string, unknown> }) => void) => () => void
 }

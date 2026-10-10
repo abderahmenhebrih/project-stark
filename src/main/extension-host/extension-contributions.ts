@@ -24,6 +24,10 @@ export const CONTRIB_MAX_KEYBINDINGS = 256
 export const CONTRIB_MAX_CONFIG_PROPS = 256
 export const CONTRIB_MAX_STRING = 256
 export const CONTRIB_MAX_PATH = 512
+/** Maximum jsonValidation entries per extension (bounded). */
+export const CONTRIB_MAX_JSON_VALIDATION = 32
+/** Maximum fileMatch patterns per jsonValidation entry (bounded). */
+export const CONTRIB_MAX_JSON_FILE_MATCH = 8
 
 export interface LanguageContribution {
   readonly id: string
@@ -77,6 +81,19 @@ export interface ConfigProperty {
   readonly enum: readonly string[] | null
 }
 
+/**
+ * One validated `contributes.jsonValidation` entry (VS Code shape:
+ * `{ fileMatch, url }`, where fileMatch is a glob or list of globs
+ * and url is a schema URI — extension-local relative path or
+ * `https://` remote). Data only; resolution (containment-checked
+ * local reads, bounded main-owned remote fetch) happens in the
+ * runtime service, never here.
+ */
+export interface JsonValidationContribution {
+  readonly fileMatch: readonly string[]
+  readonly url: string
+}
+
 export interface ParsedContributions {
   readonly languages: readonly LanguageContribution[]
   readonly grammars: readonly GrammarContribution[]
@@ -87,6 +104,8 @@ export interface ParsedContributions {
   readonly keybindings: readonly KeybindingContribution[]
   /** Configuration properties by `section.name` (safe control types only). */
   readonly configuration: ReadonlyMap<string, ConfigProperty>
+  /** Validated JSON-schema mappings (`contributes.jsonValidation`). */
+  readonly jsonValidation: readonly JsonValidationContribution[]
   /** Other (non-declarative) contribution keys present, for compat. */
   readonly otherKeys: readonly string[]
 }
@@ -375,6 +394,7 @@ export function parseContributions(contributes: unknown): ParsedContributions {
       commands: [],
       keybindings: [],
       configuration: new Map(),
+      jsonValidation: [],
       otherKeys: []
     }
   }
@@ -386,7 +406,8 @@ export function parseContributions(contributes: unknown): ParsedContributions {
     'iconThemes',
     'commands',
     'keybindings',
-    'configuration'
+    'configuration',
+    'jsonValidation'
   ])
   return {
     languages: parseLanguages(contributes['languages']),
@@ -397,10 +418,79 @@ export function parseContributions(contributes: unknown): ParsedContributions {
     commands: parseCommands(contributes['commands']),
     keybindings: parseKeybindings(contributes['keybindings']),
     configuration: parseConfiguration(contributes['configuration']),
+    jsonValidation: parseJsonValidation(contributes['jsonValidation']),
     otherKeys: Object.keys(contributes)
       .filter((key) => !known.has(key))
       .slice(0, 32)
   }
+}
+
+/**
+ * Parses `contributes.jsonValidation` (VS Code: array of
+ * `{ fileMatch: string | string[], url: string }`) into bounded
+ * validated entries. fileMatch entries are glob/filename shapes
+ * (bounded count + length, no NUL); url is an extension-local
+ * relative path (`./schema.json`, `schemas/x.json`) or an
+ * `https://` remote — anything else (http, data:, absolute paths,
+ * traversal) is dropped entry-wise, never throws.
+ */
+export function parseJsonValidation(value: unknown): readonly JsonValidationContribution[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  const out: JsonValidationContribution[] = []
+  for (const entry of value.slice(0, CONTRIB_MAX_JSON_VALIDATION)) {
+    if (!isRecord(entry)) {
+      continue
+    }
+    const rawMatch = entry['fileMatch']
+    const patterns: string[] = []
+    const candidates = Array.isArray(rawMatch) ? rawMatch : [rawMatch]
+    for (const candidate of candidates.slice(0, CONTRIB_MAX_JSON_FILE_MATCH)) {
+      if (typeof candidate !== 'string' || candidate === '' || candidate.length > 256 || candidate.includes('\0')) {
+        continue
+      }
+      patterns.push(candidate)
+    }
+    if (patterns.length === 0) {
+      continue
+    }
+    const rawUrl = entry['url']
+    if (typeof rawUrl !== 'string' || rawUrl === '' || rawUrl.length > 512 || rawUrl.includes('\0')) {
+      continue
+    }
+    if (isRelativeSchemaUrl(rawUrl) || isHttpsSchemaUrl(rawUrl)) {
+      out.push({ fileMatch: patterns, url: rawUrl })
+    }
+  }
+  return out
+}
+
+/** Extension-local schema reference (relative path, no traversal, no drive/UNC). */
+function isRelativeSchemaUrl(value: string): boolean {
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(value)) {
+    return false
+  }
+  if (value.startsWith('/') || value.startsWith('\\') || /^[A-Za-z]:/.test(value) || value.startsWith('//')) {
+    return false
+  }
+  for (const segment of value.split('/')) {
+    if (segment === '..') {
+      return false
+    }
+  }
+  return value !== '' && value.length <= CONTRIB_MAX_PATH
+}
+
+/** Remote schema reference (https only; auth, ports, queries handled at fetch). */
+function isHttpsSchemaUrl(value: string): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return false
+  }
+  return parsed.protocol === 'https:'
 }
 
 export interface CapabilitySummary {

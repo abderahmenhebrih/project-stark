@@ -56,7 +56,12 @@ const DECLARATIVE_CONTRIBUTIONS: readonly string[] = [
   'keybindings',
   'menus',
   'colors',
-  'viewsContainers'
+  'viewsContainers',
+  // JSON-schema mappings are served generically by STARK (local
+  // schemas resolved under containment, remote schemas through the
+  // bounded main-owned fetch): contributing extensions classify
+  // Compatible on this key.
+  'jsonValidation'
 ]
 
 /** Contribution classes STARK marks Partially Compatible (honest limits). */
@@ -87,7 +92,15 @@ const UNSUPPORTED_CONTRIBUTIONS: Record<string, string> = {
 const MAX_REASONS = 8
 const MAX_REASON_LENGTH = 160
 
-function pushReason(reasons: string[], reason: string): void {
+function pushReason(reasons: string[], seen: Set<string>, reason: string): void {
+  // One requirement → one reason: identical reasons deduplicate,
+  // first occurrence wins, ordering stays deterministic (input
+  // order). Callers must pass contributes keys deduplicated as well
+  // (defense in depth lives here, not only at call sites).
+  if (seen.has(reason)) {
+    return
+  }
+  seen.add(reason)
   if (reasons.length >= MAX_REASONS) {
     return
   }
@@ -97,6 +110,7 @@ function pushReason(reasons: string[], reason: string): void {
 /** Pure compatibility classification (deterministic, bounded). */
 export function analyzeCompatibility(input: CompatibilityInput): CompatibilityResult {
   const reasons: string[] = []
+  const seen = new Set<string>()
   // Kind gate first: browser-only with no Node main cannot run here.
   if (!input.hasMain && input.hasBrowserOnly) {
     return { level: 'unsupported', reasons: ['Browser extension host is unavailable'] }
@@ -112,48 +126,49 @@ export function analyzeCompatibility(input: CompatibilityInput): CompatibilityRe
     }
   }
   if (input.hasNativeModules) {
-    pushReason(reasons, 'Uses native modules, which STARK does not load')
+    pushReason(reasons, seen, 'Uses native modules, which STARK does not load')
     return { level: 'unsupported', reasons }
   }
   let level: CompatibilityLevel = 'compatible'
-  for (const key of input.contributesKeys.slice(0, 32)) {
+  for (const key of [...new Set(input.contributesKeys)].slice(0, 32)) {
     if (DECLARATIVE_CONTRIBUTIONS.includes(key)) {
       continue
     }
     const partial = PARTIAL_CONTRIBUTIONS[key]
     if (partial !== undefined) {
       level = level === 'unsupported' ? level : 'partial'
-      pushReason(reasons, partial)
+      pushReason(reasons, seen, partial)
       continue
     }
     const unsupported = UNSUPPORTED_CONTRIBUTIONS[key]
     if (unsupported !== undefined) {
       level = 'unsupported'
-      pushReason(reasons, unsupported)
+      pushReason(reasons, seen, unsupported)
       continue
     }
     // Unknown future contribution classes: honest partial, never fake.
     level = level === 'unsupported' ? level : 'partial'
-    pushReason(reasons, `Uses '${key.slice(0, 48)}', which STARK does not fully support`)
+    pushReason(reasons, seen, `Uses '${key.slice(0, 48)}', which STARK does not fully support`)
   }
-  for (const api of input.unsupportedApis.slice(0, 16)) {
+  for (const api of [...new Set(input.unsupportedApis)].slice(0, 16)) {
     if (typeof api !== 'string' || api === '') {
       continue
     }
     level = level === 'unsupported' ? level : 'partial'
-    pushReason(reasons, `Requires unsupported API: ${api.slice(0, 96)}`)
+    pushReason(reasons, seen, `Requires unsupported API: ${api.slice(0, 96)}`)
   }
-  for (const api of input.proposedApis.slice(0, 16)) {
+  for (const api of [...new Set(input.proposedApis)].slice(0, 16)) {
     if (typeof api !== 'string' || api === '') {
       continue
     }
     level = level === 'unsupported' ? level : 'partial'
-    pushReason(reasons, `Requires proposed API: ${api.slice(0, 96)}`)
+    pushReason(reasons, seen, `Requires proposed API: ${api.slice(0, 96)}`)
   }
   if (input.activationFailed) {
     level = level === 'compatible' ? 'partial' : level
     pushReason(
       reasons,
+      seen,
       input.failureCode !== null && input.failureCode !== ''
         ? `Last activation failed (${input.failureCode.slice(0, 48)})`
         : 'Last activation failed'

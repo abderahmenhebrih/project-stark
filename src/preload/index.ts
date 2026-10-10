@@ -152,6 +152,7 @@ import type {
   ExtensionTriggerOutcome,
   ExtensionUpdateCheck,
   ExtensionCommand,
+  ExtensionJsonSchema,
   SelectedThemeRef
 } from '../shared/extension-management/types'
 import type { FormatDocumentRequest, FormatDocumentResult, FormatterApi } from '../shared/formatter/types'
@@ -529,6 +530,8 @@ function createExtensionManagementApi(): ExtensionManagementApi {
       ipcRenderer.invoke(IPC_CHANNELS.extensionsGetSelectedThemes) as Promise<{ editor: SelectedThemeRef | null; icon: SelectedThemeRef | null }>,
     setSelectedTheme: (kind: 'editor' | 'icon', ref: SelectedThemeRef | null): Promise<{ editor: SelectedThemeRef | null; icon: SelectedThemeRef | null }> =>
       ipcRenderer.invoke(IPC_CHANNELS.extensionsSetSelectedTheme, { kind, ref }) as Promise<{ editor: SelectedThemeRef | null; icon: SelectedThemeRef | null }>,
+    listJsonSchemas: (): Promise<readonly ExtensionJsonSchema[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsListJsonSchemas) as Promise<readonly ExtensionJsonSchema[]>,
     onEvent: (listener: (event: { kind: string; payload: Record<string, unknown> }) => void): (() => void) => {
       const handler = (_event: unknown, payload: unknown): void => {
         if (isExtensionManagementEvent(payload)) {

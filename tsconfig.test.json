@@ -129,6 +129,8 @@
     "src/renderer/src/layouts/stabilization-chrome.test.ts",
     "src/renderer/src/features/explorer/fileIconForName.ts",
     "src/renderer/src/features/extensions/extensions-surface.test.ts",
+    "src/renderer/src/features/extensions/json-schema-mapping.ts",
+    "src/renderer/src/features/extensions/json-schema-mapping.test.ts",
     "src/renderer/src/features/extensions/format-request-bus.ts",
     "src/renderer/src/features/extensions/format-request-bus.test.ts",
     "src/renderer/src/features/extensions/installed-layout.test.ts",

@@ -680,6 +680,18 @@ export function createExtensionManagementBindings(runtime: ExtensionRuntimeServi
           .catch((error: unknown) => {
             throw toPublicExtensionActivationError(error)
           })
+    },
+    {
+      channel: IPC_CHANNELS.extensionsListJsonSchemas,
+      invoke: (payload): Promise<unknown> =>
+        Promise.resolve()
+          .then(() => {
+            requireEmpty(payload)
+          })
+          .then(() => runtime.listJsonSchemas())
+          .catch((error: unknown) => {
+            throw toPublicExtensionActivationError(error)
+          })
     }
   ]
 }

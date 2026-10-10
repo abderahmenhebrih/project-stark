@@ -41,6 +41,7 @@ import type {
   ExtensionTriggerOutcome,
   ExtensionUpdateCheck,
   ExtensionCommand,
+  ExtensionJsonSchema,
   SelectedThemeRef
 } from '../../../shared/extension-management/types'
 
@@ -503,4 +504,12 @@ export function setSelectedExtensionTheme(kind: 'editor' | 'icon', ref: Selected
     return Promise.reject(new Error('Extension themes are unavailable.'))
   }
   return api(kind, ref)
+}
+
+export function listExtensionJsonSchemas(): Promise<readonly ExtensionJsonSchema[]> {
+  const api = getExtensionManagementApi()?.listJsonSchemas
+  if (api === undefined) {
+    return Promise.reject(new Error('Extension JSON schemas are unavailable.'))
+  }
+  return api()
 }

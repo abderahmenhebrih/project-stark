@@ -59,11 +59,26 @@ describe('installed extension layout', () => {
 
   it('never shows pre-install copy on installed items', () => {
     const source = readRenderer('features/extensions/ExtensionsPanel.tsx')
-    assert.ok(source.includes('renderCompatibility(details, true)'), 'installed rows must take the installed branch')
     const badge = source.slice(0, source.indexOf('type ExtensionsView'))
     assert.ok(badge.includes('Compatibility unknown until installed'), 'marketplace About keeps the pre-install copy')
     const installed = source.slice(source.indexOf('function renderInstalledRow('))
     assert.ok(!installed.includes('Compatibility unknown until installed'), 'installed rows must never show it')
+  })
+
+  it('keeps diagnostics out of the card: compact state word, reasons in Details only', () => {
+    const source = readRenderer('features/extensions/ExtensionsPanel.tsx')
+    const rowStart = source.indexOf('function renderInstalledRow(')
+    const drawerAt = source.indexOf('{selectedKey === key &&', rowStart)
+    assert.ok(rowStart >= 0 && drawerAt > rowStart, 'row must own a Details drawer')
+    const card = source.slice(rowStart, drawerAt)
+    assert.ok(card.includes('installedStatusCopy'), 'card status must come from the compact helper')
+    assert.ok(!card.includes('extensions__reasons'), 'no diagnostic bullet list may render in the card')
+    assert.ok(!card.includes('Partially compatible'), 'no compat badge copy may render in the card')
+    assert.ok(!card.includes('Update available:'), 'no update line may render in the card')
+    const helper = source.slice(source.indexOf('function installedStatusCopy('), rowStart)
+    assert.ok(helper.includes('Needs attention'), 'incompatible extensions collapse to a compact state')
+    assert.ok(helper.includes('Enabled · Loaded'), 'loaded truth must survive the compact state')
+    assert.ok(source.includes('{renderCompatibility(details)}'), 'Details must own the compat badge')
   })
 
   it('auto-resolves real compatibility badges on the installed view', () => {
@@ -80,12 +95,33 @@ describe('installed extension layout', () => {
     const source = readRenderer('features/extensions/ExtensionsPanel.tsx')
     const list = source.indexOf('aria-label="Installed extensions"')
     assert.ok(list >= 0, 'installed list must exist')
-    for (const group of ['Editor theme', 'Extension output', 'Proposed edits']) {
+    for (const group of ['Editor theme', 'Extension output', 'Proposed edits', 'Extension management']) {
       const at = source.indexOf(group)
       if (at >= 0) {
         assert.ok(list < at, `installed list must precede ${group}`)
       }
     }
+  })
+
+  it('keeps management utilities compact below the list', () => {
+    const source = readRenderer('features/extensions/ExtensionsPanel.tsx')
+    const management = source.indexOf('Extension management')
+    assert.ok(management >= 0, 'management section must exist')
+    const section = source.slice(management, management + 1200)
+    assert.ok(section.includes('extensions__management'), 'utilities must use the compact container')
+    for (const control of ['Disable all', 'Enable all', 'Check workspace', 'Automatically update extensions']) {
+      assert.ok(section.includes(control) || source.includes(control), `${control} must stay available`)
+    }
+    const css = readRenderer('features/extensions/ExtensionsPanel.css')
+    assert.ok(css.includes('.extensions__management'), 'management CSS must exist')
+  })
+
+  it('resets icon failure state when the icon URL changes (no stale fallback)', () => {
+    const source = readRenderer('features/extensions/ExtensionsPanel.tsx')
+    const iconFn = source.slice(source.indexOf('function ExtensionIcon('), source.indexOf('function CompatBadge('))
+    assert.ok(iconFn.includes('failedUrl'), 'failure must be recorded per URL')
+    assert.ok(iconFn.includes('failedUrl === iconUrl'), 'a new URL must read as unfailure')
+    assert.ok(iconFn.includes('setFailedUrl(iconUrl)'), 'errors must pin the failing URL')
   })
 
   it('stays 392px-safe: column card, wrapping actions, ellipsized names, bounded menu', () => {

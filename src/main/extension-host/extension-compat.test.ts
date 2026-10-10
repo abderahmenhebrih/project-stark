@@ -141,4 +141,36 @@ describe('compatibility analyzer', () => {
     assert.equal(result.level, 'partial')
     assert.ok(result.reasons.every((reason) => !reason.includes('%')))
   })
+
+  it('treats supported jsonValidation as compatible (real Prettier 12.4.0 shape)', () => {
+    const result = analyzeCompatibility({
+      hasMain: true,
+      hasBrowserOnly: false,
+      contributesKeys: ['configuration', 'jsonValidation', 'languages', 'commands'],
+      unsupportedApis: [],
+      proposedApis: [],
+      hasNativeModules: false,
+      activationFailed: false,
+      failureCode: null
+    })
+    assert.equal(result.level, 'compatible')
+    assert.deepEqual(result.reasons, [])
+  })
+
+  it('deduplicates identical reasons with stable ordering', () => {
+    const result = analyzeCompatibility({
+      hasMain: true,
+      hasBrowserOnly: false,
+      contributesKeys: ['webviews', 'webviews', 'unknownThing', 'unknownThing'],
+      unsupportedApis: ['vscode.debug', 'vscode.debug'],
+      proposedApis: [],
+      hasNativeModules: false,
+      activationFailed: true,
+      failureCode: 'timeout'
+    })
+    assert.equal(result.level, 'partial')
+    assert.deepEqual(result.reasons, [...new Set(result.reasons)])
+    assert.equal(result.reasons.filter((reason) => reason.includes('webview')).length, 1)
+    assert.equal(result.reasons.filter((reason) => reason.includes('vscode.debug')).length, 1)
+  })
 })

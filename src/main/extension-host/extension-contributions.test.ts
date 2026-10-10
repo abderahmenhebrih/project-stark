@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { parseContributions, summarizeCapabilities } from './extension-contributions'
+import { parseContributions, parseJsonValidation, summarizeCapabilities } from './extension-contributions'
 
 describe('contribution engine', () => {
   it('parses declarative contributions with bounds', () => {
@@ -47,6 +47,36 @@ describe('contribution engine', () => {
   it('surfaces non-declarative keys for the compat analyzer', () => {
     const parsed = parseContributions({ webviews: [], debuggers: [] })
     assert.deepEqual(parsed.otherKeys, ['webviews', 'debuggers'])
+  })
+
+  it('parses the real Prettier jsonValidation shape generically (local + remote)', () => {
+    const parsed = parseContributions({
+      jsonValidation: [
+        { fileMatch: '.prettierrc', url: 'https://json.schemastore.org/prettierrc' },
+        { fileMatch: ['.prettierrc.json', 'package.json'], url: './package-json-schema.json' }
+      ]
+    })
+    assert.equal(parsed.jsonValidation.length, 2)
+    assert.deepEqual(parsed.jsonValidation[0]?.fileMatch, ['.prettierrc'])
+    assert.equal(parsed.jsonValidation[0]?.url, 'https://json.schemastore.org/prettierrc')
+    assert.deepEqual(parsed.jsonValidation[1]?.fileMatch, ['.prettierrc.json', 'package.json'])
+    assert.deepEqual(parsed.otherKeys, [])
+  })
+
+  it('drops unsafe jsonValidation entries without throwing', () => {
+    assert.deepEqual(parseJsonValidation('nope'), [])
+    assert.deepEqual(
+      parseJsonValidation([
+        { fileMatch: '.prettierrc', url: 'http://insecure.example/schema.json' },
+        { fileMatch: '.prettierrc', url: 'data:application/json,{}' },
+        { fileMatch: '.prettierrc', url: '/absolute/schema.json' },
+        { fileMatch: '.prettierrc', url: '../escape.json' },
+        { fileMatch: '', url: 'https://example.com/schema.json' },
+        { url: 'https://example.com/schema.json' },
+        { fileMatch: '.prettierrc' }
+      ]),
+      []
+    )
   })
 
   it('derives honest capability summaries from evidence only', () => {

@@ -396,6 +396,7 @@
   align-items: stretch;
   gap: var(--stark-space-xs);
   min-width: 0;
+  max-width: 100%;
   padding: 8px;
   background: var(--stark-elevated);
   border: 1px solid var(--stark-border);
@@ -408,6 +409,7 @@
   align-items: flex-start;
   gap: var(--stark-space-sm);
   min-width: 0;
+  max-width: 100%;
 }
 
 .extensions__installed-actions {
@@ -416,6 +418,16 @@
   flex-wrap: wrap;
   gap: var(--stark-space-xs);
   min-width: 0;
+  max-width: 100%;
+}
+
+.extensions__installed-actions > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.extensions__installed-actions .extensions__confirm-copy {
+  overflow-wrap: anywhere;
 }
 
 .extensions__menu {
@@ -856,6 +868,27 @@
   display: inline-flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+/* Compact utility controls below the installed list: the extension
+ * list is the primary content, management stays subordinate. */
+.extensions__management {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.extensions__management .extensions__secondary {
+  min-height: 28px;
+  padding: 3px 10px;
+  font-size: 11px;
+}
+
+.extensions__management .extensions__config-row {
+  font-size: 11px;
+  color: var(--stark-text-dim);
 }
 
 .extensions__secondary {
