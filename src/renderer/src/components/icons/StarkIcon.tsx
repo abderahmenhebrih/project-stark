@@ -4,7 +4,7 @@ export type StarkIconName =
   | 'menu'
   | 'explorer'
   | 'search'
-  | 'changes'
+  | 'plugins'
   | 'git'
   | 'terminal'
   | 'settings'
@@ -15,6 +15,7 @@ export type StarkIconName =
   | 'close'
   | 'chevron-down'
   | 'chevron-right'
+  | 'chevron-left'
   | 'arrow-up'
   | 'send'
   | 'refresh'
@@ -48,10 +49,12 @@ const PATHS: Record<StarkIconName, ReactElement> = {
       <line x1="9.8" y1="9.8" x2="13" y2="13" />
     </>
   ),
-  changes: (
+  plugins: (
     <>
-      <path d="M4 6.5h7l-2-2" />
-      <path d="M12 9.5H5l2 2" />
+      <path d="M6 2.5v4" />
+      <path d="M10 2.5v4" />
+      <path d="M4.5 6.5h7v2.5a3.5 3.5 0 0 1-7 0z" />
+      <line x1="8" y1="12.5" x2="8" y2="14" />
     </>
   ),
   git: (
@@ -114,6 +117,11 @@ const PATHS: Record<StarkIconName, ReactElement> = {
   'chevron-right': (
     <>
       <path d="M6.5 4.5l3.5 3.5-3.5 3.5" />
+    </>
+  ),
+  'chevron-left': (
+    <>
+      <path d="M9.5 4.5L6 8l3.5 3.5" />
     </>
   ),
   'arrow-up': (

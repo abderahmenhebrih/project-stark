@@ -54,7 +54,9 @@ import {
 } from '../../lib/provider-error'
 import { isComposerEmpty, shouldSubmitComposerKey } from './composer-keys'
 import { ContextCard } from './ContextCard'
-import { StarkSettingsSurface, type SettingsSection } from './StarkSettingsSurface'
+import { createPortal } from 'react-dom'
+import { SettingsPage } from '../settings/SettingsPage'
+import type { SettingsSection } from '../settings/settings-section'
 import { StarkIcon } from '../../components/icons/StarkIcon'
 import { StarkMark } from '../../components/StarkMark'
 import { initialProviderPanelState, providerPanelReducer } from './provider-state'
@@ -135,6 +137,8 @@ interface SessionPanelProps {
   readonly settingsSection: SettingsSection
   readonly onSettingsSectionChange: (section: SettingsSection) => void
   readonly onCloseSettings: () => void
+  /** Workarea portal target for the full-page Settings surface (owned by the shell). */
+  readonly settingsHost: HTMLDivElement | null
   /** Reveal the secondary Context tab (owned by the Explorer). */
   readonly onOpenContext: () => void
   /**
@@ -299,6 +303,7 @@ export function SessionPanel({
   settingsSection,
   onSettingsSectionChange,
   onCloseSettings,
+  settingsHost,
   onOpenContext,
   onSessionChrome
 }: SessionPanelProps): ReactElement {
@@ -2130,42 +2135,47 @@ export function SessionPanel({
           </div>
         </div>
       )}
-      {settingsOpen && (
-        <StarkSettingsSurface
-          workspaceId={workspaceId}
-          section={settingsSection}
-          onSectionChange={onSettingsSectionChange}
-          onClose={onCloseSettings}
-          provider={provider}
-          apiKeyInput={apiKeyInput}
-          onApiKeyInputChange={setApiKeyInput}
-          revealKey={revealKey}
-          onToggleRevealKey={() => setRevealKey((reveal) => !reveal)}
-          modelValue={modelValue}
-          selectedModelMissing={selectedModelMissing}
-          useModelDisabled={modelDraft === null || modelDraft === provider.selectedModel}
-          onModelDraftChange={setModelDraft}
-          onSaveKey={() => void handleSaveKey()}
-          onRemoveKey={() => void handleRemoveKey()}
-          onTestConnection={() => void handleTestConnection()}
-          onRefreshModels={() => void handleRefreshModels()}
-          onUseModel={() => void handleUseModel()}
-          heart={heart}
-          heartDispatch={heartDispatch}
-          onSaveHeart={() => void handleSaveHeart()}
-          recovery={recovery}
-          recoveryDispatch={recoveryDispatch}
-          onSaveRecovery={() => void handleSaveRecovery()}
-          usage={usage}
-          usageDispatch={usageDispatch}
-          onRefreshUsageSummary={() => void refreshUsageSummary(workspaceId)}
-          onSaveUsage={() => void handleSaveUsage()}
-          capabilities={capabilities}
-          capabilitiesDispatch={capabilitiesDispatch}
-          onSaveCapabilities={() => void handleSaveCapabilities()}
-        />
-      )}
-      {/* All provider, Heart, Recovery, usage, and capability settings live in StarkSettingsSurface. */}
+      {settingsOpen &&
+        settingsHost !== null &&
+        createPortal(
+          <SettingsPage
+            section={settingsSection}
+            onSectionChange={onSettingsSectionChange}
+            onBack={onCloseSettings}
+            binding={{
+              workspaceId,
+              provider,
+              apiKeyInput,
+              onApiKeyInputChange: setApiKeyInput,
+              revealKey,
+              onToggleRevealKey: () => setRevealKey((reveal) => !reveal),
+              modelValue,
+              selectedModelMissing,
+              useModelDisabled: modelDraft === null || modelDraft === provider.selectedModel,
+              onModelDraftChange: setModelDraft,
+              onSaveKey: () => void handleSaveKey(),
+              onRemoveKey: () => void handleRemoveKey(),
+              onTestConnection: () => void handleTestConnection(),
+              onRefreshModels: () => void handleRefreshModels(),
+              onUseModel: () => void handleUseModel(),
+              capabilities,
+              capabilitiesDispatch,
+              onSaveCapabilities: () => void handleSaveCapabilities(),
+              heart,
+              heartDispatch,
+              onSaveHeart: () => void handleSaveHeart(),
+              recovery,
+              recoveryDispatch,
+              onSaveRecovery: () => void handleSaveRecovery(),
+              usage,
+              usageDispatch,
+              onRefreshUsageSummary: () => void refreshUsageSummary(workspaceId),
+              onSaveUsage: () => void handleSaveUsage()
+            }}
+          />,
+          settingsHost
+        )}
+      {/* Provider and capability settings live in the full-page SettingsPage (portalled to the workarea). */}
       {state.loadingSessions && state.sessions.length === 0 ? (
         <div className="session__empty">
           <p className="session__status" role="status">

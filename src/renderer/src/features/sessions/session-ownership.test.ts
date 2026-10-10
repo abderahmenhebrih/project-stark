@@ -156,8 +156,9 @@ describe('usage limit rows keep stable identity', () => {
     const state = readRenderer('features/sessions/usage-state.ts')
     assert.ok(state.includes('readonly key: string'), 'limit drafts must carry a stable row key')
     assert.ok(state.includes('mintUsageLimitKey()'), 'keys must be minted on add and config load')
-    const surface = readRenderer('features/sessions/StarkSettingsSurface.tsx')
-    assert.ok(surface.includes('key={entry.key}'), 'rows must key by stable id, never by index')
+    // The usage limit editor left Settings V2 with the modal; row
+    // identity is now proven at the state layer (stable keys minted
+    // on add/config load) and at the save payload (keys excluded).
     const source = panel()
     const saveAt = source.indexOf('const limits = draft.limits.map((entry) => {')
     assert.ok(saveAt >= 0, 'save mapping must exist')

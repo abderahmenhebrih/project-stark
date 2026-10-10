@@ -103,12 +103,16 @@ describe('stage 31 session layout', () => {
 
   it('settings leave the message timeline for a dedicated surface', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('<StarkSettingsSurface'), 'settings must render in the dedicated surface')
+    assert.ok(panel.includes('<SettingsPage'), 'settings must render in the dedicated surface')
+    assert.ok(panel.includes('createPortal'), 'settings page must portal into the workarea host')
     assert.ok(panel.includes('settingsOpen'), 'surface visibility must stay renderer-local')
     assert.ok(!panel.includes('aria-label="AI settings"'), 'no giant settings form may remain inline in the timeline')
-    const surface = readRenderer('features/sessions/StarkSettingsSurface.tsx')
-    assert.ok(surface.includes('<AccountSection'), 'AccountSection must be mounted in Settings')
-    assert.ok(surface.includes('role="dialog"'), 'settings must present as a dedicated surface')
+    const page = readRenderer('features/settings/SettingsPage.tsx')
+    assert.ok(!page.includes('role="dialog"'), 'settings must not present as a modal dialog')
+    assert.ok(!page.includes('aria-modal'), 'settings must not present as a modal dialog')
+    assert.ok(!page.includes('stark-settings-overlay'), 'settings must not use a modal backdrop')
+    const account = readRenderer('features/settings/sections/AccountSettings.tsx')
+    assert.ok(account.includes('<AccountSection'), 'AccountSection must be mounted in Settings')
   })
 
   it('session remounts per workspace with no leakage', () => {

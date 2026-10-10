@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import { StarkIcon, type StarkIconName } from '../../components/icons/StarkIcon'
 
-export type ActivityKind = 'explorer' | 'search' | 'changes' | 'git' | 'extensions' | 'terminal'
+export type ActivityKind = 'explorer' | 'search' | 'plugins' | 'git' | 'extensions' | 'terminal'
 
 interface ActivityRailProps {
   readonly activity: ActivityKind
@@ -11,7 +11,7 @@ interface ActivityRailProps {
 const ACTIVITIES: readonly { readonly kind: ActivityKind; readonly label: string; readonly icon: StarkIconName }[] = [
   { kind: 'explorer', label: 'Explorer', icon: 'explorer' },
   { kind: 'search', label: 'Search', icon: 'search' },
-  { kind: 'changes', label: 'Changes', icon: 'changes' },
+  { kind: 'plugins', label: 'Plugins', icon: 'plugins' },
   { kind: 'git', label: 'Git', icon: 'git' },
   { kind: 'extensions', label: 'Extensions', icon: 'extensions' },
   { kind: 'terminal', label: 'Terminal', icon: 'terminal' }

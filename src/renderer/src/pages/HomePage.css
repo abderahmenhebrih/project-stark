@@ -63,3 +63,27 @@
   overflow: hidden;
   position: relative;
 }
+
+/* Workbench wrapper: layout-transparent while open so the Explorer
+   flexes exactly as before; display:none while Settings is open.
+   The subtree stays mounted, preserving drafts, PTYs, and layout. */
+.stage-workarea__main {
+  display: contents;
+}
+
+.stage-workarea__main--hidden {
+  display: none;
+}
+
+/* Full-page Settings host: fills the workarea below AppChrome. */
+.stage-settings-host {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.stage-settings-host[hidden] {
+  display: none;
+}

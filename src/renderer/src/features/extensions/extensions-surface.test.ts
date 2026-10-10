@@ -145,8 +145,8 @@ describe('extensions install surface', () => {
     for (const helper of ['getExtensionHostStatus']) {
       assert.ok(api.includes(helper), `bridge must expose ${helper}`)
     }
-    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
-    assert.ok(settings.includes('Extension Host:'), 'developer diagnostics must retain host status under Settings About')
+    const about = readRenderer('features/settings/sections/AboutSettings.tsx')
+    assert.ok(about.includes('Extension Host:'), 'developer diagnostics must retain host status under Settings About')
   })
 
   it('palette offers built-in Format Document through the open file, never the runtime', () => {

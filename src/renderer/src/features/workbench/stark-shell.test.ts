@@ -55,13 +55,13 @@ describe('stage 31 D05 shell proof', () => {
     assert.ok(panel.includes('session__context-chips'), 'composer must carry compact context chips')
   })
 
-  it('6. explorer, search, changes, and git are available through the drawer', () => {
+  it('6. explorer, search, plugins, and git are available through the drawer', () => {
     const explorer = readRenderer('features/explorer/Explorer.tsx')
-    for (const feature of ['<SearchPanel', '<GitPanel', '<ChangesPanel', '<ChangeSetPanel', 'TreeNode']) {
+    for (const feature of ['<SearchPanel', '<GitPanel', '<PluginsPanel', 'TreeNode']) {
       assert.ok(explorer.includes(feature), `drawer must host ${feature}`)
     }
     const rail = readRenderer('features/explorer/ActivityRail.tsx')
-    for (const activity of ['explorer', 'search', 'changes', 'git']) {
+    for (const activity of ['explorer', 'search', 'plugins', 'git']) {
       assert.ok(rail.includes(activity), `drawer must offer ${activity}`)
     }
   })
@@ -93,12 +93,13 @@ describe('stage 31 D05 shell proof', () => {
   it('10. settings no longer render inline in the message timeline', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     assert.ok(!panel.includes('aria-label="AI settings"'), 'inline settings block must be gone')
-    assert.ok(panel.includes('<StarkSettingsSurface'), 'settings must render in the dedicated surface')
+    assert.ok(panel.includes('<SettingsPage'), 'settings must render in the dedicated surface')
   })
 
   it('11. AccountSection is mounted in settings', () => {
-    const surface = readRenderer('features/sessions/StarkSettingsSurface.tsx')
-    assert.ok(surface.includes('<AccountSection'), 'existing AccountSection must be reachable under Settings')
+    const account = readRenderer('features/settings/sections/AccountSettings.tsx')
+    assert.ok(account.includes('<AccountSection'), 'existing AccountSection must be reachable under Settings')
+    assert.ok(account.includes('<ProfileSection'), 'profile presentation must be absorbed into Account')
   })
 
   it('12. composer contains Ask, Work, Propose, and Send', () => {
@@ -131,9 +132,18 @@ describe('stage 31 D05 shell proof', () => {
     for (const feature of ['handleNew', 'handleSelect', 'handleSend', 'handleProposalMode', 'handleOpenPreview', 'handleStopRuntime', 'handleApprovalDecision']) {
       assert.ok(panel.includes(feature), `session must keep ${feature}`)
     }
-    const surface = readRenderer('features/sessions/StarkSettingsSurface.tsx')
-    for (const feature of ['Save Heart', 'Save Recovery', 'Save permissions', 'Save usage routing', 'Use model']) {
-      assert.ok(surface.includes(feature), `settings must keep ${feature}`)
+    const models = readRenderer('features/settings/sections/ModelsSettings.tsx')
+    assert.ok(models.includes('Use model'), 'settings must keep Use model')
+    const permissions = readRenderer('features/settings/sections/PermissionsSettings.tsx')
+    assert.ok(permissions.includes('Save permissions'), 'settings must keep Save permissions')
+    // Heart/Recovery/Usage editors left Settings V2 (locked nav); their
+    // state, APIs, and runtime flows stay intact for the AI pass.
+    const page = readRenderer('features/settings/SettingsPage.tsx')
+    for (const gone of ['Save Heart', 'Save Recovery', 'Save usage routing']) {
+      assert.ok(!page.includes(gone), `settings page must not host ${gone}`)
+    }
+    for (const file of ['features/sessions/heart-state.ts', 'features/sessions/recovery-state.ts', 'features/sessions/usage-state.ts']) {
+      assert.ok(readRenderer(file).includes('save-started'), `${file} architecture must stay intact`)
     }
   })
 
@@ -159,7 +169,12 @@ describe('stage 31 D05 shell proof', () => {
       'features/explorer/Explorer.tsx',
       'features/workspace/WorkspaceSecondaryPane.tsx',
       'features/sessions/SessionPanel.tsx',
-      'features/sessions/StarkSettingsSurface.tsx',
+      'features/settings/SettingsPage.tsx',
+      'features/settings/sections/ModelsSettings.tsx',
+      'features/settings/sections/PermissionsSettings.tsx',
+      'features/settings/sections/AccountSettings.tsx',
+      'features/settings/sections/BillingSettings.tsx',
+      'features/settings/sections/AboutSettings.tsx',
       'features/sessions/ContextTab.tsx',
       'components/icons/StarkIcon.tsx'
     ]) {
@@ -183,7 +198,7 @@ describe('stage 31 D05 shell proof', () => {
       'layouts/AppChrome.tsx',
       'layouts/WorkspaceToolsDrawer.tsx',
       'features/workspace/WorkspaceSecondaryPane.tsx',
-      'features/sessions/StarkSettingsSurface.tsx',
+      'features/settings/SettingsPage.tsx',
       'features/sessions/ContextTab.tsx',
       'components/icons/StarkIcon.tsx'
     ]) {
@@ -199,9 +214,9 @@ describe('stage 31 D05 shell proof', () => {
   it('single state ownership survives the visual split', () => {
     const tab = readRenderer('features/sessions/ContextTab.tsx')
     assert.ok(!tab.includes('sessionContextDraftReducer'), 'ContextTab must reuse the HomePage draft reducer via props')
-    const surface = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    const page = readRenderer('features/settings/SettingsPage.tsx')
     for (const reducer of ['providerPanelReducer', 'heartPanelReducer', 'recoveryPanelReducer', 'usagePanelReducer', 'capabilityPanelReducer']) {
-      assert.ok(!surface.includes(reducer), `settings surface must not duplicate ${reducer}`)
+      assert.ok(!page.includes(reducer), `settings page must not duplicate ${reducer}`)
     }
   })
 })

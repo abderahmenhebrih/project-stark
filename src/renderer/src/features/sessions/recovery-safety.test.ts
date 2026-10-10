@@ -15,41 +15,36 @@ describe('recovery renderer safety', () => {
   })
 
   it('recovery settings have explicit save with no autosave or polling', () => {
-    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
-    assert.ok(settings.includes('Save Recovery'))
+    const state = readRenderer('features/sessions/recovery-state.ts')
+    assert.ok(state.includes('save-started'), 'recovery architecture must keep explicit save actions')
+    assert.ok(!state.includes('setInterval'))
+    assert.ok(!state.includes('setTimeout'))
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     assert.ok(!panel.includes('setInterval'))
     assert.ok(!panel.includes('setTimeout'))
-    const state = readRenderer('features/sessions/recovery-state.ts')
-    assert.ok(!state.includes('setInterval'))
-    assert.ok(!state.includes('setTimeout'))
   })
 
-  it('no fake percentages or countdowns in recovery UI', () => {
-    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
-    // No progress percentages near recovery copy.
-    const recoveryIndex = settings.indexOf('Continuity Recovery')
-    assert.ok(recoveryIndex >= 0)
-    const slice = settings.slice(Math.max(0, recoveryIndex - 2000), recoveryIndex + 8000)
-    assert.ok(!slice.includes('%'))
-    assert.ok(!slice.toLowerCase().includes('countdown'))
-  })
-
-  it('no credentials or raw provider bodies in recovery UI', () => {
-    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
-    const recoveryIndex = settings.indexOf('Continuity Recovery')
-    const slice = settings.slice(recoveryIndex, recoveryIndex + 8000)
-    assert.ok(!slice.toLowerCase().includes('api key') || slice.includes('Brain Recovery'))
-    assert.ok(!slice.includes('Authorization'))
+  it('recovery editor left Settings V2 while events and APIs stay intact', () => {
+    // Locked decision: the recovery editor has no Settings V2 nav
+    // home. The event flow (banners, handoffs, dismissals) and the
+    // API layer stay fully functional.
+    for (const file of [
+      'features/settings/SettingsPage.tsx',
+      'features/settings/sections/ModelsSettings.tsx',
+      'features/settings/sections/PermissionsSettings.tsx',
+      'features/settings/sections/AccountSettings.tsx',
+      'features/settings/sections/BillingSettings.tsx',
+      'features/settings/sections/AboutSettings.tsx'
+    ]) {
+      const source = readRenderer(file)
+      assert.ok(!source.includes('Save Recovery'), `${file} must not host the recovery editor`)
+      assert.ok(!source.includes('Continuity Recovery'), `${file} must not host the recovery editor`)
+    }
+    const panel = readRenderer('features/sessions/SessionPanel.tsx')
+    assert.ok(panel.includes('event-loaded'), 'runtime recovery event flow must stay wired')
+    assert.ok(panel.includes('getRecoveryForTarget'), 'recovery banners must keep loading')
     const api = readRenderer('lib/recovery-api.ts')
     assert.ok(!api.includes('apiKey'))
-  })
-
-  it('recovery copy matches spec (handoff + auto-once)', () => {
-    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
-    assert.ok(settings.includes('Create a Looplink recovery session after a recoverable provider failure'))
-    assert.ok(settings.includes('Create one Looplink recovery session and make one attempt'))
-    assert.ok(settings.includes('STARK will not retry'))
   })
 
   it('no proposal recovery UI exists', () => {

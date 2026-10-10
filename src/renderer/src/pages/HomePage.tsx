@@ -11,7 +11,7 @@ import type {
   SessionChromeActions,
   SessionChromeSnapshot
 } from '../features/sessions/SessionPanel'
-import type { SettingsSection } from '../features/sessions/StarkSettingsSurface'
+import type { SettingsSection } from '../features/settings/settings-section'
 import {
   initialSessionContextDraftState,
   sessionContextDraftReducer
@@ -93,16 +93,22 @@ export function HomePage(): ReactElement {
     (id) => ({ ...initialSessionContextDraftState(), workspaceId: id })
   )
   // Renderer-local shell state: activity, canvas view, drawer,
-  // terminal, and settings visibility. The settings surface is owned
-  // here (open/section only) so AppChrome can reach it; all provider,
-  // Heart, Recovery, usage, and capability reducers stay owned by
-  // SessionPanel.
+  // terminal, and full-page settings visibility. Settings is a
+  // presentation switch only: the workbench (Explorer, session,
+  // terminals) stays mounted behind it, so opening Settings never
+  // destroys drafts, PTYs, or layout. All provider, Heart, Recovery,
+  // usage, and capability reducers stay owned by SessionPanel.
   const [activity, setActivity] = useState<ActivityKind>('explorer')
   const [canvasView, setCanvasView] = useState<'session' | 'editor'>('session')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>('ai')
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('models')
+  // Portal target for the Settings page: always mounted (stable node)
+  // so SessionPanel can render the page into the workarea without
+  // moving any settings state.
+  const [settingsHost, setSettingsHost] = useState<HTMLDivElement | null>(null)
+  const handleSettingsHost = useCallback((node: HTMLDivElement | null) => setSettingsHost(node), [])
   // Renderer-local request for the secondary Context tab (e.g. from a
   // composer chip). Consumed once by the Explorer; no persistence.
   const [contextRequest, setContextRequest] = useState(0)
@@ -124,11 +130,16 @@ export function HomePage(): ReactElement {
     setActivity('search')
     setSidebarOpen(true)
   }, [])
-  const handleOpenSettings = useCallback((section: SettingsSection = 'ai') => {
+  const handleOpenSettings = useCallback((section: SettingsSection = 'models') => {
     setSettingsSection(section)
     setSettingsOpen(true)
   }, [])
   const handleCloseSettings = useCallback(() => setSettingsOpen(false), [])
+  // Gear toggles: entering Settings never duplicates state, and gear
+  // while already in Settings returns to the untouched workbench.
+  const handleToggleSettings = useCallback(() => {
+    setSettingsOpen((open) => !open)
+  }, [])
   const handleOpenContext = useCallback(() => setContextRequest((count) => count + 1), [])
   const handleSessionChrome = useCallback(
     (snapshot: SessionChromeSnapshot, actions: SessionChromeActions) => {
@@ -170,7 +181,7 @@ export function HomePage(): ReactElement {
     setSidebarOpen(false)
     setTerminalOpen(false)
     setSettingsOpen(false)
-    setSettingsSection('ai')
+    setSettingsSection('models')
     setChromeSession(null)
     setReviewTransactionId(null)
     setReviewChangeSetId(null)
@@ -205,7 +216,7 @@ export function HomePage(): ReactElement {
         sidebarOpen={sidebarOpen}
         onToggleSidebar={handleToggleSidebar}
         onOpenSearch={handleOpenSearch}
-        onOpenSettings={() => handleOpenSettings('ai')}
+        onOpenSettings={handleToggleSettings}
         onOpenAccount={() => handleOpenSettings('account')}
         accountInitial={accountInitialFor(displayName)}
         sessionTitle={chromeSession?.title ?? 'New session'}
@@ -230,6 +241,7 @@ export function HomePage(): ReactElement {
         onSwitchWorkspace={handleSwitchWorkspace}
       />
       <div className="stage-workarea">
+        <div className={settingsOpen ? 'stage-workarea__main stage-workarea__main--hidden' : 'stage-workarea__main'}>
         <Explorer
           key={active.id}
           workspaceId={active.id}
@@ -271,9 +283,12 @@ export function HomePage(): ReactElement {
                 setReviewChangeSetId(changeSetId)
                 setCanvasView('editor')
               }}
+              settingsHost={settingsHost}
             />
           }
         />
+        </div>
+        <div ref={handleSettingsHost} className="stage-settings-host" hidden={!settingsOpen} />
       </div>
     </div>
   )

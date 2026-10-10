@@ -42,7 +42,7 @@ describe('stage 31 frontend shell', () => {
 
   it('tools drawer overlays on demand with the activity selector', () => {
     const rail = readRenderer('features/explorer/ActivityRail.tsx')
-    for (const activity of ['explorer', 'search', 'changes', 'git']) {
+    for (const activity of ['explorer', 'search', 'plugins', 'git']) {
       assert.ok(rail.includes(activity), `drawer must offer the ${activity} activity`)
     }
     assert.ok(rail.includes('aria-selected'), 'drawer must expose selection')
@@ -111,7 +111,7 @@ describe('stage 31 frontend shell', () => {
     const labelSizePx = Number(labelSize[1])
     assert.ok(labelSizePx >= 11 && labelSizePx <= 12, `rail labels must sit in 11–12px, got ${labelSizePx}px`)
     const rail = readRenderer('features/explorer/ActivityRail.tsx')
-    for (const activity of ['Explorer', 'Search', 'Changes', 'Git', 'Extensions']) {
+    for (const activity of ['Explorer', 'Search', 'Plugins', 'Git', 'Extensions']) {
       assert.ok(rail.includes(activity), `rail must keep the visible ${activity} label`)
     }
   })
@@ -339,8 +339,9 @@ describe('stage 31 frontend shell', () => {
     assert.ok(explorerCss.includes('.workspace__tab--review.workspace__tab--active'), 'Review tab must read lime')
     const chrome = readRenderer('layouts/AppChrome.css')
     assert.ok(chrome.includes('var(--stark-magenta-dim)'), 'account control may carry only a subtle magenta detail')
-    const settingsCss = readRenderer('features/sessions/StarkSettingsSurface.css')
-    assert.ok(settingsCss.includes('.stark-settings__nav-item--ai'), 'AI settings navigation must carry the magenta indicator')
+    const settingsCss = readRenderer('features/settings/SettingsPage.css')
+    assert.ok(settingsCss.includes('.settings-nav__item--active'), 'settings navigation must carry the selected treatment')
+    assert.ok(settingsCss.includes('--stark-magenta'), 'settings selection must use the magenta cue, never lime-for-selection')
   })
 
   it('icon set replaces glyph chrome with accessible SVG controls', () => {
@@ -383,8 +384,8 @@ describe('stage 31 frontend shell', () => {
     const css = readRenderer('pages/HomePage.css')
     assert.ok(!css.includes('.workbench-status'), 'no footer CSS may remain')
     assert.ok(home.includes('stage-workarea'), 'the work area must extend to the content bottom')
-    const surface = readRenderer('features/sessions/StarkSettingsSurface.tsx')
-    assert.ok(surface.includes('About'), 'version/platform must stay reachable under Settings → About')
+    const about = readRenderer('features/settings/sections/AboutSettings.tsx')
+    assert.ok(about.includes('appInfo.version'), 'version/platform must stay reachable under Settings → About')
   })
 
   it('unified buttons cover every control with touch-safe metrics', () => {
@@ -419,7 +420,7 @@ describe('stage 31 frontend shell', () => {
       assert.ok(home.includes(region), `shell must keep ${region}`)
     }
     const explorer = readRenderer('features/explorer/Explorer.tsx')
-    for (const feature of ['<WorkspaceToolsDrawer', '<SearchPanel', '<GitPanel', '<ChangesPanel', '<CodeEditor', '<TerminalPanel', 'handleSaveGesture', '<ContextTab']) {
+    for (const feature of ['<WorkspaceToolsDrawer', '<SearchPanel', '<GitPanel', '<PluginsPanel', '<CodeEditor', '<TerminalPanel', 'handleSaveGesture', '<ContextTab']) {
       assert.ok(explorer.includes(feature), `workbench must keep ${feature}`)
     }
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
@@ -435,10 +436,18 @@ describe('stage 31 frontend shell', () => {
       'Open Preview',
       'Stop Runtime'
     ]) {
-      const owner = feature === 'Heart routing' || feature === 'Workspace Agent Capabilities'
-        ? readRenderer('features/sessions/StarkSettingsSurface.tsx')
-        : panel
-      assert.ok(owner.includes(feature), `shell must keep ${feature}`)
+      if (feature === 'Workspace Agent Capabilities') {
+        const permissions = readRenderer('features/settings/sections/PermissionsSettings.tsx')
+        assert.ok(permissions.includes(feature), `shell must keep ${feature}`)
+        continue
+      }
+      if (feature === 'Heart routing') {
+        // The Heart editor left Settings V2 with the modal; the routing
+        // architecture (reducer + SessionPanel ownership) stays intact.
+        assert.ok(panel.includes('heartPanelReducer'), 'shell must keep the Heart routing architecture')
+        continue
+      }
+      assert.ok(panel.includes(feature), `shell must keep ${feature}`)
     }
     const chrome = readRenderer('layouts/AppChrome.tsx')
     assert.ok(chrome.includes('Continue with Looplink'), 'Looplink must remain reachable in the session overflow')
@@ -465,7 +474,9 @@ describe('stage 31 frontend shell', () => {
       'features/explorer/Explorer.tsx',
       'features/explorer/ActivityRail.tsx',
       'features/sessions/SessionPanel.tsx',
-      'features/sessions/StarkSettingsSurface.tsx',
+      'features/settings/SettingsPage.tsx',
+      'features/settings/sections/ModelsSettings.tsx',
+      'features/settings/sections/AboutSettings.tsx',
       'features/sessions/ContextTab.tsx',
       'features/profile/ProfileSection.tsx',
       'features/account/AccountSection.tsx',

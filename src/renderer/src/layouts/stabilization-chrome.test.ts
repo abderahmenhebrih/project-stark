@@ -28,20 +28,22 @@ function codeOnly(source: string): string {
 }
 
 describe('stabilization: terminal rail', () => {
-  it('rail order is Explorer/Search/Changes/Git/Extensions/Terminal', () => {
+  it('rail order is Explorer/Search/Plugins/Git/Extensions/Terminal', () => {
     const rail = codeOnly(readRenderer('features/explorer/ActivityRail.tsx'))
     // All six activities render in ACTIVITIES order via one map —
     // Terminal is a full activity owning its drawer, below Extensions.
-    const kinds = ['explorer', 'search', 'changes', 'git', 'extensions', 'terminal'].map((kind) =>
+    const kinds = ['explorer', 'search', 'plugins', 'git', 'extensions', 'terminal'].map((kind) =>
       rail.indexOf(`kind: '${kind}'`)
     )
     for (const [position, found] of kinds.entries()) {
-      assert.ok((found ?? -1) >= 0, `rail must declare the ${['explorer', 'search', 'changes', 'git', 'extensions', 'terminal'][position]} activity`)
+      assert.ok((found ?? -1) >= 0, `rail must declare the ${['explorer', 'search', 'plugins', 'git', 'extensions', 'terminal'][position]} activity`)
     }
     for (let index = 1; index < kinds.length; index += 1) {
-      assert.ok((kinds[index] ?? -1) > (kinds[index - 1] ?? -1), 'rail order must be Explorer/Search/Changes/Git/Extensions/Terminal')
+      assert.ok((kinds[index] ?? -1) > (kinds[index - 1] ?? -1), 'rail order must be Explorer/Search/Plugins/Git/Extensions/Terminal')
     }
     assert.ok(rail.includes("label: 'Terminal'"), 'Terminal must carry the same visible label pattern')
+    assert.ok(rail.includes("label: 'Plugins'"), 'Plugins must carry the same visible label pattern')
+    assert.ok(!rail.includes("'changes'"), 'removed Changes activity must not remain in the rail')
   })
 
   it('rail Terminal selects the terminal activity with active state and no new IPC', () => {

@@ -123,16 +123,16 @@ describe('stage 31 workbench layout', () => {
     }
   })
 
-  it('Explorer, Search, and Changes are all available from the drawer', () => {
+  it('Explorer, Search, and Plugins are all available from the drawer', () => {
     const rail = readRenderer('features/explorer/ActivityRail.tsx')
-    for (const label of ['Explorer', 'Search', 'Changes']) {
+    for (const label of ['Explorer', 'Search', 'Plugins']) {
       assert.ok(rail.includes(label), `rail must include ${label}`)
     }
     assert.ok(rail.includes('role="tablist"'), 'activity navigation must use tabs')
     const source = readRenderer('features/explorer/Explorer.tsx')
     assert.ok(source.includes('<WorkspaceToolsDrawer'), 'workbench must render the tools drawer')
     assert.ok(source.includes('<SearchPanel'), 'Search must live in the drawer')
-    assert.ok(source.includes('<ChangesPanel'), 'Changes history must live in the drawer')
+    assert.ok(source.includes('<PluginsPanel'), 'Plugins placeholder must live in the drawer')
     assert.ok(source.includes('workbench__sidebar-body'), 'drawer panels must scroll inside the drawer')
   })
 

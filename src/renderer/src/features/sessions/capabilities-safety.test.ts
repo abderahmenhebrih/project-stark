@@ -15,7 +15,7 @@ describe('capability renderer safety', () => {
   })
 
   it('has explicit save with no autosave, polling, or tool execution', () => {
-    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    const settings = readRenderer('features/settings/sections/PermissionsSettings.tsx')
     assert.ok(settings.includes('Save permissions'))
     const state = readRenderer('features/sessions/capabilities-state.ts')
     assert.ok(!state.includes('setInterval'))
@@ -26,21 +26,21 @@ describe('capability renderer safety', () => {
   })
 
   it('terminal never renders Allow and shows exact-command copy', () => {
-    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    const settings = readRenderer('features/settings/sections/PermissionsSettings.tsx')
     assert.ok(settings.includes('Terminal execution always requires approval for the exact command.'))
     assert.ok(settings.includes('Allowing proposals does not allow STARK to apply them.'))
     assert.ok(settings.includes('Permissions only control whether future STARK Worker tools may request an action.'))
   })
 
   it('shows all five capability rows with Deny/Ask/Allow where legal', () => {
-    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    const settings = readRenderer('features/settings/sections/PermissionsSettings.tsx')
     for (const label of ['Agent Permissions', 'Workspace Agent Capabilities', 'Disabled', 'Enabled']) {
       assert.ok(settings.includes(label), `settings must contain ${label}`)
     }
   })
 
   it('exposes no approval dialog, credentials, or provider controls', () => {
-    const settings = readRenderer('features/sessions/StarkSettingsSurface.tsx')
+    const settings = readRenderer('features/settings/sections/PermissionsSettings.tsx')
     const start = settings.indexOf('Agent Permissions')
     assert.ok(start >= 0)
     const slice = settings.slice(start, start + 12000)

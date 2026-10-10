@@ -112,12 +112,12 @@ describe('D05 official STARK brand assets', () => {
   })
 
   it('Settings About uses the full logo at a restrained width', () => {
-    const surface = readRenderer('features/sessions/StarkSettingsSurface.tsx')
-    assert.ok(surface.includes('STARK_FULL_LOGO_URL'), 'About must render the official full logo')
-    assert.ok(surface.includes('alt="STARK"'), 'About brand image must carry alt="STARK"')
-    assert.ok(surface.includes('appInfo.version') || surface.includes('v${appInfo.version}'), 'version/platform must stay below the logo')
-    const css = readRenderer('features/sessions/StarkSettingsSurface.css')
-    const logo = css.match(/\.stark-settings__about-logo\s*\{[^}]*\}/)
+    const about = readRenderer('features/settings/sections/AboutSettings.tsx')
+    assert.ok(about.includes('STARK_FULL_LOGO_URL'), 'About must render the official full logo')
+    assert.ok(about.includes('alt="STARK"'), 'About brand image must carry alt="STARK"')
+    assert.ok(about.includes('appInfo.version') || about.includes('v${appInfo.version}'), 'version/platform must stay below the logo')
+    const css = readRenderer('features/settings/SettingsPage.css')
+    const logo = css.match(/\.settings-about__logo\s*\{[^}]*\}/)
     assert.ok(logo !== null, 'About logo CSS must exist')
     const width = logo[0].match(/width:\s*(\d+)px/)
     assert.ok(width !== null, 'About logo must declare a restrained width')
@@ -156,7 +156,8 @@ describe('D05 official STARK brand assets', () => {
       'layouts/AppChrome.tsx',
       'features/explorer/Explorer.tsx',
       'features/sessions/SessionPanel.tsx',
-      'features/sessions/StarkSettingsSurface.tsx',
+      'features/settings/SettingsPage.tsx',
+      'features/settings/sections/AboutSettings.tsx',
       'features/onboarding/OnboardingPage.tsx'
     ]) {
       const source = readRenderer(file)

@@ -15,7 +15,7 @@ interface WorkspaceToolsDrawerProps {
 const ACTIVITY_TITLES: Record<ActivityKind, string> = {
   explorer: 'Explorer',
   search: 'Search',
-  changes: 'Changes',
+  plugins: 'PLUGINS',
   git: 'Git',
   extensions: 'Extensions',
   terminal: 'TERMINAL'
@@ -26,7 +26,7 @@ const ACTIVITY_TITLES: Record<ActivityKind, string> = {
  * work area (never a permanent layout column). A compact VS Code-style
  * title row names the active activity with a workspace-actions
  * overflow and close; the activity selector and the contextual tool
- * content owned by the Explorer (tree / search / changes / git /
+ * content owned by the Explorer (tree / search / plugins / git /
  * extensions) sit side by side below. Closes via the close button or
  * Escape; Escape handling lives on the drawer so editor and composer
  * shortcuts are unaffected.

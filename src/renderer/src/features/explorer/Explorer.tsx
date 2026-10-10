@@ -21,7 +21,7 @@ import { formatDocumentWithPrettier } from '../../lib/format-api'
 import { normalizeFormatterError } from '../../lib/format-error'
 import type { WorkspaceSearchMatch } from '../../../../shared/workspace-search/types'
 import type { SessionContextDraft } from '../../../../shared/context/types'
-import { ChangesPanel } from '../changes/ChangesPanel'
+import { PluginsPanel } from '../plugins/PluginsPanel'
 import type { ActivityKind } from './ActivityRail'
 import { StarkMark } from '../../components/StarkMark'
 import { STARK_WORDMARK_URL } from '../../components/brandAssets'
@@ -29,7 +29,7 @@ import { StarkIcon } from '../../components/icons/StarkIcon'
 import { WorkspaceToolsDrawer } from '../../layouts/WorkspaceToolsDrawer'
 import { WorkspaceSecondaryPane, type SecondaryTabKind } from '../workspace/WorkspaceSecondaryPane'
 import { ContextTab } from '../sessions/ContextTab'
-import { ChangeSetPanel } from '../changes/ChangeSetPanel'
+
 import { ChangeSetReview } from '../changes/ChangeSetReview'
 import { changeSetPanelReducer, initialChangeSetPanelState } from '../changes/change-set-state'
 import { TransactionReview } from '../changes/TransactionReview'
@@ -990,7 +990,7 @@ export function Explorer({
     // One-shot external navigation: the Session panel requested review
     // of a newly created proposal transaction. On desktop the session
     // stays visible and the secondary pane reveals Review.
-    onActivityChange('changes')
+    onActivityChange('explorer')
     onCanvasViewChange('editor')
     secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
     changesDispatch({ type: 'review-loading', transactionId })
@@ -1012,7 +1012,7 @@ export function Explorer({
     const changeSetId = externalReviewChangeSetId
     // One-shot external navigation: the Session panel requested review
     // of a newly created grouped proposal.
-    onActivityChange('changes')
+    onActivityChange('explorer')
     onCanvasViewChange('editor')
     secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
     changesDispatch({ type: 'review-closed' })
@@ -1401,22 +1401,6 @@ export function Explorer({
         changesDispatch({ type: 'review-loaded', workspaceId: transaction.workspaceId, transaction }),
       (error: unknown) =>
         changesDispatch({ type: 'review-failed', message: normalizeChangeTransactionError(error).message })
-    )
-  }
-
-  function handleSelectChangeSet(changeSetId: number): void {
-    if (!confirmDiscardUnsavedDraft()) {
-      return
-    }
-    secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
-    onCanvasViewChange('editor')
-    changesDispatch({ type: 'review-closed' })
-    changeSetsDispatch({ type: 'set-loading', changeSetId })
-    getChangeSet({ changeSetId }).then(
-      (changeSet) =>
-        changeSetsDispatch({ type: 'set-loaded', workspaceId: changeSet.workspaceId, changeSet }),
-      (error: unknown) =>
-        changeSetsDispatch({ type: 'set-failed', message: toChangeSetsError(error, 'We couldn’t load change sets.') })
     )
   }
 
@@ -1924,24 +1908,9 @@ export function Explorer({
               onSelect={handleSelectTerminal}
               onKill={(sessionId) => void handleKillTerminal(sessionId)}
             />
-          ) : (
-            <>
-              <ChangeSetPanel
-                sets={changeSets.sets}
-                loading={changeSets.setsLoading}
-                error={changeSets.setsError}
-                selectedId={changeSets.selectedSetId}
-                onSelect={handleSelectChangeSet}
-              />
-              <ChangesPanel
-                history={changes.history}
-                loading={changes.historyLoading}
-                error={changes.historyError}
-                selectedId={changes.selectedId}
-                onSelect={handleSelectTransaction}
-              />
-            </>
-          )}
+          ) : activity === 'plugins' ? (
+            <PluginsPanel />
+          ) : null}
         </div>
       </WorkspaceToolsDrawer>
       <div className="workspace__narrow-switch" role="tablist" aria-label="Primary views">

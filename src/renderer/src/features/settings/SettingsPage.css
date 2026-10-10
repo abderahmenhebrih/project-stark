@@ -1,0 +1,215 @@
+/* Settings V2 full-page surface: calm nav column + large content canvas.
+   No overlay, no backdrop, no dialog card — this fills the workarea. */
+.settings-page {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--stark-bg);
+}
+
+.settings-page__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--stark-space-md);
+  padding: var(--stark-space-lg) var(--stark-space-xl) var(--stark-space-md);
+  border-bottom: 1px solid var(--stark-border);
+}
+
+.settings-page__back {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 4px 10px 4px 6px;
+  font-family: var(--stark-font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--stark-text-dim);
+  background: transparent;
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.settings-page__back:hover {
+  color: var(--stark-text);
+  background: var(--stark-elevated);
+}
+
+.settings-page__back:focus-visible {
+  outline: 2px solid var(--stark-lime);
+  outline-offset: 2px;
+}
+
+.settings-page__heading {
+  min-width: 0;
+}
+
+.settings-page__title {
+  margin: 0;
+  font-family: var(--stark-font-sans);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--stark-text);
+}
+
+.settings-page__copy {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--stark-text-dim);
+}
+
+.settings-page__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.settings-nav {
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--stark-space-md);
+  border-right: 1px solid var(--stark-border);
+  overflow-y: auto;
+  background: var(--stark-surface);
+}
+
+.settings-nav__item {
+  position: relative;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  font-family: var(--stark-font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--stark-text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.settings-nav__item:hover {
+  color: var(--stark-text);
+  background: var(--stark-elevated);
+}
+
+.settings-nav__item--active {
+  color: var(--stark-magenta);
+  background: var(--stark-elevated);
+  border-color: var(--stark-border);
+}
+
+.settings-nav__item--active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--stark-magenta);
+}
+
+.settings-page__content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--stark-space-lg) var(--stark-space-xl);
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-page__content > section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stark-space-sm);
+  min-width: 0;
+  max-width: 720px;
+}
+
+.settings-section__title {
+  margin: 0;
+  font-family: var(--stark-font-sans);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--stark-text);
+}
+
+.settings-section__copy {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--stark-text-dim);
+}
+
+.settings-section__block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stark-space-sm);
+  min-width: 0;
+}
+
+.settings-section__block h2 {
+  margin: var(--stark-space-sm) 0 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--stark-text);
+}
+
+.settings-section__block p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--stark-text-dim);
+}
+
+.settings-provider {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stark-space-sm);
+  min-width: 0;
+  padding: var(--stark-space-md);
+  background: var(--stark-surface);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-md);
+}
+
+.settings-about__logo {
+  display: block;
+  width: 220px;
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+@media (max-width: 760px) {
+  .settings-page__body {
+    flex-direction: column;
+  }
+
+  .settings-nav {
+    flex: 0 0 auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    border-right: none;
+    border-bottom: 1px solid var(--stark-border);
+  }
+
+  .settings-page__content {
+    padding: var(--stark-space-md);
+  }
+}
