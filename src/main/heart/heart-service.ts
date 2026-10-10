@@ -4,11 +4,15 @@ import type {
   HeartWorkerMode,
   HeartWorkerProfile
 } from '../../shared/heart/types'
+import { modelSupportsVision } from '../../shared/ai/attachment-capabilities'
+import { providerSupportsImageGeneration } from '../../shared/ai/image-capabilities'
+import { VisionUnsupportedForModelError } from '../ai/ai-attachment-context'
 import type { AiProviderRepository } from '../database/repositories/ai-provider-repository'
 import type { HeartRepository } from './heart-repository'
 import type { ProviderRegistry } from '../ai/provider-adapter'
 import { MAX_HEART_MODEL_ID_CODEPOINTS, MAX_HEART_PROVIDER_ID_CODEPOINTS } from './heart-limits'
 import {
+  HeartImageUnsupportedError,
   HeartProviderUnavailableError,
   HeartRouteMissingError,
   HeartUnconfiguredError,
@@ -259,6 +263,78 @@ export class HeartService {
       throw new HeartRouteMissingError()
     }
     return { assignment: snapshot.workerDefault, routeKey: 'default' }
+  }
+
+  /**
+   * Step 2 capability-aware Worker routing. When the trailing message
+   * carries image attachments (`needsVision`), the resolved model
+   * must be vision-capable. Fixed mode never reroutes — an incapable
+   * fixed assignment fails with an explicit capability error.
+   * Auto-swap may choose a capable configured model according to the
+   * existing Heart rules (explicit profile route first, configured
+   * default second) and fails explicitly when none is capable. No
+   * secret rerouting: the returned routeKey names the chosen route.
+   */
+  resolveWorkerForAttachments(
+    snapshot: HeartSnapshot,
+    profile: unknown,
+    needsVision: boolean
+  ): ResolvedWorkerRoute {
+    const base = this.resolveWorker(snapshot, profile)
+    if (!needsVision) {
+      return base
+    }
+    if (modelSupportsVision(base.assignment.providerId, base.assignment.model)) {
+      return base
+    }
+    if (snapshot.workerMode === 'fixed') {
+      throw new VisionUnsupportedForModelError()
+    }
+    if (!isWorkerProfile(profile)) {
+      throw new InvalidHeartRequestError('heart worker profile is invalid')
+    }
+    const explicit = snapshot.workerRoutes[profile]
+    if (explicit !== null && modelSupportsVision(explicit.providerId, explicit.model)) {
+      return { assignment: explicit, routeKey: profile }
+    }
+    if (snapshot.workerDefault !== null && modelSupportsVision(snapshot.workerDefault.providerId, snapshot.workerDefault.model)) {
+      return { assignment: snapshot.workerDefault, routeKey: 'default' }
+    }
+    throw new VisionUnsupportedForModelError()
+  }
+
+  /**
+   * Step 5 capability-aware Worker routing for image generation. The
+   * resolved model must support image output. Fixed mode never
+   * reroutes — an incapable fixed assignment fails with an explicit
+   * capability error. Auto-swap may choose a capable configured model
+   * according to the existing Heart rules (explicit profile route
+   * first, configured default second) and fails explicitly when none
+   * is capable. No hidden unauthorized provider changes: the returned
+   * routeKey names the chosen route.
+   */
+  resolveWorkerForImageGeneration(snapshot: HeartSnapshot, profile: unknown): ResolvedWorkerRoute {
+    const base = this.resolveWorker(snapshot, profile)
+    if (providerSupportsImageGeneration(base.assignment.providerId, base.assignment.model)) {
+      return base
+    }
+    if (snapshot.workerMode === 'fixed') {
+      throw new HeartImageUnsupportedError()
+    }
+    if (!isWorkerProfile(profile)) {
+      throw new InvalidHeartRequestError('heart worker profile is invalid')
+    }
+    const explicit = snapshot.workerRoutes[profile]
+    if (explicit !== null && providerSupportsImageGeneration(explicit.providerId, explicit.model)) {
+      return { assignment: explicit, routeKey: profile }
+    }
+    if (
+      snapshot.workerDefault !== null &&
+      providerSupportsImageGeneration(snapshot.workerDefault.providerId, snapshot.workerDefault.model)
+    ) {
+      return { assignment: snapshot.workerDefault, routeKey: 'default' }
+    }
+    throw new HeartImageUnsupportedError()
   }
 
   private requireKnownProvider(providerId: string): void {

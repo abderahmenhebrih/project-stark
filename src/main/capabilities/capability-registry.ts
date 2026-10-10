@@ -11,6 +11,8 @@ export const AGENT_CAPABILITIES: readonly AgentCapability[] = [
   'workspace.search',
   'git.read',
   'change.propose',
+  'attachment.import',
+  'image.generate',
   'terminal.execute',
   'runtime.observe',
   'preview.inspect'
@@ -23,12 +25,20 @@ const LEGAL_MODES: Readonly<Record<AgentCapability, readonly CapabilityPolicyMod
   'workspace.search': ['deny', 'ask', 'allow'],
   'git.read': ['deny', 'ask', 'allow'],
   'change.propose': ['deny', 'ask', 'allow'],
+  // Attachment import only ever creates reviewable proposals (writes
+  // still need per-file Accept), but binary writes never get a
+  // persistent Allow — exact-approval only, like terminal execution.
+  'attachment.import': ['deny', 'ask'],
+  // Image generation may incur provider cost: exact-approval only,
+  // like attachment import and terminal execution. Never persistent
+  // Allow — every paid generation needs explicit human approval.
+  'image.generate': ['deny', 'ask'],
   'terminal.execute': ['deny', 'ask'],
   'runtime.observe': ['deny', 'ask', 'allow'],
   'preview.inspect': ['deny', 'ask', 'allow']
 }
 
-/** True for exactly the five known capabilities. */
+/** True for exactly the nine known capabilities. */
 export function isKnownCapability(value: string): value is AgentCapability {
   return KNOWN.has(value)
 }

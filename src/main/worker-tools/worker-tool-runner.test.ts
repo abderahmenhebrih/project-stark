@@ -194,7 +194,9 @@ function allowAll(h: ReturnType<typeof openHarness>): void {
       { capability: 'change.propose', mode: 'deny' },
       { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
     ]
   })
 }
@@ -243,7 +245,9 @@ describe('worker tool work flows', () => {
           { capability: 'change.propose', mode: 'deny' },
           { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       h.adapter.planScript = [delegatePlan('coding')]
@@ -286,7 +290,9 @@ describe('worker tool work flows', () => {
           { capability: 'change.propose', mode: 'deny' },
           { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       // No tools advertised, but the fake still requests one: gate denies at execution.
@@ -321,7 +327,9 @@ describe('worker tool work flows', () => {
           { capability: 'change.propose', mode: 'deny' },
           { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       h.adapter.planScript = [delegatePlan('coding')]
@@ -355,7 +363,9 @@ describe('worker tool work flows', () => {
           { capability: 'change.propose', mode: 'deny' },
           { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       h.adapter.planScript = [delegatePlan('coding')]
@@ -473,7 +483,9 @@ describe('worker tool work flows', () => {
           { capability: 'change.propose', mode: 'deny' },
           { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       h.adapter.planScript = [delegatePlan('coding')]
@@ -549,7 +561,9 @@ describe('worker tool work flows', () => {
           { capability: 'change.propose', mode: 'allow' },
           { capability: 'terminal.execute', mode: 'ask' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       assert.equal(h.runner.toolsAdvertised(h.workspaceId, sessionId), false)
@@ -571,7 +585,9 @@ describe('worker tool work flows', () => {
           { capability: 'change.propose', mode: 'deny' },
           { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       h.adapter.planScript = [delegatePlan('coding')]
@@ -674,7 +690,9 @@ describe('worker tool work flows', () => {
             { capability: 'change.propose', mode: 'deny' },
             { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
           ]
         })
         h.adapter.planScript = [delegatePlan('coding')]

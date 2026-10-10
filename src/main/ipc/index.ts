@@ -39,6 +39,7 @@ import type { ExtensionRuntimeService } from '../extension-host/extension-runtim
 import type { FormatterService } from '../formatter/formatter-service'
 import type { AttachmentPicker } from '../chat-attachments/picker'
 import type { ChatAttachmentService } from '../chat-attachments/service'
+import type { VoiceTranscriptionService } from '../voice/voice-transcription-service'
 import { getAppInfo } from '../services/app-info'
 import type { IpcBinding } from './binding'
 import { createAiBindings } from './ai'
@@ -71,6 +72,7 @@ import { createExtensionManagementBindings } from './extension-management'
 import { createFormatterBindings } from './formatter'
 import { createAttachmentBindings } from './attachments'
 import { createAccountBindings } from './account'
+import { createVoiceBindings } from './voice'
 
 /**
  * Registers an IPC handler that first proves the caller is STARK's own
@@ -134,6 +136,8 @@ export interface IpcDependencies {
   /** Chat attachments (local files + images). Optional in older harnesses; absent means no attachment channels. */
   readonly attachmentService?: ChatAttachmentService
   readonly attachmentPicker?: AttachmentPicker
+  /** Step 4 voice transcription. Optional in older harnesses; absent means no voice channel. */
+  readonly voiceTranscriptionService?: VoiceTranscriptionService
   readonly changeTransactionService: ChangeTransactionService
   readonly terminalService: TerminalService
   readonly terminalManager: TerminalManager
@@ -306,6 +310,9 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
   }
   if (deps.attachmentService !== undefined && deps.attachmentPicker !== undefined) {
     bindings.push(...createAttachmentBindings(deps.attachmentService, deps.attachmentPicker))
+  }
+  if (deps.voiceTranscriptionService !== undefined) {
+    bindings.push(...createVoiceBindings(deps.voiceTranscriptionService))
   }
   if (deps.cloudAccountService !== undefined) {
     bindings.push(...createAccountBindings(deps.cloudAccountService))

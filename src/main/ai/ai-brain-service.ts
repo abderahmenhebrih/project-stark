@@ -55,6 +55,9 @@ import type { UsageThresholdRouteKey } from '../../shared/usage/types'
 import type { LooplinkRepository } from '../looplink/looplink-repository'
 import type { LooplinkService } from '../looplink/looplink-service'
 import { formatProviderContext } from '../session-context/session-context-service'
+import type { ChatAttachmentService } from '../chat-attachments/service'
+import { attachmentsNeedVision, workerAttachmentsRelevant } from './ai-attachment-context'
+import { buildChatAttachmentSection, type ChatAttachmentSection } from './ai-attachment-resolver'
 
 const encoder = new TextEncoder()
 
@@ -152,6 +155,13 @@ export interface AiBrainServiceOptions {
    * existing harnesses keep working.
    */
   readonly usage?: AiUsageDeps
+  /**
+   * Step 2 chat-attachment understanding (optional). When present,
+   * Brain plan and relevant Worker calls receive committed
+   * attachment content per model capability. Absent means
+   * explicitly-labeled metadata only — nothing sent silently.
+   */
+  readonly attachments?: ChatAttachmentService
 }
 
 /**
@@ -172,6 +182,7 @@ export class AiBrainService {
   private readonly looplink: { readonly service: LooplinkService; readonly store: LooplinkRepository } | undefined
   private readonly pendingApprovals: { hasPending(sessionId: number): boolean } | undefined
   private readonly usage: AiUsageDeps | undefined
+  private readonly attachmentService: ChatAttachmentService | undefined
 
   constructor(
     private readonly workspaces: WorkspaceRepository,
@@ -186,6 +197,7 @@ export class AiBrainService {
     this.looplink = options?.looplink
     this.pendingApprovals = options?.pendingApprovals
     this.usage = options?.usage
+    this.attachmentService = options?.attachments
   }
 
   /**
@@ -448,8 +460,81 @@ export class AiBrainService {
       .map((header) => this.assemble(header.id))
   }
 
-  private async runInner(workspaceId: number, sessionId: number): Promise<AiRunBrainResult> {
-    const latest = this.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
+  /**
+   * Step 2: committed attachment names for the trailing message plus
+   * whether the set requires vision. Metadata only — no bytes.
+   */
+  private chatAttachmentVision(messageId: number): {
+    readonly rows: readonly { readonly name: string }[]
+    readonly needsVision: boolean
+  } {
+    const links = this.sessions.listAttachmentsForMessage(messageId)
+    return {
+      rows: links.map((link) => ({ name: link.originalName })),
+      needsVision: attachmentsNeedVision(links.map((link) => ({ kind: link.kind, size: link.sizeBytes })))
+    }
+  }
+
+  /**
+   * Brain-plan section: full content where the Brain model allows,
+   * explicitly-labeled metadata otherwise. The fixed Brain
+   * assignment never reroutes — a vision-capable Worker still
+   * receives the bytes when delegation follows.
+   */
+  private planAttachmentSection(messageId: number, providerId: string, model: string): ChatAttachmentSection {
+    return buildChatAttachmentSection({
+      sessions: this.sessions,
+      attachments: this.attachmentService,
+      messageId,
+      providerId,
+      model,
+      visionMode: 'describe'
+    })
+  }
+
+  /**
+   * Worker section: attachment blobs travel only when explicitly
+   * relevant to the delegated task — otherwise explicitly-labeled
+   * metadata. Capability failures stay explicit (require mode).
+   */
+  private workerAttachmentSection(
+    messageId: number,
+    providerId: string,
+    model: string,
+    workerInstruction: string,
+    userRequest: string,
+    names: readonly { readonly name: string }[]
+  ): ChatAttachmentSection {
+    const relevant = workerAttachmentsRelevant({ workerInstruction, userRequest, attachments: names })
+    return buildChatAttachmentSection({
+      sessions: this.sessions,
+      attachments: this.attachmentService,
+      messageId,
+      providerId,
+      model,
+      forceMetadataOnly: !relevant
+    })
+  }
+
+  /**
+   * Inserts the attachment review block ahead of the trailing user
+   * message. The block is part of the reviewed provider input.
+   */
+  private withChatAttachmentBlock(
+    base: readonly { readonly role: 'user' | 'assistant'; readonly content: string }[],
+    block: string | null
+  ): readonly { readonly role: 'user' | 'assistant'; readonly content: string }[] {
+    if (block === null || base.length === 0) {
+      return base
+    }
+    const trailing = base[base.length - 1]
+    if (trailing === undefined) {
+      return base
+    }
+    return [...base.slice(0, -1), { role: 'user' as const, content: block }, trailing]
+  }
+
+  private async runInner(workspaceId: number, sessionId: number): Promise<AiRunBrainResult> {    const latest = this.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
     if (latest === undefined || latest.role !== 'user') {
       throw new BrainNothingToAnswerError()
     }
@@ -459,6 +544,7 @@ export class AiBrainService {
     if (trailing === undefined) {
       throw new BrainNothingToAnswerError()
     }
+    const chatVision = this.chatAttachmentVision(latest.id)
     const deadline = this.now() + MAX_ORCHESTRATION_RUN_MS
     // Immutable routing snapshot for this run: Heart is never
     // re-read between Brain → Worker → Brain, so mid-run config
@@ -521,17 +607,19 @@ export class AiBrainService {
 
       // Call 1 of at most 3: structured Brain plan.
       this.requireDeadline(deadline)
+      const planSection = this.planAttachmentSection(latest.id, brainResolved.adapter.id, brainModel)
       const planBase =
         persisted.length === 0
           ? context
           : [...context.slice(0, -1), { role: 'user' as const, content: formatProviderContext(persisted) }, trailing]
+      const planBaseWithChat = this.withChatAttachmentBlock(planBase, planSection.block)
       const planMessages =
         loop === null
-          ? planBase
+          ? planBaseWithChat
           : [
-              ...planBase.slice(0, -1),
+              ...planBaseWithChat.slice(0, -1),
               { role: 'user' as const, content: loop.block },
-              planBase[planBase.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
+              planBaseWithChat[planBaseWithChat.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
             ]
       let plan: ValidatedBrainPlan
       try {
@@ -546,7 +634,8 @@ export class AiBrainService {
             messages: planMessages,
             maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
             schemaName: BRAIN_PLAN_SCHEMA_NAME,
-            schema: BRAIN_PLAN_JSON_SCHEMA
+            schema: BRAIN_PLAN_JSON_SCHEMA,
+            ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {})
           })
         )
         plan = this.parseAndValidatePlan(planned.outputText)
@@ -595,7 +684,7 @@ export class AiBrainService {
       // assignment — never re-resolved, never re-routed.
       const workerInstruction = plan.workerInstruction ?? ''
       const workerProfile = plan.workerProfile ?? 'general'
-      const workerRoute = this.heart.resolveWorker(routing, workerProfile)
+      const workerRoute = this.heart.resolveWorkerForAttachments(routing, workerProfile, chatVision.needsVision)
       // Stage 28 Worker threshold route: resolved from the base route
       // using the SAME Work-start usage snapshot (no fresh query —
       // the Brain-plan call must not move the Worker route either).
@@ -626,9 +715,17 @@ export class AiBrainService {
       )
       // Bound worker capture for the tracking closure (preserves `this`).
       const generateWorkerText = workerResolved.adapter.generateText.bind(workerResolved.adapter)
+      const workerSection = this.workerAttachmentSection(
+        latest.id,
+        workerResolved.adapter.id,
+        workerResolved.model,
+        workerInstruction,
+        trailing.content,
+        chatVision.rows
+      )
       let workerOutput: string
       try {
-        const workerMessages = this.buildWorkerMessages(context, persisted, workerInstruction, loop?.block ?? null)
+        const workerMessages = this.buildWorkerMessages(context, persisted, workerInstruction, loop?.block ?? null, workerSection.block)
         const produced = await this.trackCall(
           { operation: 'worker', workspaceId, sessionId, runId },
           workerResolved.adapter.id,
@@ -638,7 +735,8 @@ export class AiBrainService {
             model: workerResolved.model,
             instructions: STAGE_18_FIXED_WORKER_INSTRUCTIONS,
             messages: workerMessages,
-            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+            ...(workerSection.payloads.length > 0 ? { attachments: workerSection.payloads } : {})
           })
         )
         workerOutput = this.validateWorkerOutput(produced.text)
@@ -810,6 +908,7 @@ export class AiBrainService {
     if (trailing === undefined) {
       throw new BrainNothingToAnswerError()
     }
+    const chatVision = this.chatAttachmentVision(latest.id)
     const deadline = this.now() + MAX_ORCHESTRATION_RUN_MS
     const loop =
       this.looplink === undefined
@@ -835,17 +934,19 @@ export class AiBrainService {
       // adapter both read instance state).
       const generateStructured = brainAdapter.generateStructured.bind(brainAdapter)
       this.requireDeadline(deadline)
+      const planSection = this.planAttachmentSection(latest.id, brainResolved.adapter.id, brainModel)
       const planBase =
         persisted.length === 0
           ? context
           : [...context.slice(0, -1), { role: 'user' as const, content: formatProviderContext(persisted) }, trailing]
+      const planBaseWithChat = this.withChatAttachmentBlock(planBase, planSection.block)
       const planMessages =
         loop === null
-          ? planBase
+          ? planBaseWithChat
           : [
-              ...planBase.slice(0, -1),
+              ...planBaseWithChat.slice(0, -1),
               { role: 'user' as const, content: loop.block },
-              planBase[planBase.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
+              planBaseWithChat[planBaseWithChat.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
             ]
       let plan: ValidatedBrainPlan
       try {
@@ -860,7 +961,8 @@ export class AiBrainService {
             messages: planMessages,
             maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
             schemaName: BRAIN_PLAN_SCHEMA_NAME,
-            schema: BRAIN_PLAN_JSON_SCHEMA
+            schema: BRAIN_PLAN_JSON_SCHEMA,
+            ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {})
           })
         )
         plan = this.parseAndValidatePlan(planned.outputText)
@@ -909,9 +1011,17 @@ export class AiBrainService {
       )
       // Bound worker capture for the tracking closure (preserves `this`).
       const generateWorkerText = workerResolved.adapter.generateText.bind(workerResolved.adapter)
+      const workerSection = this.workerAttachmentSection(
+        latest.id,
+        workerResolved.adapter.id,
+        workerResolved.model,
+        workerInstruction,
+        trailing.content,
+        chatVision.rows
+      )
       let workerOutput: string
       try {
-        const workerMessages = this.buildWorkerMessages(context, persisted, workerInstruction, loop?.block ?? null)
+        const workerMessages = this.buildWorkerMessages(context, persisted, workerInstruction, loop?.block ?? null, workerSection.block)
         const produced = await this.trackCall(
           { operation: 'recovery_worker', workspaceId, sessionId, runId },
           workerResolved.adapter.id,
@@ -921,7 +1031,8 @@ export class AiBrainService {
             model: workerResolved.model,
             instructions: STAGE_18_FIXED_WORKER_INSTRUCTIONS,
             messages: workerMessages,
-            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+            ...(workerSection.payloads.length > 0 ? { attachments: workerSection.payloads } : {})
           })
         )
         workerOutput = this.validateWorkerOutput(produced.text)
@@ -1031,6 +1142,7 @@ export class AiBrainService {
     if (trailing === undefined) {
       throw new BrainNothingToAnswerError()
     }
+    const chatVision = this.chatAttachmentVision(latest.id)
     const deadline = this.now() + MAX_ORCHESTRATION_RUN_MS
     const loop =
       this.looplink === undefined
@@ -1056,17 +1168,19 @@ export class AiBrainService {
       // adapter both read instance state).
       const generateStructured = brainAdapter.generateStructured.bind(brainAdapter)
       this.requireDeadline(deadline)
+      const planSection = this.planAttachmentSection(latest.id, brainResolved.adapter.id, brainModel)
       const planBase =
         persisted.length === 0
           ? context
           : [...context.slice(0, -1), { role: 'user' as const, content: formatProviderContext(persisted) }, trailing]
+      const planBaseWithChat = this.withChatAttachmentBlock(planBase, planSection.block)
       const planMessages =
         loop === null
-          ? planBase
+          ? planBaseWithChat
           : [
-              ...planBase.slice(0, -1),
+              ...planBaseWithChat.slice(0, -1),
               { role: 'user' as const, content: loop.block },
-              planBase[planBase.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
+              planBaseWithChat[planBaseWithChat.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
             ]
       let plan: ValidatedBrainPlan
       try {
@@ -1081,7 +1195,8 @@ export class AiBrainService {
             messages: planMessages,
             maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
             schemaName: BRAIN_PLAN_SCHEMA_NAME,
-            schema: BRAIN_PLAN_JSON_SCHEMA
+            schema: BRAIN_PLAN_JSON_SCHEMA,
+            ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {})
           })
         )
         plan = this.parseAndValidatePlan(planned.outputText)
@@ -1119,9 +1234,17 @@ export class AiBrainService {
       )
       // Bound worker capture for the tracking closure (preserves `this`).
       const generateWorkerText = workerResolved.adapter.generateText.bind(workerResolved.adapter)
+      const workerSection = this.workerAttachmentSection(
+        latest.id,
+        workerResolved.adapter.id,
+        workerResolved.model,
+        workerInstruction,
+        trailing.content,
+        chatVision.rows
+      )
       let workerOutput: string
       try {
-        const workerMessages = this.buildWorkerMessages(context, persisted, workerInstruction, loop?.block ?? null)
+        const workerMessages = this.buildWorkerMessages(context, persisted, workerInstruction, loop?.block ?? null, workerSection.block)
         const produced = await this.trackCall(
           { operation: 'recovery_worker', workspaceId, sessionId, runId },
           workerResolved.adapter.id,
@@ -1131,7 +1254,8 @@ export class AiBrainService {
             model: workerResolved.model,
             instructions: STAGE_18_FIXED_WORKER_INSTRUCTIONS,
             messages: workerMessages,
-            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+            ...(workerSection.payloads.length > 0 ? { attachments: workerSection.payloads } : {})
           })
         )
         workerOutput = this.validateWorkerOutput(produced.text)
@@ -1332,18 +1456,21 @@ export class AiBrainService {
       readonly content: string
     }[],
     workerInstruction: string,
-    loopBlock: string | null
+    loopBlock: string | null,
+    chatBlock: string | null = null
   ): { readonly role: 'user' | 'assistant'; readonly content: string }[] {
     const trailing = context[context.length - 1]
     const head = context.slice(0, -1)
     const contextBlock =
       persisted.length === 0 ? null : { role: 'user' as const, content: formatProviderContext(persisted) }
+    const chatAttachmentBlock = chatBlock === null ? null : { role: 'user' as const, content: chatBlock }
     if (trailing === undefined) {
       return [...head]
     }
     return [
       ...head,
       ...(contextBlock === null ? [] : [contextBlock]),
+      ...(chatAttachmentBlock === null ? [] : [chatAttachmentBlock]),
       trailing,
       {
         role: 'user' as const,

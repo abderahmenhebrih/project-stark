@@ -138,6 +138,8 @@ describe('release security matrix (Stage 30)', () => {
       'workspace_search',
       'git_read',
       'change_propose',
+      'attachment_import',
+      'image_generate',
       'terminal_execute',
       'runtime_start',
       'runtime_observe',

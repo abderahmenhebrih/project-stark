@@ -194,13 +194,16 @@ import {
   SessionWorkspaceMismatchError,
   SessionWorkspaceUnavailableError
 } from '../sessions/errors'
+import { isAttachmentCapabilityError } from './ai-attachment-context'
 
 /**
  * Maps any AI-layer failure to a renderer-safe Error carrying
  * displayable copy only.
  */
 export function toPublicProviderError(operation: ProviderOperation, error: unknown): Error {
-  if (
+  if (isAttachmentCapabilityError(error)) {
+    return new Error(error.message)
+  }  if (
     error instanceof SecureStorageUnavailableError ||
     error instanceof ProviderCredentialMissingError ||
     error instanceof ProviderStorageVerificationError ||

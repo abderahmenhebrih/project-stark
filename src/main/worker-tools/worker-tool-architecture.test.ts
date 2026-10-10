@@ -12,12 +12,14 @@ function readShared(relative: string): string {
 }
 
 describe('worker tool architecture', () => {
-  it('tool registry contains exactly eight tools (Stage 27)', () => {
+  it('tool registry contains exactly ten tools (eight Stage 27 plus attachment import plus image generation)', () => {
     const registry = readMain('worker-tools/worker-tool-registry.ts')
     assert.ok(registry.includes('workspace_read'))
     assert.ok(registry.includes('workspace_search'))
     assert.ok(registry.includes('git_read'))
     assert.ok(registry.includes('change_propose'))
+    assert.ok(registry.includes('attachment_import'))
+    assert.ok(registry.includes('image_generate'))
     assert.ok(registry.includes('terminal_execute'))
     assert.ok(registry.includes('runtime_start'))
     assert.ok(registry.includes('runtime_observe'))

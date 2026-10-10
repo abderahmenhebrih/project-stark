@@ -415,6 +415,36 @@ export class OrchestrationRepository {
     },
     options?: { readonly failAfterMessage?: boolean; readonly consumeLooplinkId?: number }
   ): { messageId: number } {
+    return this.completeRunWithAssistantMessageAndAttachments(input, [], options)
+  }
+
+  /**
+   * Step 5 variant: persists the final assistant message together
+   * with its generated-image attachment links (same v19
+   * message_attachments table — no schema change), links the message
+   * to the run, and marks the run completed — all atomically. Either
+   * everything lands or nothing does.
+   */
+  completeRunWithAssistantMessageAndAttachments(
+    input: {
+      runId: number
+      sessionId: number
+      content: string
+      action: OrchestrationRunAction
+      planSummary: string
+      now: number
+    },
+    attachments: readonly {
+      readonly attachmentId: string
+      readonly originalName: string
+      readonly mimeType: string
+      readonly sizeBytes: number
+      readonly kind: 'image' | 'file'
+      readonly sha256: string
+      readonly createdAt: number
+    }[],
+    options?: { readonly failAfterMessage?: boolean; readonly consumeLooplinkId?: number }
+  ): { messageId: number } {
     let messageId: number
     this.db.exec('BEGIN')
     try {
@@ -424,6 +454,24 @@ export class OrchestrationRepository {
       messageId = toRowId(inserted.lastInsertRowid, 'message')
       if (options?.failAfterMessage === true) {
         throw new DatabaseError('injected orchestration completion fault')
+      }
+      for (const attachment of attachments) {
+        this.db
+          .prepare(
+            'INSERT INTO message_attachments ' +
+              '(message_id, attachment_id, original_name, mime_type, size_bytes, kind, sha256, created_at) ' +
+              'VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+          )
+          .run(
+            messageId,
+            attachment.attachmentId,
+            attachment.originalName,
+            attachment.mimeType,
+            attachment.sizeBytes,
+            attachment.kind,
+            attachment.sha256,
+            attachment.createdAt
+          )
       }
       this.updateRunStmt.run('completed', input.action, input.planSummary, messageId, null, input.now, input.runId)
       this.touchSessionStmt.run(input.now, input.sessionId)

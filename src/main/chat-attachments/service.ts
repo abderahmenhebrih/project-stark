@@ -9,7 +9,8 @@ import {
   readFileSync,
   readSync,
   rmSync,
-  statSync
+  statSync,
+  writeFileSync
 } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
@@ -190,6 +191,57 @@ export class ChatAttachmentService {
   }
 
   /**
+   * Stores trusted provider-generated image bytes as a NORMAL chat
+   * attachment (Step 5). No source OS path exists — bytes arrive
+   * main-side from the image provider adapter only. The image is
+   * bounded, magic-verified (never trusting Content-Type alone),
+   * SHA-256 hashed, and recorded exactly like a picked attachment, so
+   * mobility, review, vision, and persistence all reuse the existing
+   * attachment system. There is no separate image universe.
+   */
+  async createGeneratedImage(input: {
+    readonly bytes: Buffer
+    readonly mimeType: string
+    readonly displayName?: string
+  }): Promise<ChatAttachment> {
+    const bytes = input.bytes
+    if (!(bytes instanceof Buffer) || bytes.length === 0 || bytes.length > MAX_ATTACHMENT_BYTES) {
+      throw new AttachmentTooLargeError()
+    }
+    const sniffed = sniffImageMime(bytes.subarray(0, Math.min(bytes.length, 16)))
+    if (sniffed === null || sniffed !== input.mimeType) {
+      throw new UnsupportedAttachmentError()
+    }
+    const name = normalizeGeneratedName(input.displayName)
+    const id = generateAttachmentId()
+    const dest = this.storePathFor(id)
+    mkdirSync(join(this.storeRoot, id.slice(0, 2)), { recursive: true })
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    try {
+      writeFileSync(dest, bytes, { flag: 'wx', mode: 0o600 })
+    } catch {
+      rmSync(dest, { force: true })
+      throw new UnsupportedAttachmentError()
+    }
+    const now = Date.now()
+    try {
+      this.sessions.insertChatAttachment({
+        id,
+        originalName: name,
+        mimeType: sniffed,
+        sizeBytes: bytes.length,
+        kind: 'image',
+        sha256,
+        createdAt: now
+      })
+    } catch (error) {
+      rmSync(dest, { force: true })
+      throw error
+    }
+    return this.toPublicAttachment({ id, originalName: name, mimeType: sniffed, sizeBytes: bytes.length, kind: 'image' })
+  }
+
+  /**
    * Removes one draft attachment. Committed attachments (referenced by
    * any message) are kept — only unreferenced backing assets are
    * deleted. Always returns the normalized metadata.
@@ -292,8 +344,29 @@ export class ChatAttachmentService {
   }
 }
 
-function readLeadingBytes(sourcePath: string, count: number): Buffer {
-  let fd = -1
+/**
+ * Display-only generated-image filename normalization. The
+ * provider/model never controls storage paths — the name is metadata
+ * only. Falls back to a fixed label on empty input.
+ */
+function normalizeGeneratedName(displayName: string | undefined): string {
+  if (displayName === undefined) {
+    return 'generated-image.png'
+  }
+  const segments = displayName.split(/[/\\]/)
+  const base = segments[segments.length - 1] ?? ''
+  // eslint-disable-next-line no-control-regex
+  const cleaned = base.replace(/[\x00-\x1f\x7f]/g, '').trim()
+  if (cleaned === '') {
+    return 'generated-image.png'
+  }
+  if (countCodePoints(cleaned) > MAX_ATTACHMENT_NAME_CODEPOINTS) {
+    return takeCodePoints(cleaned, MAX_ATTACHMENT_NAME_CODEPOINTS)
+  }
+  return cleaned
+}
+
+function readLeadingBytes(sourcePath: string, count: number): Buffer {  let fd = -1
   try {
     fd = openSync(sourcePath, 'r')
     const buffer = Buffer.alloc(count)

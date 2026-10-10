@@ -532,6 +532,7 @@ void app.whenReady().then(() => {
     formatterService,
     attachmentService: services.chatAttachmentService,
     attachmentPicker: electronAttachmentPicker,
+    voiceTranscriptionService: services.voiceTranscriptionService,
     changeTransactionService: services.changeTransactionService,
     terminalService: services.terminalService,
     terminalManager,

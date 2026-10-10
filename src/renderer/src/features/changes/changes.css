@@ -217,3 +217,19 @@ button.changes__row:hover {
   opacity: 0.5;
   cursor: default;
 }
+
+.review__asset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stark-space-xs);
+  padding: var(--stark-space-sm);
+  overflow: auto;
+}
+
+.review__asset-thumb {
+  max-width: 320px;
+  max-height: 240px;
+  object-fit: contain;
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+}

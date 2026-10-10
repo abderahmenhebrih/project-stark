@@ -17,6 +17,7 @@ export type StarkIconName =
   | 'chevron-right'
   | 'send'
   | 'refresh'
+  | 'mic'
   | 'extensions'
   | 'paperclip'
 
@@ -124,6 +125,13 @@ const PATHS: Record<StarkIconName, ReactElement> = {
     <>
       <path d="M13 8a5 5 0 1 1-1.5-3.6" />
       <path d="M13 2.5v3h-3" />
+    </>
+  ),
+  mic: (
+    <>
+      <rect x="6" y="2.5" width="4" height="7" rx="2" />
+      <path d="M4 7.5a4 4 0 0 0 8 0" />
+      <line x1="8" y1="11.5" x2="8" y2="13.5" />
     </>
   ),
   extensions: (

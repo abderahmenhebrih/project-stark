@@ -55,7 +55,9 @@ function openHarness(): {
       { capability: 'change.propose', mode: 'deny' },
       { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
     ]
   })
   const gate = new CapabilityGate(workspaces, codingRows, capStore)
@@ -186,7 +188,9 @@ describe('workspace_read tool', () => {
           { capability: 'change.propose', mode: 'deny' },
           { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       const result = await h.executor.execute({

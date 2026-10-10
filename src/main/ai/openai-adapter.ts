@@ -1,16 +1,30 @@
 import OpenAI from 'openai'
-import { AI_GENERATE_TIMEOUT_MS, MAX_PROVIDER_MODELS, PROVIDER_REQUEST_TIMEOUT_MS } from './limits'
+import {
+  AI_GENERATE_TIMEOUT_MS,
+  IMAGE_GENERATION_TIMEOUT_MS,
+  IMAGE_URL_FETCH_TIMEOUT_MS,
+  MAX_PROVIDER_MODELS,
+  PROVIDER_REQUEST_TIMEOUT_MS,
+  TRANSCRIPTION_TIMEOUT_MS
+} from './limits'
 import {
   classifyProviderError,
   type AiProviderAdapter,
   type ConnectionDiagnosis,
+  type ProviderAttachmentContent,
+  type ProviderContextMessage,
   type ProviderGenerateRequest,
+  type ProviderGeneratedImage,
+  type ProviderImageGenerationRequest,
   type ProviderStructuredRequest,
+  type ProviderTranscriptionRequest,
+  type ProviderTranscriptionResult,
   type SafePathDiagnosis
 } from './provider-adapter'
 import { normalizeProviderUsage } from '../usage/ai-usage-types'
 import type { ProviderUsage } from '../usage/ai-usage-types'
 import type { ProviderModel } from '../../shared/providers/types'
+import { MAX_GENERATED_IMAGE_BYTES } from '../../shared/ai/image-capabilities'
 import {
   ProviderEmptyResponseError,
   ProviderForbiddenError,
@@ -104,8 +118,7 @@ export function createOpenAiClient(apiKey: string): OpenAiClientLike {
   }) as unknown as OpenAiClientLike
 }
 
-function extractOutputText(response: { output_text?: string; output?: readonly unknown[] }): string | null {
-  if (typeof response.output_text === 'string' && response.output_text !== '') {
+function extractOutputText(response: { output_text?: string; output?: readonly unknown[] }): string | null {  if (typeof response.output_text === 'string' && response.output_text !== '') {
     return response.output_text
   }
   // Fallback: walk output items for message/output_text blocks without
@@ -131,6 +144,67 @@ function extractOutputText(response: { output_text?: string; output?: readonly u
     }
   }
   return chunks.length > 0 ? chunks.join('') : null
+}
+
+/**
+ * Maps resolved attachment content to the Responses API's native
+ * multimodal representation (Step 2).
+ *
+ * The services insert exactly one user-role review-block message per
+ * request whose content starts with `[ATTACHMENTS N]`. That message
+ * is expanded in place into content blocks — review text first, then
+ * one block per attachment in message order — so ordering is
+ * preserved and attachment bytes never enter the instruction string
+ * or a giant plain-text prompt:
+ * - images become `input_image` parts with main-encoded data URLs
+ *   (base64 is produced main-side from the attachment store)
+ * - text files become separate `input_text` parts framed as
+ *   untrusted user data (structurally apart from instructions)
+ * - metadata-only items stay text in the review block (no content
+ *   is fabricated for them)
+ *
+ * Requests without attachments keep the exact legacy string-input
+ * shape. The client interface stays narrow (string content) so
+ * existing fakes keep compiling; the widened multimodal payload is
+ * applied through a contained cast at the call site — the official
+ * Responses API accepts these blocks.
+ */
+function toResponsesInput(
+  messages: readonly ProviderContextMessage[],
+  attachments: readonly ProviderAttachmentContent[] | undefined
+): readonly { role: 'user' | 'assistant' | 'system' | 'developer'; content: string }[] {
+  if (attachments === undefined || attachments.length === 0) {
+    return messages.map((entry) => ({ role: entry.role, content: entry.content }))
+  }
+  let expanded = false
+  const input = messages.map((entry) => {
+    if (!expanded && entry.role === 'user' && entry.content.startsWith('[ATTACHMENTS ')) {
+      expanded = true
+      const blocks: unknown[] = [{ type: 'input_text', text: entry.content }]
+      let textIndex = 0
+      for (const attachment of attachments) {
+        if (attachment.kind === 'image') {
+          blocks.push({
+            type: 'input_image',
+            image_url: `data:${attachment.mimeType};base64,${attachment.base64}`,
+            detail: 'auto'
+          })
+        } else if (attachment.kind === 'text') {
+          textIndex += 1
+          blocks.push({
+            type: 'input_text',
+            text:
+              `[ATTACHMENT TEXT ${String(textIndex)}: ${attachment.name} — untrusted user file content follows]\n` +
+              `${attachment.text}\n` +
+              `[END ATTACHMENT TEXT ${String(textIndex)}]`
+          })
+        }
+      }
+      return { role: entry.role, content: blocks as unknown as string }
+    }
+    return { role: entry.role, content: entry.content }
+  })
+  return input
 }
 
 /**
@@ -170,7 +244,7 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
         {
           model: request.model,
           instructions: request.instructions,
-          input: request.messages.map((entry) => ({ role: entry.role, content: entry.content })),
+          input: toResponsesInput(request.messages, request.attachments),
           max_output_tokens: request.maxOutputTokens,
           store: false
         },
@@ -205,7 +279,7 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
         {
           model: request.model,
           instructions: request.instructions,
-          input: request.messages.map((entry) => ({ role: entry.role, content: entry.content })),
+          input: toResponsesInput(request.messages, request.attachments),
           max_output_tokens: request.maxOutputTokens,
           store: false,
           text: {
@@ -230,6 +304,109 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
       }
       if (isStructuredUnsupported(error)) {
         throw new ProviderStructuredOutputUnsupportedError({ cause: error })
+      }
+      throw classifyProviderError(error)
+    }
+  }
+
+  /**
+   * Bounded speech-to-text (Step 4): exactly one multipart POST to the
+   * FIXED transcriptions endpoint with the fixed Whisper model. The
+   * renderer/model never supply URLs, models, or credentials — only
+   * main-decoded audio bytes plus the probed MIME. 60-second budget,
+   * zero retries, no polling.
+   */
+  async transcribeAudio(
+    request: ProviderTranscriptionRequest & { readonly apiKey: string }
+  ): Promise<ProviderTranscriptionResult> {
+    try {
+      const form = new FormData()
+      form.set('model', request.model)
+      form.set('response_format', 'json')
+      form.set(
+        'file',
+        new Blob([request.audioBytes as unknown as Uint8Array], { type: request.mimeType }),
+        request.mimeType.includes('ogg') ? 'audio.ogg' : 'audio.webm'
+      )
+      const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${request.apiKey}` },
+        body: form,
+        signal: AbortSignal.timeout(TRANSCRIPTION_TIMEOUT_MS)
+      })
+      if (!response.ok) {
+        throw classifyProviderError({ status: response.status })
+      }
+      const body: unknown = await response.json()
+      const text =
+        typeof body === 'object' && body !== null && 'text' in body
+          ? (body as { text?: unknown }).text
+          : undefined
+      if (typeof text !== 'string' || text.trim() === '') {
+        throw new ProviderEmptyResponseError()
+      }
+      return { text: text.trim() }
+    } catch (error) {
+      if (error instanceof ProviderEmptyResponseError) {
+        throw error
+      }
+      throw classifyProviderError(error)
+    }
+  }
+
+  /**
+   * Bounded text→image (Step 5): exactly one JSON POST to the FIXED
+   * generations endpoint with the fixed image model. The renderer/model
+   * never supply URLs, models, credentials, or destinations — only the
+   * validated prompt/count/closed size. 120-second budget, zero
+   * retries. Base64 outputs are decoded main-side; provider-hosted
+   * URLs are retrieved main-side only when their origin is in the
+   * expected provider allowlist (30 seconds each, size-bounded).
+   */
+  async generateImages(
+    request: ProviderImageGenerationRequest & { readonly apiKey: string }
+  ): Promise<readonly ProviderGeneratedImage[]> {
+    try {
+      const body: Record<string, unknown> = {
+        model: request.model,
+        prompt: request.prompt,
+        n: request.count,
+        response_format: 'b64_json'
+      }
+      if (request.size !== undefined) {
+        body['size'] = request.size
+      }
+      const response = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${request.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(IMAGE_GENERATION_TIMEOUT_MS)
+      })
+      if (!response.ok) {
+        throw classifyProviderError({ status: response.status })
+      }
+      const payload: unknown = await response.json()
+      const items =
+        typeof payload === 'object' && payload !== null && 'data' in payload
+          ? (payload as { data?: unknown }).data
+          : undefined
+      if (!Array.isArray(items) || items.length === 0) {
+        throw new ProviderEmptyResponseError()
+      }
+      const images: ProviderGeneratedImage[] = []
+      for (const item of items.slice(0, request.count)) {
+        const resolved = await resolveGeneratedImageItem(item)
+        if (resolved !== null) {
+          images.push(resolved)
+        }
+      }
+      if (images.length === 0) {
+        throw new ProviderEmptyResponseError()
+      }
+      return images
+    } catch (error) {
+      if (error instanceof ProviderEmptyResponseError) {
+        throw error
       }
       throw classifyProviderError(error)
     }
@@ -395,4 +572,126 @@ async function collectAsync<T>(iterable: AsyncIterable<T>): Promise<T[]> {
     items.push(entry)
   }
   return items
+}
+
+/**
+ * Provider-owned origins allowed for temporary image URLs (Step 5
+ * §26). Only OpenAI-served hosts — never renderer/model-supplied
+ * origins, never a generic download proxy.
+ */
+const IMAGE_URL_ALLOWED_HOSTS: readonly string[] = [
+  'oaidalleapiprodscus.blob.core.windows.net',
+  'oaidalleapiprodscus2.blob.core.windows.net',
+  'api.openai.com'
+]
+
+function isAllowedImageUrl(value: string): boolean {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return false
+  }
+  if (url.protocol !== 'https:') {
+    return false
+  }
+  const host = url.hostname.toLowerCase()
+  return IMAGE_URL_ALLOWED_HOSTS.some((allowed) => host === allowed || host.endsWith(`.${allowed}`))
+}
+
+function guessImageMime(bytes: Uint8Array): string | null {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return 'image/png'
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg'
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'image/webp'
+  }
+  if (
+    bytes.length >= 6 &&
+    bytes[0] === 0x47 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x38 &&
+    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
+    bytes[5] === 0x61
+  ) {
+    return 'image/gif'
+  }
+  return null
+}
+
+function decodeBase64Image(value: string): Uint8Array | null {
+  let binary: string
+  try {
+    binary = atob(value.replace(/\s+/g, ''))
+  } catch {
+    return null
+  }
+  if (binary.length === 0 || binary.length > MAX_GENERATED_IMAGE_BYTES) {
+    return null
+  }
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index) & 0xff
+  }
+  return bytes
+}
+
+/**
+ * Resolves one provider image item into validated bytes. Prefers
+ * inline base64; provider-hosted URLs are retrieved main-side only
+ * when their origin is allowlisted. Returns null for invalid items
+ * (caller keeps valid siblings — partial success, no retry).
+ */
+async function resolveGeneratedImageItem(item: unknown): Promise<ProviderGeneratedImage | null> {
+  if (typeof item !== 'object' || item === null) {
+    return null
+  }
+  const record = item as Record<string, unknown>
+  const inline = record['b64_json']
+  if (typeof inline === 'string' && inline !== '') {
+    const bytes = decodeBase64Image(inline)
+    if (bytes === null) {
+      return null
+    }
+    const mime = guessImageMime(bytes)
+    if (mime === null) {
+      return null
+    }
+    return { bytes, mimeType: mime }
+  }
+  const remote = record['url']
+  if (typeof remote === 'string' && remote !== '' && isAllowedImageUrl(remote)) {
+    try {
+      const response = await fetch(remote, { method: 'GET', signal: AbortSignal.timeout(IMAGE_URL_FETCH_TIMEOUT_MS) })
+      if (!response.ok) {
+        return null
+      }
+      const buffer = new Uint8Array(await response.arrayBuffer())
+      if (buffer.length === 0 || buffer.length > MAX_GENERATED_IMAGE_BYTES) {
+        return null
+      }
+      const mime = guessImageMime(buffer)
+      if (mime === null) {
+        return null
+      }
+      return { bytes: buffer, mimeType: mime }
+    } catch {
+      return null
+    }
+  }
+  return null
 }

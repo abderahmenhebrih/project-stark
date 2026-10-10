@@ -83,7 +83,7 @@ describe('capability repository', () => {
       assert.equal(saved.enabled, true)
       const loaded = h.service.getConfig({ workspaceId: h.workspaceId })
       assert.deepEqual(loaded, saved)
-      assert.ok(h.store.listPolicies(h.workspaceId).length === 7)
+      assert.ok(h.store.listPolicies(h.workspaceId).length === 9)
     } finally {
       h.db.close()
       rmSync(h.dir, { recursive: true, force: true })
@@ -179,6 +179,14 @@ describe('capability service validation', () => {
       assert.throws(() =>
         h.service.updateConfig({ workspaceId: h.workspaceId, enabled: true, policies: good.map((p) => (p.capability === 'terminal.execute' ? { ...p, mode: 'allow' } : p)) as never })
       )
+      // Attachment-import allow forbidden (binary-write policy: exact approval only).
+      assert.throws(() =>
+        h.service.updateConfig({ workspaceId: h.workspaceId, enabled: true, policies: good.map((p) => (p.capability === 'attachment.import' ? { ...p, mode: 'allow' } : p)) as never })
+      )
+      // Image-generate allow forbidden (cost-bearing policy: exact approval only).
+      assert.throws(() =>
+        h.service.updateConfig({ workspaceId: h.workspaceId, enabled: true, policies: good.map((p) => (p.capability === 'image.generate' ? { ...p, mode: 'allow' } : p)) as never })
+      )
       // Extra fields.
       assert.throws(() =>
         h.service.updateConfig({ workspaceId: h.workspaceId, enabled: true, policies: good.map((p) => ({ ...p, extra: 1 })) as never })
@@ -201,7 +209,7 @@ describe('capability gate decisions', () => {
     try {
       const ids = await seedSessions(h)
       for (const capability of AGENT_CAPABILITIES) {
-        for (const mode of capability === 'terminal.execute' ? ['deny', 'ask'] : ['deny', 'ask', 'allow']) {
+        for (const mode of capability === 'terminal.execute' || capability === 'attachment.import' || capability === 'image.generate' ? ['deny', 'ask'] : ['deny', 'ask', 'allow']) {
           const modes: Record<string, string> = {}
           for (const c of AGENT_CAPABILITIES) modes[c] = 'deny'
           modes[capability] = mode

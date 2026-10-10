@@ -52,6 +52,9 @@ import { SupabaseAuthAdapter, loadSupabasePublicConfig } from '../cloud-account/
 import type { BrowserOpener, CloudAuthAdapter } from '../cloud-account/cloud-account-types'
 import { SessionContextService } from '../session-context/session-context-service'
 import { ChatAttachmentService } from '../chat-attachments/service'
+import { AttachmentImportService } from '../attachment-import/attachment-import-service'
+import { VoiceTranscriptionService } from '../voice/voice-transcription-service'
+import { ImageGenerationService } from '../image-generation/image-generation-service'
 import { ExtensionRegistryService } from '../extension-registry/extension-registry-service'
 import { ExtensionIconService } from '../extension-icons/extension-icon-service'
 import { SettingsService } from '../settings/settings-service'
@@ -83,6 +86,10 @@ export interface ApplicationServices {
   readonly sessionContextService: SessionContextService
   /** Chat attachments (local files + images). Absent without an attachment store root. */
   readonly chatAttachmentService?: ChatAttachmentService
+  /** Step 4 voice transcription (main-owned, audio→text only). Always present. */
+  readonly voiceTranscriptionService: VoiceTranscriptionService
+  /** Step 5 image generation (main-owned, prompt→attachments). Absent without an attachment store root. */
+  readonly imageGenerationService?: ImageGenerationService
   readonly aiProviderService: AiProviderService
   readonly aiCompletionService: AiCompletionService
   readonly aiCodeProposalService: AiCodeProposalService
@@ -251,7 +258,23 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
   const chatAttachmentService =
     deps.attachmentStoreRoot === undefined
       ? undefined
-      : new ChatAttachmentService(deps.attachmentStoreRoot, deps.workspaces, deps.codingSessions)  // Shared per-session AI lock: normal generation and code proposals
+      : new ChatAttachmentService(deps.attachmentStoreRoot, deps.workspaces, deps.codingSessions)
+  // Step 4 voice transcription (main-owned audio→text): always built
+  // from the provider foundation above — older harnesses keep working.
+  const voiceTranscriptionService = new VoiceTranscriptionService({ providerService: aiProviderService, registry })
+  // Step 5 image generation (prompt→normal attachments): built only
+  // when the chat-attachment store exists; older harnesses omit it
+  // and every generation path fails closed.
+  const imageGenerationService =
+    chatAttachmentService === undefined
+      ? undefined
+      : new ImageGenerationService({
+          providerService: aiProviderService,
+          registry,
+          attachments: chatAttachmentService,
+          ...(heartService === undefined ? {} : { heart: heartService })
+        })
+  // Shared per-session AI lock: normal generation and code proposals
   // for the same session exclude each other.
   const aiOperationGuard = new AiOperationGuard()
   // Stage 23 pending approvals (optional): while an approval waits,
@@ -262,10 +285,25 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
     workerToolStoreEarly === undefined
       ? undefined
       : { hasPending: (sessionId: number): boolean => workerToolStoreEarly.hasPending(sessionId) }
+  // Step 3 attachment imports (proposal-only binary ADDs): built only
+  // when the chat-attachment store root is present; older harnesses
+  // omit it and every import path fails closed.
+  const attachmentImportService =
+    chatAttachmentService === undefined || deps.changeSets === undefined
+      ? undefined
+      : new AttachmentImportService(
+          deps.workspaces,
+          deps.codingSessions,
+          chatAttachmentService,
+          deps.changeTransactions,
+          deps.changeSets
+        )
   const changeTransactionService = new ChangeTransactionService(
     deps.workspaces,
     deps.changeTransactions,
-    fileWriteService
+    fileWriteService,
+    Date.now,
+    attachmentImportService
   )
   // Stage 17 grouped proposals: built only when a change-set
   // repository is supplied; older harnesses omit it.
@@ -318,7 +356,7 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
           aiProviderService,
           deps.orchestrationRuns,
           heartService,
-          { operationGuard: aiOperationGuard, looplink: looplinkOption, pendingApprovals, usage }
+          { operationGuard: aiOperationGuard, looplink: looplinkOption, pendingApprovals, usage, attachments: chatAttachmentService }
         )
   const aiCompletionService = new AiCompletionService(
       deps.workspaces,
@@ -326,7 +364,7 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
       deps.aiProviders,
       aiProviderService,
       registry,
-      { operationGuard: aiOperationGuard, looplink: looplinkOption, pendingApprovals, usage }
+      { operationGuard: aiOperationGuard, looplink: looplinkOption, pendingApprovals, usage, attachments: chatAttachmentService }
     )
   // Stage 21 recovery: built only when a recovery repository is
   // supplied; older harnesses omit it and keep legacy AI behavior.
@@ -428,6 +466,8 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
           tools: workerToolStore,
           transactions: changeTransactionService,
           changeSets: changeSetService,
+          attachmentImports: attachmentImportService,
+          images: imageGenerationService,
           commands: workerCommandService,
           runtimes: projectRuntimeService,
           runtimeObservation: runtimeObservationService,
@@ -506,6 +546,8 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
     }),
     sessionContextService,
     chatAttachmentService,
+    voiceTranscriptionService,
+    imageGenerationService,
     aiProviderService,
     aiCompletionService,
     aiCodeProposalService: new AiCodeProposalService(

@@ -13,7 +13,11 @@ interface ChangesPanelProps {
 
 function entryTitle(transaction: ChangeTransaction): string {
   const file = transaction.files[0]
-  return file?.relativePath ?? `Change #${transaction.id}`
+  if (file === undefined) {
+    return `Change #${transaction.id}`
+  }
+  // Binary attachment imports add a new file — label the operation.
+  return file.binaryImport === undefined ? file.relativePath : `ADD ${file.relativePath}`
 }
 
 /**

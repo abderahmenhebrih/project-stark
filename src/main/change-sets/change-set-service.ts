@@ -17,7 +17,8 @@ import { WorkspaceNotFoundError } from '../workspace/errors'
 import { hashFileBytes, isValidRevision } from '../workspace-files/file-revision'
 import { requireLiveWorkspace } from '../workspace-files/workspace-file-write-service'
 import { prepareFileChangeCandidate } from '../change-transactions/prepare-file-change'
-import { MAX_RECENT_CHANGE_SETS } from './limits'
+import { binaryImportPublicInfo } from '../attachment-import/manifest'
+import { MAX_GROUP_CHANGE_SET_FILES, MAX_RECENT_CHANGE_SETS } from './limits'
 import { ChangeSetNotFoundError, InvalidChangeSetRequestError } from './errors'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -194,6 +195,7 @@ export class ChangeSetService {
     if (hashFileBytes(file.proposedBytes) !== file.proposedRevision) {
       throw new InvalidChangeSetRequestError('change-set child transaction is invalid')
     }
+    const binaryImport = binaryImportPublicInfo(file.proposedBytes)
     return {
       id: header.id,
       workspaceId: header.workspaceId,
@@ -210,10 +212,65 @@ export class ChangeSetService {
           proposedRevision: file.proposedRevision,
           appliedRevision: file.appliedRevision,
           beforeContent: file.beforeBytes.toString('utf8'),
-          proposedContent: file.proposedBytes.toString('utf8')
+          proposedContent: file.proposedBytes.toString('utf8'),
+          ...(binaryImport === null ? {} : { binaryImport })
         }
       ]
     }
+  }
+
+  /**
+   * Groups already-existing pending transactions into one review set
+   * (Step 3 mixed binary+text grouping). Every transaction must be
+   * pending, single-file, workspace-owned, and not already grouped —
+   * otherwise nothing persists. Grouping is organizational only: each
+   * child keeps individual Accept/Reject/Rollback, and there is still
+   * no Accept All.
+   */
+  async groupTransactionsIntoSet(input: {
+    workspaceId: number
+    summary: string
+    items: readonly { readonly transactionId: number; readonly fileSummary: string }[]
+  }): Promise<ChangeSet> {
+    if (!isValidId(input.workspaceId)) {
+      throw new InvalidChangeSetRequestError('workspace reference is invalid')
+    }
+    if (typeof input.summary !== 'string' || input.summary.trim() === '') {
+      throw new InvalidChangeSetRequestError('change-set summary is invalid')
+    }
+    if (input.items.length < 2 || input.items.length > MAX_GROUP_CHANGE_SET_FILES) {
+      throw new InvalidChangeSetRequestError('change-set files are invalid')
+    }
+    const workspace = await requireLiveWorkspace(this.workspaces, input.workspaceId)
+    const seen = new Set<number>()
+    const links: { readonly transactionId: number; readonly ordinal: number; readonly fileSummary: string }[] = []
+    for (let index = 0; index < input.items.length; index += 1) {
+      const item = input.items[index]
+      if (item === undefined || !isValidId(item.transactionId)) {
+        throw new InvalidChangeSetRequestError('change-set file is invalid')
+      }
+      if (seen.has(item.transactionId)) {
+        throw new InvalidChangeSetRequestError('change-set file is invalid')
+      }
+      seen.add(item.transactionId)
+      const header = this.transactions.findTransaction(item.transactionId)
+      if (header === undefined || header.workspaceId !== workspace.id || header.status !== 'pending') {
+        throw new InvalidChangeSetRequestError('change-set file is invalid')
+      }
+      const files = this.transactions.findFiles(item.transactionId)
+      if (files.length !== 1) {
+        throw new InvalidChangeSetRequestError('change-set file is invalid')
+      }
+      if (this.changeSets.findSetForTransaction(item.transactionId) !== undefined) {
+        throw new InvalidChangeSetRequestError('change-set file is invalid')
+      }
+      links.push({ transactionId: item.transactionId, ordinal: index, fileSummary: validateFileSummary(item.fileSummary) })
+    }
+    const id = this.changeSets.createChangeSetForExisting(
+      { workspaceId: workspace.id, kind: 'ai_multi_file_proposal', summary: input.summary.trim(), now: this.now() },
+      links
+    )
+    return this.readPublicChangeSet(id)
   }
 
   private assemble(changeSetId: number): ChangeSet {

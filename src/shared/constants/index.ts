@@ -101,6 +101,7 @@ export const IPC_CHANNELS = {
   accountUpdated: 'stark:account:updated',
   attachmentsChoose: 'stark:attachments:choose',
   attachmentsRemoveDraft: 'stark:attachments:remove-draft',
+  voiceTranscribe: 'stark:voice:transcribe',
   extensionsSearch: 'stark:extensions:search',
   extensionsListFeatured: 'stark:extensions:list-featured',
   extensionsInstall: 'stark:extensions:install',

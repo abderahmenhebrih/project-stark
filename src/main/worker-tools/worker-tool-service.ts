@@ -54,8 +54,23 @@ import {
 } from '../preview-inspection/preview-inspection-validation'
 import type { RuntimeObservationService } from '../runtime-observation/runtime-observation-service'
 import type { PreviewInspectionService } from '../preview-inspection/preview-inspection-service'
+import type { AttachmentImportService, AttachmentImportPreview } from '../attachment-import/attachment-import-service'
+import { AttachmentImportError } from '../attachment-import/errors'
 import { hashToolArgs } from './worker-tool-repository'
 import { createWorkerProposal, resolveProposalTargets } from './worker-proposal-service'
+import {
+  WORKER_ATTACHMENT_IMPORT_DENY_MESSAGE,
+  WORKER_ATTACHMENT_IMPORT_UNKNOWN_MESSAGE,
+  WORKER_ATTACHMENT_IMPORT_USER_DENY_MESSAGE,
+  parseAttachmentImportArgs
+} from './worker-attachment-import-validation'
+import type { ImageGenerationService } from '../image-generation/image-generation-service'
+import {
+  WORKER_IMAGE_GENERATE_DENY_MESSAGE,
+  WORKER_IMAGE_GENERATE_USER_DENY_MESSAGE,
+  parseImageGenerateArgs
+} from '../image-generation/validation'
+import { toPublicImageGenerationError } from '../image-generation/errors'
 
 const encoder = new TextEncoder()
 
@@ -117,6 +132,23 @@ export function parseWorkerToolRequest(tool: string, args: unknown): WorkerToolA
     // execution time as bounded failed tool results.
     const parsed = parseChangeProposeArgs(args)
     return { tool, changes: [...parsed.changes] }
+  }
+  if (tool === 'attachment_import') {
+    // Strict shape + bounds (1–10 opaque attachment IDs plus proposed
+    // destinations, no source/storage/absolute paths). Destination
+    // safety, session scope, and availability are enforced at
+    // execution time as bounded failed tool results.
+    const parsed = parseAttachmentImportArgs(args)
+    return { tool, imports: [...parsed.imports] }
+  }
+  if (tool === 'image_generate') {
+    // Strict shape + bounds (prompt 1–4000 chars, count 1–4, closed
+    // size vocabulary). The model supplies no provider URL, secret,
+    // destination, or attachment path — main resolves
+    // everything. Capability and availability are enforced at
+    // execution time as bounded failed tool results.
+    const parsed = parseImageGenerateArgs(args)
+    return { tool, prompt: parsed.prompt, count: parsed.count, ...(parsed.size === undefined ? {} : { size: parsed.size }) }
   }
   if (tool === 'terminal_execute') {
     // Strict program + argv only (bare executable name, inert args, no
@@ -188,6 +220,10 @@ export interface ToolExecutionDeps {
   readonly runtimeObservation?: RuntimeObservationService
   /** Stage 27 read-only Preview inspection. Optional for older harnesses. */
   readonly previewInspection?: PreviewInspectionService
+  /** Step 3 chat-attachment import proposals. Optional for older harnesses. */
+  readonly attachmentImports?: AttachmentImportService
+  /** Step 5 bounded image generation. Optional for older harnesses. */
+  readonly images?: ImageGenerationService
 }
 
 export interface ExecuteToolInput {
@@ -226,15 +262,19 @@ export class WorkerReadToolService {
       const deniedReason =
         input.tool === 'change_propose'
           ? WORKER_PROPOSAL_DENY_MESSAGE
-          : input.tool === 'terminal_execute'
-            ? WORKER_TERMINAL_DENY_MESSAGE
-            : input.tool === 'runtime_start'
-              ? WORKER_RUNTIME_DENY_MESSAGE
-              : input.tool === 'runtime_observe'
-                ? WORKER_RUNTIME_OBSERVE_DENY_MESSAGE
-                : input.tool === 'preview_inspect'
-                  ? WORKER_PREVIEW_INSPECT_DENY_MESSAGE
-                  : 'The workspace policy denies this action.'
+          : input.tool === 'attachment_import'
+            ? WORKER_ATTACHMENT_IMPORT_DENY_MESSAGE
+            : input.tool === 'image_generate'
+              ? WORKER_IMAGE_GENERATE_DENY_MESSAGE
+              : input.tool === 'terminal_execute'
+              ? WORKER_TERMINAL_DENY_MESSAGE
+              : input.tool === 'runtime_start'
+                ? WORKER_RUNTIME_DENY_MESSAGE
+                : input.tool === 'runtime_observe'
+                  ? WORKER_RUNTIME_OBSERVE_DENY_MESSAGE
+                  : input.tool === 'preview_inspect'
+                    ? WORKER_PREVIEW_INSPECT_DENY_MESSAGE
+                    : 'The workspace policy denies this action.'
       const result: WorkerToolResult = {
         status: 'denied',
         summary: this.summaryFor(input.tool, input.args),
@@ -312,6 +352,16 @@ export class WorkerReadToolService {
     return WORKER_PROPOSAL_USER_DENY_MESSAGE
   }
 
+  /** Denied-user copy for attachment_import approval denial (persisted by the runner). */
+  static attachmentImportUserDenyMessage(): string {
+    return WORKER_ATTACHMENT_IMPORT_USER_DENY_MESSAGE
+  }
+
+  /** Denied-user copy for image_generate approval denial (persisted by the runner). */
+  static imageGenerateUserDenyMessage(): string {
+    return WORKER_IMAGE_GENERATE_USER_DENY_MESSAGE
+  }
+
   /** Denied-user copy for terminal_execute approval denial (persisted by the runner). */
   static terminalUserDenyMessage(): string {
     return WORKER_TERMINAL_USER_DENY_MESSAGE
@@ -349,6 +399,24 @@ export class WorkerReadToolService {
         return `Create reviewable change proposal for ${String(count)} files`
       }
       return 'Create reviewable change proposal'
+    }
+    if (tool === 'attachment_import') {
+      const imports = (args as { imports?: readonly unknown[] }).imports
+      const count = Array.isArray(imports) ? imports.length : 0
+      if (count === 1) {
+        return 'Propose importing a chat attachment into the project'
+      }
+      if (count > 1) {
+        return `Propose importing ${String(count)} chat attachments into the project`
+      }
+      return 'Propose importing a chat attachment into the project'
+    }
+    if (tool === 'image_generate') {
+      const count = (args as { count?: unknown }).count
+      if (typeof count === 'number' && count > 1) {
+        return `Generate ${String(count)} images using the configured AI provider`
+      }
+      return 'Generate an image using the configured AI provider'
     }
     if (tool === 'terminal_execute') {
       return `Run command: ${(args as { program?: string }).program ?? ''}`
@@ -417,6 +485,12 @@ export class WorkerReadToolService {
     }
     if (input.tool === 'change_propose') {
       return await this.executeProposal(input)
+    }
+    if (input.tool === 'attachment_import') {
+      return await this.executeAttachmentImport(input)
+    }
+    if (input.tool === 'image_generate') {
+      return await this.executeImageGenerate(input)
     }
     if (input.tool === 'workspace_search') {
       const { query } = input.args as { query: string }
@@ -519,11 +593,250 @@ export class WorkerReadToolService {
     }
     if (outcome.kind === 'single') {
       const path = outcome.files[0]?.relativePath ?? 'file'
+      // Step 3: a same-run single binary import groups with this text
+      // proposal so asset additions and source edits coexist in one
+      // review set. Best-effort — failures keep separate transactions.
+      const grouped = await this.maybeGroupRunProposals(input, [
+        { transactionId: outcome.transactionId, fileSummary: outcome.files[0]?.summary ?? `Update ${path}`, kind: 'text' as const }
+      ])
+      if (grouped !== null) {
+        const groupedPayload = JSON.stringify({
+          status: 'proposal_created',
+          kind: 'change_set',
+          changeSetId: grouped,
+          files: outcome.files
+        })
+        return { status: 'succeeded', summary: `Create reviewable change proposal for ${path} (grouped for review)`, payload: groupedPayload }
+      }
       const payload = JSON.stringify({ status: 'proposal_created', kind: 'single', transactionId: outcome.transactionId, files: outcome.files })
       return { status: 'succeeded', summary: `Create reviewable change proposal for ${path}`, payload }
     }
     const payload = JSON.stringify({ status: 'proposal_created', kind: 'change_set', changeSetId: outcome.changeSetId, files: outcome.files })
     return { status: 'succeeded', summary: `Create reviewable change proposal for ${String(outcome.files.length)} files`, payload }
+  }
+
+  /**
+   * Resolves attachment-import previews WITHOUT persisting (Step 3
+   * approval-summary path). Mirrors the change_propose resolved
+   * summary: exact attachment names plus destinations. Throws safe
+   * import copy when the import cannot be proposed.
+   */
+  async describeAttachmentImports(input: {
+    workspaceId: number
+    sessionId: number
+    imports: readonly { readonly attachmentId: string; readonly proposedRelativePath: string }[]
+  }): Promise<readonly AttachmentImportPreview[]> {
+    const service = this.deps.attachmentImports
+    if (service === undefined) {
+      throw new AttachmentImportError('We couldn’t import that attachment.')
+    }
+    return await service.describeImports({ workspaceId: input.workspaceId, sessionId: input.sessionId, items: input.imports })
+  }
+
+  /**
+   * Executes one validated attachment_import through the Step 3
+   * import service only. Creates exactly one pending binary ADD
+   * transaction (single) or one Change Set (multi). Disk unchanged.
+   * Zero provider calls. Scope/safety/availability failures are
+   * bounded failed tool results with no partial persistence.
+   */
+  private async executeAttachmentImport(input: ExecuteToolInput): Promise<WorkerToolResult> {
+    const service = this.deps.attachmentImports
+    const changeSets = this.deps.changeSets
+    if (service === undefined || changeSets === undefined) {
+      return { status: 'failed', summary: 'Propose importing a chat attachment into the project', payload: '', reason: 'Attachment imports are unavailable.' }
+    }
+    const raw = input.args as unknown as { imports?: unknown }
+    let imports: readonly { attachmentId: string; proposedRelativePath: string }[]
+    try {
+      const parsed = parseAttachmentImportArgs({ imports: raw.imports })
+      imports = parsed.imports
+    } catch {
+      return { status: 'failed', summary: 'Propose importing a chat attachment into the project', payload: '', reason: 'Attachment import arguments are invalid.' }
+    }
+    let outcome: Awaited<ReturnType<AttachmentImportService['proposeImports']>>
+    try {
+      outcome = await service.proposeImports({
+        workspaceId: input.workspaceId,
+        sessionId: input.sessionId,
+        summary: `Attachment import of ${String(imports.length)} file${imports.length === 1 ? '' : 's'}`,
+        items: imports
+      })
+    } catch (error) {
+      return {
+        status: 'failed',
+        summary: 'Propose importing a chat attachment into the project',
+        payload: '',
+        reason: error instanceof AttachmentImportError ? error.message : WORKER_ATTACHMENT_IMPORT_UNKNOWN_MESSAGE
+      }
+    }
+    if (outcome.kind === 'single') {
+      const file = outcome.files[0]
+      const where = file === undefined ? 'file' : `${file.fileName} to ${file.destination}`
+      const files = outcome.files.map((entry) => ({
+        attachmentId: entry.attachmentId,
+        fileName: entry.fileName,
+        destination: entry.destination,
+        sizeBytes: entry.sizeBytes,
+        summary: `Import ${entry.fileName} to ${entry.destination}`
+      }))
+      const grouped = await this.maybeGroupRunProposals(input, [
+        { transactionId: outcome.transactionId, fileSummary: files[0]?.summary ?? `Import ${where}`, kind: 'binary' as const }
+      ])
+      if (grouped !== null) {
+        const groupedPayload = JSON.stringify({ status: 'proposal_created', kind: 'change_set', changeSetId: grouped, files })
+        return { status: 'succeeded', summary: `Propose importing ${where} (grouped for review)`, payload: groupedPayload }
+      }
+      const payload = JSON.stringify({ status: 'proposal_created', kind: 'single', transactionId: outcome.transactionId, files })
+      return { status: 'succeeded', summary: `Propose importing ${where}`, payload }
+    }
+    const payload = JSON.stringify({
+      status: 'proposal_created',
+      kind: 'change_set',
+      changeSetId: outcome.changeSetId,
+      files: outcome.files.map((entry) => ({ attachmentId: entry.attachmentId, fileName: entry.fileName, destination: entry.destination }))
+    })
+    return { status: 'succeeded', summary: `Propose importing ${String(outcome.files.length)} chat attachments into the project`, payload }
+  }
+
+  /**
+   * Executes one validated image_generate through the Step 5
+   * generation service only. Generated bytes become NORMAL chat
+   * attachments (opaque IDs, SHA-256, magic-verified) — never project
+   * files. The runner links them to the final assistant message, so
+   * mobility, review, and vision all reuse the existing attachment
+   * system. Zero filesystem writes outside the attachment store.
+   * Partial success persists valid images with a safe failed count;
+   * nothing retries automatically.
+   */
+  private async executeImageGenerate(input: ExecuteToolInput): Promise<WorkerToolResult> {
+    const service = this.deps.images
+    if (service === undefined) {
+      return { status: 'failed', summary: 'Generate an image using the configured AI provider', payload: '', reason: 'Image generation is unavailable.' }
+    }
+    const raw = input.args as unknown as { prompt?: unknown; count?: unknown; size?: unknown }
+    let prompt: string
+    let count: number
+    let size: string | undefined
+    try {
+      const parsed = parseImageGenerateArgs({ prompt: raw.prompt, count: raw.count, ...(raw.size === undefined ? {} : { size: raw.size }) })
+      prompt = parsed.prompt
+      count = parsed.count
+      size = parsed.size
+    } catch {
+      return { status: 'failed', summary: 'Generate an image using the configured AI provider', payload: '', reason: 'Image request arguments are invalid.' }
+    }
+    let outcome: Awaited<ReturnType<ImageGenerationService['generateImages']>>
+    try {
+      outcome = await service.generateImages({ prompt, count, ...(size === undefined ? {} : { size }) })
+    } catch (error) {
+      return {
+        status: 'failed',
+        summary: 'Generate an image using the configured AI provider',
+        payload: '',
+        reason: toPublicImageGenerationError(error).message
+      }
+    }
+    const files = outcome.images.map((entry, index) => ({
+      attachmentId: entry.attachment.id,
+      fileName: entry.attachment.name,
+      mimeType: entry.attachment.mimeType,
+      sizeBytes: entry.attachment.size,
+      sha256: entry.sha256,
+      position: index + 1
+    }))
+    const payload = JSON.stringify({
+      status: 'images_generated',
+      images: files,
+      failedCount: outcome.failedCount
+    })
+    const made = files.length
+    const summary =
+      made === 1 && outcome.failedCount === 0
+        ? 'Generated 1 image'
+        : outcome.failedCount === 0
+          ? `Generated ${String(made)} images`
+          : `${String(made)} image${made === 1 ? '' : 's'} generated; ${String(outcome.failedCount)} image${outcome.failedCount === 1 ? '' : 's'} could not be generated.`
+    return { status: 'succeeded', summary, payload }
+  }
+
+  /**
+   * Best-effort mixed grouping (Step 3 §25): when a run holds both
+   * freshly created single proposals and same-run single successes of
+   * the other proposal kind (binary import vs text change), link them
+   * into one review set so asset additions and source edits coexist.
+   * Grouping is organizational only — failures leave the transactions
+   * separate (still individually reviewable) and never fail the tool.
+   */
+  private async maybeGroupRunProposals(
+    input: ExecuteToolInput,
+    fresh: readonly { readonly transactionId: number; readonly fileSummary: string; readonly kind: 'binary' | 'text' }[]
+  ): Promise<number | null> {
+    const changeSets = this.deps.changeSets
+    if (changeSets === undefined || fresh.length === 0) {
+      return null
+    }
+    const singles: { readonly transactionId: number; readonly fileSummary: string }[] = fresh.map((entry) => ({
+      transactionId: entry.transactionId,
+      fileSummary: entry.fileSummary
+    }))
+    let hasBinary = fresh.some((entry) => entry.kind === 'binary')
+    let hasText = fresh.some((entry) => entry.kind === 'text')
+    for (const event of this.deps.tools.listEvents(input.runId)) {
+      if (event.workspaceId !== input.workspaceId || event.sessionId !== input.sessionId) {
+        continue
+      }
+      if (event.status !== 'succeeded' || (event.toolName !== 'change_propose' && event.toolName !== 'attachment_import')) {
+        continue
+      }
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(event.payload) as unknown
+      } catch {
+        continue
+      }
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        continue
+      }
+      const record = parsed as Record<string, unknown>
+      if (record['status'] !== 'proposal_created' || record['kind'] !== 'single') {
+        continue
+      }
+      if (typeof record['transactionId'] !== 'number') {
+        continue
+      }
+      const files = record['files']
+      if (!Array.isArray(files) || files.length !== 1) {
+        continue
+      }
+      const file = files[0] as Record<string, unknown>
+      const summary = typeof file['summary'] === 'string' && file['summary'] !== '' ? file['summary'] : null
+      if (summary === null) {
+        continue
+      }
+      if (singles.some((entry) => entry.transactionId === record['transactionId'])) {
+        continue
+      }
+      singles.push({ transactionId: record['transactionId'] as number, fileSummary: summary })
+      if (event.toolName === 'attachment_import') {
+        hasBinary = true
+      } else {
+        hasText = true
+      }
+    }
+    if (!hasBinary || !hasText || singles.length < 2) {
+      return null
+    }
+    try {
+      const grouped = await changeSets.groupTransactionsIntoSet({
+        workspaceId: input.workspaceId,
+        summary: `Combined attachment and code proposal (${String(singles.length)} files)`,
+        items: singles
+      })
+      return grouped.id
+    } catch {
+      return null
+    }
   }
 
   /**

@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { APP_NAME } from '../../shared/constants'
 import { RENDERER_DEV_URL, RENDERER_ENTRY, RENDERER_DIR, devServerOrigin } from '../security/app-urls'
 import { isAllowedExternalUrl, isAllowedMainFrameNavigation } from '../security/external-url'
+import { configureMicrophonePermissions } from './voice-permissions'
 
 function logRendererLoadError(error: unknown): void {
   console.error(`[${APP_NAME}] failed to load renderer:`, error)
@@ -45,6 +46,11 @@ export function buildMainWindowOptions(): BrowserWindowConstructorOptions {
  */
 export function createAppWindow(): BrowserWindow {
   const window = new BrowserWindow(buildMainWindowOptions())
+
+  // Step 4: audio-only microphone permission (explicit user click
+  // only, never background listening). Camera and every other
+  // permission fail closed.
+  configureMicrophonePermissions(window)
 
   window.once('ready-to-show', () => {
     window.show()

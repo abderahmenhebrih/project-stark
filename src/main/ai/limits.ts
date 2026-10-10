@@ -5,9 +5,17 @@
 
 /** Model-list / connection-test network budget (15 seconds, one attempt). */
 export const PROVIDER_REQUEST_TIMEOUT_MS = 15000
-
 /** Assistant generation network budget (60 seconds, one attempt). */
 export const AI_GENERATE_TIMEOUT_MS = 60000
+
+/** Speech-to-text network budget (60 seconds, one attempt, no retries). */
+export const TRANSCRIPTION_TIMEOUT_MS = 60 * 1000
+
+/** Image-generation per-operation network budget (120 seconds, one attempt, no retries). */
+export const IMAGE_GENERATION_TIMEOUT_MS = 120 * 1000
+
+/** Per-image provider-URL retrieval budget (30 seconds, one attempt, no retries). */
+export const IMAGE_URL_FETCH_TIMEOUT_MS = 30 * 1000
 
 /** safeStorage operation budget (15 seconds). */
 export const SAFE_STORAGE_TIMEOUT_MS = 15000

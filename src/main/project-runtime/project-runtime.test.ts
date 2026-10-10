@@ -281,7 +281,9 @@ function setPolicies(h: Harness, terminal: 'deny' | 'ask'): void {
       { capability: 'change.propose', mode: 'allow' },
       { capability: 'terminal.execute', mode: terminal },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
     ]
   })
 }
@@ -312,13 +314,13 @@ function sleep(ms: number): Promise<void> {
 }
 
 describe('stage 26 registry, schema, and validation', () => {
-  it('registry contains exactly eight tools with runtime mapping', () => {
+  it('registry contains exactly ten tools with runtime mapping', () => {
     assert.deepEqual(
       [...WORKER_TOOLS].sort(),
-      ['change_propose', 'git_read', 'preview_inspect', 'runtime_observe', 'runtime_start', 'terminal_execute', 'workspace_read', 'workspace_search'].sort()
+      ['attachment_import', 'change_propose', 'git_read', 'image_generate', 'preview_inspect', 'runtime_observe', 'runtime_start', 'terminal_execute', 'workspace_read', 'workspace_search'].sort()
     )
     assert.equal(capabilityForTool('runtime_start'), 'terminal.execute')
-    assert.equal(workerToolSchemas().length, 8)
+    assert.equal(workerToolSchemas().length, 10)
   })
 
   it('runtime schema is strict program plus argv plus port', () => {
@@ -1127,7 +1129,9 @@ describe('stage 26 worker approval flows', () => {
               { capability: 'change.propose', mode: 'deny' },
               { capability: 'terminal.execute', mode: 'ask' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
             ]
           })
         }
@@ -1296,7 +1300,9 @@ describe('stage 26 bounds, recovery, and interactions', () => {
           { capability: 'change.propose', mode: 'allow' },
           { capability: 'terminal.execute', mode: 'ask' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       const port = testPort()
@@ -1502,7 +1508,9 @@ describe('stage 26 bounds, recovery, and interactions', () => {
           { capability: 'change.propose', mode: 'allow' },
           { capability: 'terminal.execute', mode: 'ask' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       const port = testPort()
@@ -1566,7 +1574,9 @@ describe('stage 26 bounds, recovery, and interactions', () => {
           { capability: 'change.propose', mode: 'deny' },
           { capability: 'terminal.execute', mode: 'ask' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       const otherSession = (await h.sessions.createSession({ workspaceId: otherWorkspace })).id

@@ -12,12 +12,14 @@
  * authority.
  */
 
-/** Exactly the seven Stage 27 capabilities. No more. */
+/** Exactly the nine capabilities (seven Stage 27 plus attachment import plus image generation). No more. */
 export type AgentCapability =
   | 'workspace.read'
   | 'workspace.search'
   | 'git.read'
   | 'change.propose'
+  | 'attachment.import'
+  | 'image.generate'
   | 'terminal.execute'
   | 'runtime.observe'
   | 'preview.inspect'

@@ -178,6 +178,7 @@ const EXPECTED_PRODUCTION_CHANNELS: readonly string[] = [
   IPC_CHANNELS.accountSignOut,
   IPC_CHANNELS.attachmentsChoose,
   IPC_CHANNELS.attachmentsRemoveDraft,
+  IPC_CHANNELS.voiceTranscribe,
   IPC_CHANNELS.extensionsSearch,
   IPC_CHANNELS.extensionsListFeatured,
   IPC_CHANNELS.extensionsInstall,
@@ -312,6 +313,7 @@ describe('authoritative production IPC surface', () => {
         attachmentPicker: {
           pickFiles: async () => undefined
         },
+        voiceTranscriptionService: services.voiceTranscriptionService,
         workspaces: new WorkspaceRepository(db),
         codingSessions: new CodingSessionRepository(db)
       }).map((binding) => binding.channel)
@@ -410,6 +412,9 @@ describe('authoritative production IPC surface', () => {
       'formatter: createFormatterApi()',
       'IPC_CHANNELS.attachmentsChoose',
       'IPC_CHANNELS.attachmentsRemoveDraft',
+      'IPC_CHANNELS.voiceTranscribe',
+      'createVoiceApi()',
+      'voice: createVoiceApi()',
       'createAttachmentsApi()',
       'attachments: createAttachmentsApi()'
     ]) {
@@ -426,5 +431,6 @@ describe('authoritative production IPC surface', () => {
     assert.ok(!source.includes("'stark:runtime:"), 'preload must not hardcode runtime event names')
     assert.ok(!source.includes("'stark:account:complete"), 'preload must not hardcode OAuth completion channels')
     assert.ok(!source.includes("'stark:extensions:"), 'preload must not hardcode extension channel names')
+    assert.ok(!source.includes("'stark:voice:"), 'preload must not hardcode voice channel names')
   })
 })

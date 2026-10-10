@@ -25,6 +25,8 @@ import {
   MAX_RECENT_CHANGE_TRANSACTIONS
 } from './limits'
 import { prepareFileChangeCandidate } from './prepare-file-change'
+import type { BinaryImportAcceptor } from '../attachment-import/attachment-import-service'
+import { binaryImportPublicInfo, isAttachmentImportManifest } from '../attachment-import/manifest'
 import {
   CHANGE_CONFLICT_MESSAGE,
   CHANGE_ROLLBACK_CONFLICT_MESSAGE,
@@ -111,7 +113,7 @@ function verifyStoredFile(file: StoredChangeTransactionFile): void {
 
 function toPublicFile(file: StoredChangeTransactionFile): ChangeTransactionFile {
   verifyStoredFile(file)
-  return {
+  const base: ChangeTransactionFile = {
     relativePath: file.relativePath,
     beforeRevision: file.beforeRevision,
     proposedRevision: file.proposedRevision,
@@ -119,6 +121,11 @@ function toPublicFile(file: StoredChangeTransactionFile): ChangeTransactionFile 
     beforeContent: decodeCheckpoint(file.beforeBytes),
     proposedContent: decodeCheckpoint(file.proposedBytes)
   }
+  // Binary attachment imports (Step 3) persist a review manifest as
+  // the proposed bytes. The renderer renders an asset card from the
+  // structured metadata — never a diff of the raw manifest.
+  const binaryImport = binaryImportPublicInfo(file.proposedBytes)
+  return binaryImport === null ? base : { ...base, binaryImport }
 }
 
 function toPublicTransaction(
@@ -149,17 +156,20 @@ export class ChangeTransactionService {
   private readonly transactions: ChangeTransactionRepository
   private readonly writer: WorkspaceFileWriteService
   private readonly now: () => number
+  private readonly binaryImport: BinaryImportAcceptor | undefined
 
   constructor(
     workspaces: WorkspaceRepository,
     transactions: ChangeTransactionRepository,
     writer: WorkspaceFileWriteService,
-    now: () => number = Date.now
+    now: () => number = Date.now,
+    binaryImport?: BinaryImportAcceptor
   ) {
     this.workspaces = workspaces
     this.transactions = transactions
     this.writer = writer
     this.now = now
+    this.binaryImport = binaryImport
   }
 
   /**
@@ -215,6 +225,16 @@ export class ChangeTransactionService {
     const loaded = this.loadStoredTransaction(transactionId)
     this.requireStatus(loaded.header, 'pending')
     const file = this.requireSingleFile(loaded.files)
+    // Binary attachment imports (Step 3) never flow through the text
+    // writer: the import service re-validates the reviewed manifest
+    // and copies exact bytes. Text proposals continue below.
+    if (isAttachmentImportManifest(file.proposedBytes)) {
+      if (this.binaryImport === undefined) {
+        throw new CorruptChangeTransactionError()
+      }
+      await this.binaryImport.acceptBinaryImport(transactionId)
+      return this.readPublicTransaction(transactionId)
+    }
     const proposedContent = decodeCheckpoint(file.proposedBytes)
     let appliedRevision: string
     try {
@@ -263,6 +283,15 @@ export class ChangeTransactionService {
     const loaded = this.loadStoredTransaction(transactionId)
     this.requireStatus(loaded.header, 'applied')
     const file = this.requireSingleFile(loaded.files)
+    // Binary rollback restores the reviewed absent checkpoint by
+    // deleting the imported file (guarded by the applied revision).
+    if (isAttachmentImportManifest(file.proposedBytes)) {
+      if (this.binaryImport === undefined) {
+        throw new CorruptChangeTransactionError()
+      }
+      await this.binaryImport.rollbackBinaryImport(transactionId)
+      return this.readPublicTransaction(transactionId)
+    }
     if (file.appliedRevision === null) {
       throw new CorruptChangeTransactionError()
     }

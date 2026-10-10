@@ -307,6 +307,7 @@ export class CodingSessionRepository {
   private readonly insertMessageAttachmentStmt: StatementSync
   private readonly listMessageAttachmentsStmt: StatementSync
   private readonly deleteChatAttachmentStmt: StatementSync
+  private readonly listAttachmentScopesStmt: StatementSync
 
   constructor(db: DatabaseSync) {
     this.db = db
@@ -364,6 +365,13 @@ export class CodingSessionRepository {
         'FROM message_attachments WHERE message_id = ? ORDER BY id ASC'
     )
     this.deleteChatAttachmentStmt = db.prepare('DELETE FROM chat_attachments WHERE id = ?')
+    this.listAttachmentScopesStmt = db.prepare(
+      'SELECT DISTINCT m.session_id AS session_id, s.workspace_id AS workspace_id ' +
+        'FROM message_attachments ma ' +
+        'JOIN coding_messages m ON m.id = ma.message_id ' +
+        'JOIN coding_sessions s ON s.id = m.session_id ' +
+        'WHERE ma.attachment_id = ?'
+    )
   }
 
   /** Inserts a session row and returns its id. */
@@ -554,6 +562,25 @@ export class CodingSessionRepository {
   /** Deletes one attachment metadata row (backing file removed main-side). */
   deleteChatAttachment(id: string): void {
     this.deleteChatAttachmentStmt.run(id)
+  }
+
+  /**
+   * Session scopes referencing one attachment (Step 3 import scope
+   * check): every session with at least one committed message link
+   * for the attachment, with its workspace. New SELECT only — no
+   * schema change. Unreferenced (draft) attachments yield [].
+   */
+  listAttachmentScopes(attachmentId: string): { readonly sessionId: number; readonly workspaceId: number }[] {
+    const rows: unknown = this.listAttachmentScopesStmt.all(attachmentId)
+    if (!Array.isArray(rows)) {
+      throw new DatabaseError('stored message attachment rows are invalid')
+    }
+    return rows.map((row) => {
+      if (!isRecord(row) || typeof row['session_id'] !== 'number' || typeof row['workspace_id'] !== 'number') {
+        throw new DatabaseError('stored message attachment rows are invalid')
+      }
+      return { sessionId: row['session_id'], workspaceId: row['workspace_id'] }
+    })
   }
 
   /** All attachment links for one message, insertion order. */

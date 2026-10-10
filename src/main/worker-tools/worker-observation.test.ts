@@ -165,12 +165,12 @@ function seedRuntime(h: Harness, sessionId: number, runId: number, overrides?: {
 }
 
 describe('stage 27 tool registry', () => {
-  it('contains exactly eight Worker tools', () => {
+  it('contains exactly ten Worker tools', () => {
     assert.deepEqual(
       [...WORKER_TOOLS].sort(),
-      ['change_propose', 'git_read', 'preview_inspect', 'runtime_observe', 'runtime_start', 'terminal_execute', 'workspace_read', 'workspace_search'].sort()
+      ['attachment_import', 'change_propose', 'git_read', 'image_generate', 'preview_inspect', 'runtime_observe', 'runtime_start', 'terminal_execute', 'workspace_read', 'workspace_search'].sort()
     )
-    assert.equal(workerToolSchemas().length, 8)
+    assert.equal(workerToolSchemas().length, 10)
     assert.ok(!WORKER_TOOLS.includes('browser_click' as never))
     assert.ok(!WORKER_TOOLS.includes('browser_type' as never))
     assert.ok(!WORKER_TOOLS.includes('browser_navigate' as never))
@@ -206,9 +206,9 @@ describe('stage 27 tool registry', () => {
 })
 
 describe('stage 27 capability expansion', () => {
-  it('registry contains exactly seven capabilities', () => {
+  it('registry contains exactly nine capabilities', () => {
     assert.deepEqual([...AGENT_CAPABILITIES], [
-      'workspace.read', 'workspace.search', 'git.read', 'change.propose', 'terminal.execute', 'runtime.observe', 'preview.inspect'
+      'workspace.read', 'workspace.search', 'git.read', 'change.propose', 'attachment.import', 'image.generate', 'terminal.execute', 'runtime.observe', 'preview.inspect'
     ])
   })
 
@@ -218,7 +218,7 @@ describe('stage 27 capability expansion', () => {
       const { sessionId } = await seedSession(h)
       void sessionId
       const config = h.capService.getConfig({ workspaceId: h.workspaceId })
-      assert.equal(config.policies.length, 7)
+      assert.equal(config.policies.length, 9)
       assert.ok(config.policies.every((entry) => entry.mode === 'deny'))
       assert.throws(() =>
         h.capService.updateConfig({
@@ -251,7 +251,7 @@ describe('stage 27 capability expansion', () => {
         workspaceId: h.workspaceId,
         enabled: false,
         policies: AGENT_CAPABILITIES.map((capability) => ({ capability, mode: 'allow' as const })).map((entry) =>
-          entry.capability === 'terminal.execute' ? { ...entry, mode: 'ask' as const } : entry
+          entry.capability === 'terminal.execute' || entry.capability === 'attachment.import' || entry.capability === 'image.generate' ? { ...entry, mode: 'ask' as const } : entry
         )
       })
       assert.equal(h.gate.authorize({ workspaceId: h.workspaceId, sessionId, actor: 'worker', capability: 'runtime.observe' }).decision, 'deny')

@@ -108,6 +108,8 @@ export class ChangeSetRepository {
   private readonly findSetStmt: StatementSync
   private readonly findItemsStmt: StatementSync
   private readonly listRecentStmt: StatementSync
+  private readonly findSetForTransactionStmt: StatementSync
+  private readonly linkExistingStmt: StatementSync
 
   constructor(db: DatabaseSync) {
     this.db = db
@@ -135,6 +137,12 @@ export class ChangeSetRepository {
     this.listRecentStmt = db.prepare(
       'SELECT id, workspace_id, kind, summary, created_at, updated_at FROM change_sets ' +
         'WHERE workspace_id = ? ORDER BY created_at DESC, id DESC LIMIT ?'
+    )
+    this.findSetForTransactionStmt = db.prepare(
+      'SELECT change_set_id, transaction_id, ordinal, file_summary FROM change_set_items WHERE transaction_id = ?'
+    )
+    this.linkExistingStmt = db.prepare(
+      'INSERT INTO change_set_items (change_set_id, transaction_id, ordinal, file_summary) VALUES (?, ?, ?, ?)'
     )
   }
 
@@ -207,5 +215,45 @@ export class ChangeSetRepository {
       throw new DatabaseError('stored change set rows are invalid')
     }
     return rows.map(mapChangeSet)
+  }
+
+  /**
+   * Item link for one transaction, or undefined when the transaction
+   * is not grouped in any set. New SELECT only — no schema change.
+   */
+  findSetForTransaction(transactionId: number): StoredChangeSetItem | undefined {
+    const row: unknown = this.findSetForTransactionStmt.get(transactionId)
+    return row === undefined ? undefined : mapChangeSetItem(row)
+  }
+
+  /**
+   * Atomically persists one Change Set linking already-existing
+   * pending transactions (Step 3 mixed binary+text grouping). Either
+   * the set plus every link lands or nothing does. Returns the new
+   * Change Set id. Callers validate membership first; UNIQUE
+   * violations (already-grouped transaction) fail here.
+   */
+  createChangeSetForExisting(
+    input: NewChangeSet,
+    items: readonly { readonly transactionId: number; readonly ordinal: number; readonly fileSummary: string }[]
+  ): number {
+    let changeSetId: number
+    this.db.exec('BEGIN')
+    try {
+      const setResult = this.insertSetStmt.run(input.workspaceId, input.kind, input.summary, input.now, input.now)
+      changeSetId = toRowId(setResult.lastInsertRowid, 'change set')
+      for (const item of items) {
+        this.linkExistingStmt.run(changeSetId, item.transactionId, item.ordinal, item.fileSummary)
+      }
+      this.db.exec('COMMIT')
+    } catch (error) {
+      try {
+        this.db.exec('ROLLBACK')
+      } catch {
+        // Best effort: the original persistence error below is what matters.
+      }
+      throw error
+    }
+    return changeSetId
   }
 }

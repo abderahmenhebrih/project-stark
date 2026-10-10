@@ -37,6 +37,8 @@ describe('capability panel state', () => {
           { capability: 'workspace.search', mode: 'ask' },
           { capability: 'git.read', mode: 'allow' },
           { capability: 'change.propose', mode: 'ask' },
+          { capability: 'attachment.import', mode: 'deny' },
+          { capability: 'image.generate', mode: 'deny' },
           { capability: 'terminal.execute', mode: 'deny' },
           { capability: 'runtime.observe', mode: 'deny' },
           { capability: 'preview.inspect', mode: 'deny' }
@@ -108,12 +110,16 @@ describe('capability panel state', () => {
     assert.equal(state.loading, false)
   })
 
-  it('labels all seven rows and legal modes', () => {
-    assert.deepEqual([...CAPABILITY_ORDER], ['workspace.read', 'workspace.search', 'git.read', 'change.propose', 'terminal.execute', 'runtime.observe', 'preview.inspect'])
+  it('labels all nine rows and legal modes', () => {
+    assert.deepEqual([...CAPABILITY_ORDER], ['workspace.read', 'workspace.search', 'git.read', 'change.propose', 'attachment.import', 'image.generate', 'terminal.execute', 'runtime.observe', 'preview.inspect'])
     assert.equal(capabilityLabel('workspace.read'), 'Workspace file read')
+    assert.equal(capabilityLabel('attachment.import'), 'Attachment import')
+    assert.equal(capabilityLabel('image.generate'), 'Image generation')
     assert.equal(capabilityLabel('terminal.execute'), 'Terminal execute')
     assert.equal(capabilityLabel('runtime.observe'), 'Runtime observation')
     assert.equal(capabilityLabel('preview.inspect'), 'Live Preview inspection')
+    assert.deepEqual([...legalModesFor('attachment.import')], ['deny', 'ask'])
+    assert.deepEqual([...legalModesFor('image.generate')], ['deny', 'ask'])
     assert.deepEqual([...legalModesFor('terminal.execute')], ['deny', 'ask'])
     assert.deepEqual([...legalModesFor('git.read')], ['deny', 'ask', 'allow'])
     assert.deepEqual([...legalModesFor('runtime.observe')], ['deny', 'ask', 'allow'])

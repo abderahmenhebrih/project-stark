@@ -30,7 +30,13 @@ export function ChangeSetReview({ changeSet, onReviewFile, onClose }: ChangeSetR
         {[...changeSet.items]
           .sort((a, b) => a.ordinal - b.ordinal)
           .map((item) => {
-            const path = item.transaction.files[0]?.relativePath ?? `Change #${item.transaction.id}`
+            const file = item.transaction.files[0]
+            const path =
+              file === undefined
+                ? `Change #${item.transaction.id}`
+                : file.binaryImport === undefined
+                  ? file.relativePath
+                  : `ADD ${file.relativePath}`
             return (
               <li key={item.transaction.id} className="changes__item">
                 <span className="explorer__row explorer__row--static">

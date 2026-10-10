@@ -105,6 +105,9 @@ import {
   normalizeProposalError
 } from '../../lib/proposal-error'
 import { normalizeChangeSetProposalError } from '../../lib/change-set-error'
+import { attachmentAiState } from './attachment-ai-inclusion'
+import { VoiceInputButton } from './VoiceInputButton'
+import { appendTranscription } from './voice-recorder'
 import './session.css'
 
 interface SessionPanelProps {
@@ -1522,8 +1525,21 @@ export function SessionPanel({
     )
   }
 
-  function handleRemoveAttachment(attachmentId: string): void {
-    setAttachments((current) => current.filter((entry) => entry.id !== attachmentId))
+  /**
+   * Inserts successful voice transcription into the composer. Existing
+   * text is preserved (appended with spacing); nothing auto-sends —
+   * the user edits and sends normally.
+   */
+  function handleVoiceTranscribed(text: string): void {
+    const clean = text.trim()
+    if (clean === '') {
+      return
+    }
+    setComposer((current) => appendTranscription(current, clean, null).text)
+    composerRef.current?.focus()
+  }
+
+  function handleRemoveAttachment(attachmentId: string): void {    setAttachments((current) => current.filter((entry) => entry.id !== attachmentId))
     // Best effort: the backing draft asset is removed main-side when
     // unreferenced; a failure leaves a recoverable orphan, never a
     // broken message (links persist only on successful send).
@@ -1874,6 +1890,11 @@ export function SessionPanel({
                                   loading="lazy"
                                 />
                                 <span className="session__attachment-name">{attachment.name}</span>
+                                {attachmentAiState(attachment, provider.selectedModel) !== null && (
+                                  <span className="session__attachment-sub">
+                                    {attachmentAiState(attachment, provider.selectedModel)}
+                                  </span>
+                                )}
                               </div>
                             ) : (
                               <div className="session__attachment-filecard" title={attachment.name}>
@@ -2083,6 +2104,11 @@ export function SessionPanel({
                       Capability: Project runtime
                     </p>
                   )}
+                  {pendingApproval.toolName === 'attachment_import' && (
+                    <p className="session__hint" role="note">
+                      Capability: Attachment import
+                    </p>
+                  )}
                   {pendingApproval.toolName === 'runtime_observe' && (
                     <p className="session__hint" role="note">
                       Capability: Runtime observation
@@ -2109,7 +2135,9 @@ export function SessionPanel({
                   <p className="session__hint" role="note">
                     {pendingApproval.toolName === 'change_propose'
                       ? 'Approval creates a reviewable proposal only. Files will not change until you review and Accept them.'
-                      : pendingApproval.toolName === 'terminal_execute'
+                        : pendingApproval.toolName === 'attachment_import'
+                          ? 'Approval creates a reviewable asset proposal only. Files will not change until you review and Accept them.'
+                          : pendingApproval.toolName === 'terminal_execute'
                         ? 'This exact command will run with your user account from the Workspace root. It may modify files, start subprocesses, or access the network.'
                         : pendingApproval.toolName === 'runtime_start'
                           ? 'This exact command will run with your user account from the Workspace root and may modify files, start subprocesses, or access the network.'
@@ -2133,6 +2161,16 @@ export function SessionPanel({
                     <p className="session__hint" role="note">
                       This approval applies only to this exact program and argument list.
                     </p>
+                  )}
+                  {pendingApproval.toolName === 'image_generate' && (
+                    <>
+                      <p className="session__hint" role="note">
+                        Capability: Image generation
+                      </p>
+                      <p className="session__hint" role="note">
+                        Approval generates images using the configured AI provider. May use provider credits/API quota. Images appear as chat attachments; project files change only after your separate review and Accept.
+                      </p>
+                    </>
                   )}
                   <div className="session__settings-row">
                     <button
@@ -2535,6 +2573,12 @@ export function SessionPanel({
               >
                 <StarkIcon name="paperclip" size={15} />
               </button>
+              <VoiceInputButton
+                key={`voice-${String(state.selectedSessionId ?? 'none')}`}
+                disabled={state.sending || attachBusy || proposal.preparing || work.preparing}
+                sessionKey={String(state.selectedSessionId ?? 'none')}
+                onTranscribed={handleVoiceTranscribed}
+              />
               <button
                 className="explorer__primary session__send"
                 type="button"

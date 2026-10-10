@@ -2,8 +2,8 @@
  * Shared Worker tool contract (Stage 27).
  *
  * Worker tools: workspace_read, workspace_search, git_read,
- * change_propose, terminal_execute, runtime_start, runtime_observe,
- * preview_inspect. Plain TypeScript —
+ * change_propose, attachment_import, image_generate, terminal_execute,
+ * runtime_start, runtime_observe, preview_inspect. Plain TypeScript —
  * no Node/DOM APIs. Renderer never submits tool names, args, or
  * results; all derive main-side. Approval is per exact action; policy
  * never mutates on approval. change_propose targets are opaque
@@ -13,14 +13,38 @@
  * loopback preview port — main derives the preview URL from it.
  */
 
-/** Exactly the eight Stage 27 tools. */
-export type WorkerToolName = 'workspace_read' | 'workspace_search' | 'git_read' | 'change_propose' | 'terminal_execute' | 'runtime_start' | 'runtime_observe' | 'preview_inspect'
+/** Exactly the ten tools (eight Stage 27 plus attachment import plus image generation). */
+export type WorkerToolName = 'workspace_read' | 'workspace_search' | 'git_read' | 'change_propose' | 'attachment_import' | 'image_generate' | 'terminal_execute' | 'runtime_start' | 'runtime_observe' | 'preview_inspect'
 
 /** One requested file change inside a change_propose invocation (model supplies only opaque ref). */
 export interface WorkerProposalChange {
   readonly targetRef: string
   readonly summary: string
   readonly proposedContent: string
+}
+
+/**
+ * One requested attachment import inside an attachment_import
+ * invocation. The model supplies ONLY the opaque chat-attachment ID
+ * plus a proposed workspace destination — never a source path,
+ * storage path, or absolute path. Main resolves and validates.
+ */
+export interface WorkerAttachmentImport {
+  readonly attachmentId: string
+  readonly proposedRelativePath: string
+}
+
+/**
+ * One requested image generation inside an image_generate invocation.
+ * The model supplies ONLY the prompt, count, and closed-vocabulary
+ * options — never a provider URL, credential, filesystem destination,
+ * or attachment path. Main resolves provider, stores bytes as normal
+ * chat attachments, and links them to the assistant message.
+ */
+export interface WorkerImageGenerate {
+  readonly prompt: string
+  readonly count: number
+  readonly size?: string
 }
 
 /** One requested terminal command (bare program plus inert argv data). */
@@ -36,6 +60,8 @@ export type WorkerToolArguments =
   | { readonly tool: 'git_read'; readonly operation: 'status' }
   | { readonly tool: 'git_read'; readonly operation: 'diff'; readonly scope: 'staged' | 'unstaged'; readonly relativePath: string | null }
   | { readonly tool: 'change_propose'; readonly changes: readonly WorkerProposalChange[] }
+  | { readonly tool: 'attachment_import'; readonly imports: readonly WorkerAttachmentImport[] }
+  | { readonly tool: 'image_generate'; readonly prompt: string; readonly count: number; readonly size?: string }
   | { readonly tool: 'terminal_execute'; readonly program: string; readonly args: readonly string[] }
   | { readonly tool: 'runtime_start'; readonly program: string; readonly args: readonly string[]; readonly port: number }
   | { readonly tool: 'runtime_observe' }

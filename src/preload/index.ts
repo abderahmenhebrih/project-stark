@@ -156,6 +156,7 @@ import type {
 } from '../shared/extension-management/types'
 import type { FormatDocumentRequest, FormatDocumentResult, FormatterApi } from '../shared/formatter/types'
 import type { ChatAttachmentsApi, ChatAttachment, ChooseAttachmentsRequest } from '../shared/chat-attachments/types'
+import type { VoiceApi, VoiceTranscribeRequest, VoiceTranscribeResult } from '../shared/voice/types'
 import { isCloudAccountStatus } from '../shared/cloud-account/types'
 import type { AppInfo, StarkApi } from '../shared/types'
 
@@ -551,6 +552,13 @@ function createAttachmentsApi(): ChatAttachmentsApi {
   }
 }
 
+function createVoiceApi(): VoiceApi {
+  return {
+    transcribe: (request: VoiceTranscribeRequest): Promise<VoiceTranscribeResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.voiceTranscribe, request) as Promise<VoiceTranscribeResult>
+  }
+}
+
 function createAccountApi(): CloudAccountApi {
   return {
     getStatus: (): Promise<CloudAccountStatus> =>
@@ -653,7 +661,8 @@ const starkApi: StarkApi = {
   extensionActivation: createExtensionActivationApi(),
   extensionManagement: createExtensionManagementApi(),
   formatter: createFormatterApi(),
-  attachments: createAttachmentsApi()
+  attachments: createAttachmentsApi(),
+  voice: createVoiceApi()
 }
 
 contextBridge.exposeInMainWorld('stark', starkApi)

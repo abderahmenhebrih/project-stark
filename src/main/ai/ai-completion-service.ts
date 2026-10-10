@@ -19,6 +19,9 @@ import { formatProviderContext } from '../session-context/session-context-servic
 import { AiOperationGuard } from './ai-operation-guard'
 import type { LooplinkRepository } from '../looplink/looplink-repository'
 import type { LooplinkService } from '../looplink/looplink-service'
+import type { ChatAttachmentService } from '../chat-attachments/service'
+import { buildChatAttachmentSection } from './ai-attachment-resolver'
+import type { ProviderAttachmentContent } from './provider-adapter'
 import { InvalidSessionMessageError, SessionMessageTooLargeError, SessionNotFoundError, SessionWorkspaceMismatchError, SessionWorkspaceUnavailableError } from '../sessions/errors'
 import { validateUserMessageContent } from '../sessions/message-validation'
 import { PendingApprovalBlockedError } from '../worker-tools/worker-tool-errors'
@@ -77,6 +80,14 @@ export interface AiCompletionServiceOptions {
    * behavior — existing harnesses keep working.
    */
   readonly usage?: AiUsageDeps
+  /**
+   * Step 2 chat-attachment understanding (optional). When present,
+   * the trailing message's committed attachments are resolved
+   * main-side and offered to the provider per model capability.
+   * Absent means attachments travel as explicitly-labeled metadata
+   * only — legacy harnesses keep working, nothing is sent silently.
+   */
+  readonly attachments?: ChatAttachmentService
 }
 
 /**
@@ -95,6 +106,7 @@ export class AiCompletionService {
   private readonly looplink: { readonly service: LooplinkService; readonly store: LooplinkRepository } | undefined
   private readonly pendingApprovals: { hasPending(sessionId: number): boolean } | undefined
   private readonly usage: AiUsageDeps | undefined
+  private readonly attachmentService: ChatAttachmentService | undefined
 
   constructor(
     private readonly workspaces: WorkspaceRepository,
@@ -109,6 +121,7 @@ export class AiCompletionService {
     this.looplink = options?.looplink
     this.pendingApprovals = options?.pendingApprovals
     this.usage = options?.usage
+    this.attachmentService = options?.attachments
   }
 
   /**
@@ -144,8 +157,45 @@ export class AiCompletionService {
     )
   }
 
-  async generateResponse(payload: unknown): Promise<AiGenerateResult> {
-    if (!hasStrictShape(payload, ['workspaceId', 'sessionId'])) {
+  /**
+   * Step 2 chat-attachment section for one trailing message (shared
+   * builder — same rows the renderer displays, same block the model
+   * receives).
+   */
+  private loadChatAttachmentSection(
+    messageId: number,
+    providerId: string,
+    model: string
+  ): { readonly block: string | null; readonly payloads: readonly ProviderAttachmentContent[] } {
+    return buildChatAttachmentSection({
+      sessions: this.sessions,
+      attachments: this.attachmentService,
+      messageId,
+      providerId,
+      model
+    })
+  }
+
+  /**
+   * Inserts the attachment review block ahead of the trailing user
+   * message (after any explicit project-context block). The block is
+   * part of the reviewed provider input — Stage 15 invariant.
+   */
+  private withChatAttachmentBlock(
+    base: readonly { readonly role: 'user' | 'assistant'; readonly content: string }[],
+    block: string | null
+  ): readonly { readonly role: 'user' | 'assistant'; readonly content: string }[] {
+    if (block === null || base.length === 0) {
+      return base
+    }
+    const trailing = base[base.length - 1]
+    if (trailing === undefined) {
+      return base
+    }
+    return [...base.slice(0, -1), { role: 'user' as const, content: block }, trailing]
+  }
+
+  async generateResponse(payload: unknown): Promise<AiGenerateResult> {    if (!hasStrictShape(payload, ['workspaceId', 'sessionId'])) {
       throw new InvalidProviderRequestError('generation request is invalid')
     }
     const record = payload as Record<string, unknown>
@@ -298,6 +348,8 @@ export class AiCompletionService {
         attachments.length === 0
           ? context
           : [...context.slice(0, -1), { role: 'user' as const, content: formatProviderContext(attachments) }, trailing]
+      const chatSection = this.loadChatAttachmentSection(latest.id, resolved.adapter.id, resolved.model)
+      const withChatAttachments = this.withChatAttachmentBlock(withAttachments, chatSection.block)
       const exclude = options?.excludeDuplicateText ?? null
       const loop =
         this.looplink === undefined
@@ -307,11 +359,11 @@ export class AiCompletionService {
             : (this.looplink.service.getPendingBlockExcluding(workspaceId, sessionId, exclude) ?? null)
       const providerMessages =
         loop === null
-          ? withAttachments
+          ? withChatAttachments
           : [
-              ...withAttachments.slice(0, -1),
+              ...withChatAttachments.slice(0, -1),
               { role: 'user' as const, content: loop.block },
-              withAttachments[withAttachments.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
+              withChatAttachments[withChatAttachments.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
             ]
       let raw: string
       // Bound capture for the tracking closure (preserves adapter `this`).
@@ -326,7 +378,8 @@ export class AiCompletionService {
             model: resolved.model,
             instructions: STAGE_14_FIXED_INSTRUCTIONS,
             messages: providerMessages,
-            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+            ...(chatSection.payloads.length > 0 ? { attachments: chatSection.payloads } : {})
           })
         )
         raw = result.text
@@ -363,6 +416,8 @@ export class AiCompletionService {
         attachments.length === 0
           ? context
           : [...context.slice(0, -1), { role: 'user' as const, content: formatProviderContext(attachments) }, trailing]
+      const chatSection = this.loadChatAttachmentSection(latestMessageId, adapter.id, model)
+      const withChatAttachments = this.withChatAttachmentBlock(withAttachments, chatSection.block)
       // Pending Looplink continuity travels as historical user-role
       // data ahead of the active request — never as an instruction.
       // Recovery dedup excludes the replayed active request from the
@@ -375,11 +430,11 @@ export class AiCompletionService {
             : (this.looplink.service.getPendingBlockExcluding(workspaceId, sessionId, excludeDuplicateText) ?? null)
       const providerMessages =
         loop === null
-          ? withAttachments
+          ? withChatAttachments
           : [
-              ...withAttachments.slice(0, -1),
+              ...withChatAttachments.slice(0, -1),
               { role: 'user' as const, content: loop.block },
-              withAttachments[withAttachments.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
+              withChatAttachments[withChatAttachments.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
             ]
       const apiKey = preResolvedApiKey ?? (await this.providerService.decryptCredentialForUse(providerId))
       // Bound capture for the tracking closure (preserves adapter `this`).
@@ -395,7 +450,8 @@ export class AiCompletionService {
             model,
             instructions: STAGE_14_FIXED_INSTRUCTIONS,
             messages: providerMessages,
-            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+            ...(chatSection.payloads.length > 0 ? { attachments: chatSection.payloads } : {})
           })
         )
         text = result.text

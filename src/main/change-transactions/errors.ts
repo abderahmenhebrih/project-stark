@@ -12,6 +12,19 @@ import {
   WorkspaceNotFoundError,
   WorkspaceUnavailableError
 } from '../workspace/errors'
+import {
+  ATTACHMENT_IMPORT_GENERIC_MESSAGE,
+  AttachmentDestinationExistsError,
+  AttachmentDestinationParentMissingError,
+  AttachmentImportError,
+  AttachmentImportMissingError,
+  AttachmentImportScopeError,
+  AttachmentImportStateError,
+  AttachmentImportTransactionNotFoundError,
+  AttachmentImportUncommittedError,
+  StaleAttachmentImportError,
+  UnsafeAttachmentDestinationError
+} from '../attachment-import/errors'
 
 /**
  * Change-transaction domain errors.
@@ -120,6 +133,25 @@ export function toPublicChangeError(error: unknown): Error {
     error instanceof ChangeTransactionNotFoundError
   ) {
     return new Error(error.message)
+  }
+  // Binary attachment-import failures (Step 3) carry stable
+  // user-facing copy; anything unexpected collapses to the import
+  // fallback — never paths, IDs, or internals.
+  if (
+    error instanceof AttachmentImportMissingError ||
+    error instanceof AttachmentImportUncommittedError ||
+    error instanceof AttachmentImportScopeError ||
+    error instanceof UnsafeAttachmentDestinationError ||
+    error instanceof AttachmentDestinationExistsError ||
+    error instanceof AttachmentDestinationParentMissingError ||
+    error instanceof StaleAttachmentImportError ||
+    error instanceof AttachmentImportTransactionNotFoundError ||
+    error instanceof AttachmentImportStateError
+  ) {
+    return new Error(error.message)
+  }
+  if (error instanceof AttachmentImportError) {
+    return new Error(ATTACHMENT_IMPORT_GENERIC_MESSAGE)
   }
   if (error instanceof WorkspaceFileConflictError) {
     return new Error(CHANGE_CONFLICT_MESSAGE)

@@ -2,21 +2,25 @@ import type { AgentCapability } from '../../shared/capabilities/types'
 import type { WorkerToolName } from '../../shared/worker-tools/types'
 
 /**
- * Static Worker tool registry (Stage 27): exactly eight tools —
- * three read-only, one reviewable-proposal, one exact-approval
+ * Static Worker tool registry (Stage 27 plus Step 3 attachment
+ * import plus Step 5 image generation): exactly ten tools — three
+ * read-only, one reviewable-proposal, one reviewable attachment
+ * import, one cost-bearing image generation, one exact-approval
  * terminal command, one managed-runtime start, two read-only
  * observations (runtime state/logs, rendered Preview snapshot) —
- * mapped to Stage 27 capabilities. Main-owned — never from
- * renderer, provider, or Brain/Worker output.
+ * mapped to capabilities. Main-owned — never from renderer,
+ * provider, or Brain/Worker output.
  */
 
-export const WORKER_TOOLS: readonly WorkerToolName[] = ['workspace_read', 'workspace_search', 'git_read', 'change_propose', 'terminal_execute', 'runtime_start', 'runtime_observe', 'preview_inspect']
+export const WORKER_TOOLS: readonly WorkerToolName[] = ['workspace_read', 'workspace_search', 'git_read', 'change_propose', 'attachment_import', 'image_generate', 'terminal_execute', 'runtime_start', 'runtime_observe', 'preview_inspect']
 
 const TOOL_TO_CAPABILITY: Readonly<Record<WorkerToolName, AgentCapability>> = {
   workspace_read: 'workspace.read',
   workspace_search: 'workspace.search',
   git_read: 'git.read',
   change_propose: 'change.propose',
+  attachment_import: 'attachment.import',
+  image_generate: 'image.generate',
   terminal_execute: 'terminal.execute',
   runtime_start: 'terminal.execute',
   runtime_observe: 'runtime.observe',
@@ -25,7 +29,7 @@ const TOOL_TO_CAPABILITY: Readonly<Record<WorkerToolName, AgentCapability>> = {
 
 const KNOWN: ReadonlySet<string> = new Set<string>(WORKER_TOOLS)
 
-/** True for exactly the eight known tools. */
+/** True for exactly the ten known tools. */
 export function isKnownWorkerTool(value: string): value is WorkerToolName {
   return KNOWN.has(value)
 }
@@ -95,6 +99,45 @@ export function workerToolSchemas(): { readonly name: WorkerToolName; readonly d
               }
             }
           }
+        }
+      }
+    },
+    {
+      name: 'attachment_import',
+      description: 'Propose copying chat attachments into the project as reviewable binary additions (opaque attachment ID plus proposed destination only). Never writes files; human review required.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['imports'],
+        properties: {
+          imports: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 10,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['attachmentId', 'proposedRelativePath'],
+              properties: {
+                attachmentId: { type: 'string' },
+                proposedRelativePath: { type: 'string' }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      name: 'image_generate',
+      description: 'Generate images from a text prompt using the configured AI provider (cost-bearing, bounded 1-4 images). Images become normal chat attachments on the assistant message; never writes project files.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['prompt', 'count'],
+        properties: {
+          prompt: { type: 'string' },
+          count: { type: 'integer', minimum: 1, maximum: 4 },
+          size: { type: 'string', enum: ['1024x1024', '1536x1024', '1024x1536'] }
         }
       }
     },
@@ -170,8 +213,29 @@ export function approvalSummaryFor(tool: WorkerToolName, args: Record<string, un
     }
     return 'Create reviewable change proposal'
   }
+  if (tool === 'attachment_import') {
+    // Fallback when resolved destinations are unavailable (validation
+    // failed before resolution). The resolved summary carries exact
+    // attachment names plus destinations.
+    const imports = args['imports']
+    const count = Array.isArray(imports) ? imports.length : 0
+    if (count === 1) {
+      return 'Propose importing a chat attachment into the project'
+    }
+    if (count > 1) {
+      return `Propose importing ${String(count)} chat attachments into the project`
+    }
+    return 'Propose importing a chat attachment into the project'
+  }
   if (tool === 'terminal_execute') {
     return `Run command: ${String(args['program'] ?? '')}`
+  }
+  if (tool === 'image_generate') {
+    const count = args['count']
+    if (typeof count === 'number' && count > 1) {
+      return `Generate ${String(count)} images using the configured AI provider`
+    }
+    return 'Generate an image using the configured AI provider'
   }
   if (tool === 'runtime_start') {
     return `Start project runtime: ${String(args['program'] ?? '')}`

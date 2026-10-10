@@ -701,6 +701,16 @@ export function StarkSettingsSurface(props: StarkSettingsSurfaceProps): ReactEle
                           Allowing proposals does not allow STARK to apply them. File changes still require review and Accept.
                         </p>
                       )}
+                      {capability === 'attachment.import' && (
+                        <p className="session__hint" role="note">
+                          Allows AI to propose copying a chat attachment into the current project. Human review is still required before writing.
+                        </p>
+                      )}
+                      {capability === 'image.generate' && (
+                        <p className="session__hint" role="note">
+                          Allows AI to generate images using the configured AI provider. May use provider credits/API quota. Each generation needs your approval.
+                        </p>
+                      )}
                       {capability === 'runtime.observe' && (
                         <p className="session__hint" role="note">
                           Allows the Worker to inspect the managed runtime&apos;s status and bounded stdout/stderr logs.

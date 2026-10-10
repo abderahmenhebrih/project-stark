@@ -17,12 +17,31 @@ export interface ProviderContextMessage {
   readonly content: string
 }
 
+/**
+ * Main-resolved attachment content for one provider request (Step 2).
+ * Bytes are resolved main-side from the attachment store — adapters
+ * receive opaque IDs plus encoded content only, never filesystem
+ * paths. `metadata` items carry no content: the review block already
+ * describes them, so adapters must not fabricate content for them.
+ */
+export type ProviderAttachmentContent =
+  | { readonly kind: 'image'; readonly id: string; readonly name: string; readonly mimeType: string; readonly base64: string }
+  | { readonly kind: 'text'; readonly id: string; readonly name: string; readonly mimeType: string; readonly text: string }
+  | { readonly kind: 'metadata'; readonly id: string; readonly name: string; readonly mimeType: string; readonly reason: string }
+
 /** Provider-neutral text-generation request. No tools, no URLs. */
 export interface ProviderGenerateRequest {
   readonly model: string
   readonly instructions: string
   readonly messages: readonly ProviderContextMessage[]
   readonly maxOutputTokens: number
+  /**
+   * Resolved attachment content (Step 2, optional). Adapters map it
+   * to the provider's native multimodal representation — never into
+   * giant plain-text prompts, never into instructions. Absent means
+   * the legacy text-only request — existing callers keep working.
+   */
+  readonly attachments?: readonly ProviderAttachmentContent[]
 }
 
 /** Provider-neutral text result: text plus provider-REPORTED usage when available. */
@@ -43,6 +62,12 @@ export interface ProviderStructuredRequest {
   readonly maxOutputTokens: number
   readonly schemaName: string
   readonly schema: unknown
+  /**
+   * Resolved attachment content (Step 2, optional). Same contract as
+   * the text-generation request — adapters map it natively and keep
+   * it structurally separate from instructions.
+   */
+  readonly attachments?: readonly ProviderAttachmentContent[]
 }
 
 /** Provider-neutral structured result: raw JSON envelope text plus provider-REPORTED usage when available. */
@@ -65,12 +90,45 @@ export interface ProviderWorkerTurnRequest {
   readonly messages: readonly ProviderContextMessage[]
   readonly maxOutputTokens: number
   readonly tools: readonly ProviderWorkerToolSchema[]
+  /**
+   * Resolved attachment content (Step 2, optional). The Worker
+   * receives it only when explicitly relevant to the delegated task —
+   * the caller gates before attaching.
+   */
+  readonly attachments?: readonly ProviderAttachmentContent[]
 }
 
 /** Normalized Worker-turn result: exactly one tool request or final text, plus provider-REPORTED usage when available. */
 export type ProviderWorkerTurnResult =
   | { readonly kind: 'tool_request'; readonly tool: string; readonly args: unknown; readonly usage?: ProviderUsage | null }
   | { readonly kind: 'final_text'; readonly text: string; readonly usage?: ProviderUsage | null }
+
+/** Provider-neutral speech-to-text request. Audio arrives decoded main-side; adapters never see paths or URLs. */
+export interface ProviderTranscriptionRequest {
+  readonly model: string
+  readonly audioBytes: Uint8Array
+  readonly mimeType: string
+}
+
+/** Normalized transcription result: text plus safe optional metadata. Never raw provider output. */
+export interface ProviderTranscriptionResult {
+  readonly text: string
+  readonly detectedLanguage?: string
+}
+
+/** Provider-neutral image-generation request. Prompt/count/closed options only — no URLs, keys, or paths. */
+export interface ProviderImageGenerationRequest {
+  readonly model: string
+  readonly prompt: string
+  readonly count: number
+  readonly size?: string
+}
+
+/** One generated image: raw bytes plus validated MIME. Adapters never return renderer-usable URLs. */
+export interface ProviderGeneratedImage {
+  readonly bytes: Uint8Array
+  readonly mimeType: string
+}
 
 /**
  * Safe, secret-free outcome of one diagnostic transport path.
@@ -126,6 +184,26 @@ export interface AiProviderAdapter {
   generateWorkerTurn?(
     request: ProviderWorkerTurnRequest & { readonly apiKey: string }
   ): Promise<ProviderWorkerTurnResult>
+  /**
+   * Bounded speech-to-text seam (Step 4): one audio→text
+   * transformation with a fixed transcription model. Adapters without
+   * it are treated as transcription-unsupported — callers fail with a
+   * safe capability error and never fall back to text chat. Exactly
+   * one attempt, bounded timeout, no retries.
+   */
+  transcribeAudio?(
+    request: ProviderTranscriptionRequest & { readonly apiKey: string }
+  ): Promise<ProviderTranscriptionResult>
+  /**
+   * Bounded text→image seam (Step 5): one prompt→images request with
+   * a fixed image model. Adapters without it are treated as
+   * image-unsupported — callers fail with a safe capability error.
+   * Exactly one attempt per call, bounded timeout, no retries. The
+   * fan-out bound lives with the caller, never the adapter.
+   */
+  generateImages?(
+    request: ProviderImageGenerationRequest & { readonly apiKey: string }
+  ): Promise<readonly ProviderGeneratedImage[]>
   /**
    * TEMPORARY Stage 14C diagnostic hook (dev-only, caller-gated).
    * Adapters without it fall back to the normal single-path flow.

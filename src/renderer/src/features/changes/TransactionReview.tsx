@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import type { ChangeTransaction } from '../../../../shared/change-transactions/types'
+import type { ChangeTransaction, ChangeTransactionBinaryImport } from '../../../../shared/change-transactions/types'
 import { EditorToolbar } from '../editor/EditorToolbar'
 import { TransactionDiffEditor } from '../editor/TransactionDiffEditor'
 import { buildDiffUri } from '../editor/editor-document'
@@ -21,6 +21,64 @@ interface TransactionReviewProps {
 
 function formatTime(value: number): string {
   return new Date(value).toLocaleString()
+}
+
+/** Display-only byte size for asset cards (matches the session attachment cards). */
+function formatAssetSize(size: number): string {
+  if (!Number.isFinite(size) || size < 0) {
+    return '0 B'
+  }
+  if (size < 1024) {
+    return `${String(size)} B`
+  }
+  if (size < 1024 * 1024) {
+    return `${String(Math.round(size / 1024))} KB`
+  }
+  return `${String(Math.round((size / (1024 * 1024)) * 10) / 10)} MB`
+}
+
+/** Content URL for one stored attachment (opaque ID only, main-resolved). */
+function attachmentContentUrl(id: string): string {
+  return `stark-attachment://${id}`
+}
+
+/**
+ * Review card for one binary chat-attachment import (Step 3): asset
+ * ADD with thumbnail (images only, via the opaque attachment ID),
+ * destination, type/size, and the reviewed SHA-256. Never a code
+ * diff — the stored bytes are a review manifest, not file content.
+ * Content travels as inert text only; Accept copies the exact
+ * reviewed bytes and never overwrites an existing file.
+ */
+function BinaryImportCard({ asset }: { readonly asset: ChangeTransactionBinaryImport }): ReactElement {
+  const shortHash = asset.sha256.length > 12 ? `${asset.sha256.slice(0, 12)}…` : asset.sha256
+  return (
+    <div className="review__asset" aria-label={`Binary addition ${asset.destination}`}>
+      {asset.kind === 'image' && (
+        <img
+          className="review__asset-thumb"
+          src={attachmentContentUrl(asset.attachmentId)}
+          alt={asset.fileName}
+        />
+      )}
+      <p className="changes__meta review__meta">
+        {asset.kind === 'image' ? 'ADD IMAGE' : 'ADD FILE'} {asset.destination}
+      </p>
+      <p className="changes__meta review__meta">
+        Source: chat attachment {asset.fileName}
+      </p>
+      <p className="changes__meta review__meta">
+        {asset.mimeType} · {formatAssetSize(asset.sizeBytes)}
+      </p>
+      <p className="changes__meta review__meta" title={asset.sha256}>
+        SHA-256 {shortHash}
+      </p>
+      <p className="changes__meta review__meta">
+        This proposal adds a new file. Accept copies the exact reviewed bytes; an existing file is never
+        overwritten.
+      </p>
+    </div>
+  )
 }
 
 /**
@@ -94,7 +152,8 @@ export function TransactionReview({
           {actionError}
         </p>
       )}
-      {file !== null && (
+      {file !== null && file.binaryImport !== undefined && <BinaryImportCard asset={file.binaryImport} />}
+      {file !== null && file.binaryImport === undefined && (
         <div className="review__diff">
           <TransactionDiffEditor
             key={`diff:${transaction.id}:${transaction.status}:${file.proposedRevision}`}

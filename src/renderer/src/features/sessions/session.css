@@ -483,7 +483,23 @@
   min-width: 34px;
 }
 
-/* Persisted message attachments: bounded thumbnails + file cards. */
+/* Voice input control (Step 4): inline with the attach/send buttons. */
+.session__voice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--stark-space-sm);
+}
+
+.session__voice-elapsed {
+  font-size: 12px;
+  color: var(--stark-text-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+}
+
+/* Generated-image gallery (Step 5): the existing attachment cards
+   wrap into a compact responsive grid — one large preview alone,
+   two columns for pairs, 2-column grid for 3–4. */
 .session__attachments-list {
   display: flex;
   flex-wrap: wrap;

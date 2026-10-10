@@ -1031,7 +1031,12 @@ export function Explorer({
     try {
       const transaction = await acceptChangeTransaction({ transactionId: detail.id })
       const file = transaction.files[0]
-      if (file !== undefined && file.appliedRevision !== null) {
+      if (file !== undefined && file.binaryImport !== undefined) {
+        // Binary ADD: refresh the exact affected parent directory. The
+        // stored proposed content is a review manifest — never load it
+        // into the editor.
+        void loadDirectory(transaction.workspaceId, parentDirectoryOf(file.relativePath))
+      } else if (file !== undefined && file.appliedRevision !== null) {
         dispatch({
           type: 'file-loaded',
           workspaceId: transaction.workspaceId,
@@ -1046,6 +1051,12 @@ export function Explorer({
     } catch (error: unknown) {
       changesDispatch({ type: 'action-failed', message: normalizeChangeTransactionError(error).message })
     }
+  }
+
+  /** Parent directory of a `/`-separated destination (`''` for the root). Pure and total. */
+  function parentDirectoryOf(relativePath: string): string {
+    const slash = relativePath.lastIndexOf('/')
+    return slash === -1 ? '' : relativePath.slice(0, slash)
   }
 
   async function handleReject(): Promise<void> {
@@ -1092,7 +1103,11 @@ export function Explorer({
     try {
       const transaction = await rollbackChangeTransaction({ transactionId: detail.id })
       const file = transaction.files[0]
-      if (file !== undefined) {
+      if (file !== undefined && file.binaryImport !== undefined) {
+        // Binary rollback restores the absent checkpoint: refresh the
+        // exact affected parent directory instead of loading content.
+        void loadDirectory(transaction.workspaceId, parentDirectoryOf(file.relativePath))
+      } else if (file !== undefined) {
         dispatch({
           type: 'file-loaded',
           workspaceId: transaction.workspaceId,

@@ -17,6 +17,8 @@ export const CAPABILITY_ORDER: readonly AgentCapability[] = [
   'workspace.search',
   'git.read',
   'change.propose',
+  'attachment.import',
+  'image.generate',
   'terminal.execute',
   'runtime.observe',
   'preview.inspect'
@@ -32,6 +34,10 @@ export function capabilityLabel(capability: AgentCapability): string {
       return 'Git read'
     case 'change.propose':
       return 'Change proposal'
+    case 'attachment.import':
+      return 'Attachment import'
+    case 'image.generate':
+      return 'Image generation'
     case 'terminal.execute':
       return 'Terminal execute'
     case 'runtime.observe':
@@ -43,6 +49,10 @@ export function capabilityLabel(capability: AgentCapability): string {
 
 export function capabilityDescription(capability: AgentCapability): string {
   switch (capability) {
+    case 'attachment.import':
+      return 'Allows the Worker to propose copying a chat attachment into the current project. Human review is still required before writing.'
+    case 'image.generate':
+      return 'Allows the Worker to generate images using the configured AI provider. May use provider credits/API quota. Each generation needs your approval.'
     case 'runtime.observe':
       return 'Allows the Worker to inspect the managed runtime\u2019s status and bounded stdout/stderr logs.'
     case 'preview.inspect':
@@ -53,7 +63,7 @@ export function capabilityDescription(capability: AgentCapability): string {
 }
 
 export function legalModesFor(capability: AgentCapability): readonly CapabilityPolicyMode[] {
-  return capability === 'terminal.execute' ? ['deny', 'ask'] : ['deny', 'ask', 'allow']
+  return capability === 'terminal.execute' || capability === 'attachment.import' || capability === 'image.generate' ? ['deny', 'ask'] : ['deny', 'ask', 'allow']
 }
 
 export interface CapabilityDraft {
@@ -69,6 +79,8 @@ export function emptyCapabilityDraft(): CapabilityDraft {
       'workspace.search': 'deny',
       'git.read': 'deny',
       'change.propose': 'deny',
+      'attachment.import': 'deny',
+      'image.generate': 'deny',
       'terminal.execute': 'deny',
       'runtime.observe': 'deny',
       'preview.inspect': 'deny'
@@ -82,6 +94,8 @@ export function capabilityDraftFromConfig(config: WorkspaceCapabilityConfig): Ca
     'workspace.search': 'deny',
     'git.read': 'deny',
     'change.propose': 'deny',
+    'attachment.import': 'deny',
+    'image.generate': 'deny',
     'terminal.execute': 'deny',
     'runtime.observe': 'deny',
     'preview.inspect': 'deny'
@@ -168,7 +182,7 @@ export function capabilityPanelReducer(state: CapabilityPanelState, action: Capa
       if (state.workspaceId !== action.workspaceId) {
         return state
       }
-      if (action.capability === 'terminal.execute' && action.mode === 'allow') {
+      if ((action.capability === 'terminal.execute' || action.capability === 'attachment.import' || action.capability === 'image.generate') && action.mode === 'allow') {
         return state
       }
       return {

@@ -55,6 +55,15 @@ export class HeartProviderUnavailableError extends HeartError {
   }
 }
 
+/** No configured Worker route can generate images. */
+export class HeartImageUnsupportedError extends HeartError {
+  override readonly name = 'HeartImageUnsupportedError'
+
+  constructor() {
+    super('The selected provider cannot generate images.')
+  }
+}
+
 export type HeartOperation = 'get' | 'update' | 'route'
 
 function genericFor(operation: HeartOperation): string {
@@ -77,7 +86,8 @@ export function toPublicHeartError(operation: HeartOperation, error: unknown): E
     error instanceof HeartUnconfiguredError ||
     error instanceof InvalidHeartConfigError ||
     error instanceof HeartRouteMissingError ||
-    error instanceof HeartProviderUnavailableError
+    error instanceof HeartProviderUnavailableError ||
+    error instanceof HeartImageUnsupportedError
   ) {
     return new Error(error.message)
   }

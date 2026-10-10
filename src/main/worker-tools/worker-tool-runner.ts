@@ -36,6 +36,9 @@ import {
   STAGE_18_FIXED_WORKER_INSTRUCTIONS
 } from '../ai/limits'
 import { BRAIN_PLAN_JSON_SCHEMA, BRAIN_PLAN_SCHEMA_NAME } from '../ai/ai-brain-service'
+import type { ChatAttachmentService } from '../chat-attachments/service'
+import { attachmentsNeedVision, workerAttachmentsRelevant } from '../ai/ai-attachment-context'
+import { buildChatAttachmentSection, type ChatAttachmentSection } from '../ai/ai-attachment-resolver'
 import type { CapabilityGate } from '../capabilities/capability-gate'
 import type { WorkspaceFilesService } from '../workspace-files/workspace-files-service'
 import type { WorkspaceSearchService } from '../workspace-search/workspace-search-service'
@@ -50,6 +53,13 @@ import {
   WORKER_PROPOSAL_UNKNOWN_TARGET_MESSAGE,
   WORKER_PROPOSAL_USER_DENY_MESSAGE
 } from './worker-proposal-validation'
+import { AttachmentImportError } from '../attachment-import/errors'
+import {
+  WORKER_ATTACHMENT_IMPORT_DENY_MESSAGE,
+  WORKER_ATTACHMENT_IMPORT_UNKNOWN_MESSAGE,
+  WORKER_ATTACHMENT_IMPORT_USER_DENY_MESSAGE,
+  buildAttachmentImportApprovalSummary
+} from './worker-attachment-import-validation'
 import {
   WORKER_TERMINAL_DENY_MESSAGE,
   WORKER_TERMINAL_USER_DENY_MESSAGE,
@@ -73,10 +83,16 @@ import {
   buildPreviewInspectApprovalSummary,
   extractTargetPath
 } from '../preview-inspection/preview-inspection-validation'
+import {
+  WORKER_IMAGE_GENERATE_DENY_MESSAGE,
+  WORKER_IMAGE_GENERATE_USER_DENY_MESSAGE,
+  buildImageGenerateApprovalSummary
+} from '../image-generation/validation'
 import { isAllowedPreviewNavigation } from '../project-runtime/runtime-preview'
 import type { WorkUsageSnapshot } from '../usage/ai-usage-service'
 import { decideThresholdRoute, usagePairKey } from '../usage/usage-threshold-policy'
 import type { UsageThresholdRouteKey } from '../../shared/usage/types'
+import { MAX_GENERATED_IMAGES } from '../../shared/ai/image-capabilities'
 import {
   MAX_WORKER_TOOL_CALLS,
   MAX_WORKER_TOOL_STATE_BYTES,
@@ -121,14 +137,18 @@ function contextBytes(messages: readonly { readonly content: string }[]): number
   return total
 }
 
-const WORKER_TOOL_INSTRUCTIONS =
+  const WORKER_TOOL_INSTRUCTIONS =
   STAGE_18_FIXED_WORKER_INSTRUCTIONS +
   " You may use STARK's read-only tools to inspect the project. " +
-  'You may request exactly one tool per turn (workspace_read, workspace_search, git_read, change_propose, terminal_execute, runtime_start, runtime_observe, preview_inspect) ' +
+  'You may request exactly one tool per turn (workspace_read, workspace_search, git_read, change_propose, attachment_import, terminal_execute, runtime_start, runtime_observe, preview_inspect) ' +
   'or return final text. Never request more than one tool, never combine a tool request with final text. ' +
   'If change_propose is available, you may create a reviewable code proposal only for files you previously read successfully in this run. ' +
   'Use the readRef returned by workspace_read. ' +
   'A proposal does not modify files. ' +
+  'A human must review and Accept every change before disk is modified. ' +
+  'If attachment_import is available, you may propose copying chat attachments from the current conversation into the project as reviewable binary additions. ' +
+  'Supply only the opaque attachment ID and a proposed project destination. ' +
+  'An import proposal does not modify files. ' +
   'A human must review and Accept every change before disk is modified. ' +
   'If terminal_execute is available, you may request one bounded external command. ' +
   'Commands require human approval for the exact executable and arguments. ' +
@@ -168,6 +188,13 @@ export interface WorkerToolRunnerDeps {
   /** Stage 27 read-only observation services. Optional for older harnesses. */
   readonly runtimeObservation?: import('../runtime-observation/runtime-observation-service').RuntimeObservationService
   readonly previewInspection?: import('../preview-inspection/preview-inspection-service').PreviewInspectionService
+  /**
+   * Step 2 chat-attachment understanding (optional). When present,
+   * Brain plan and relevant Worker turns receive committed
+   * attachment content per model capability. Absent means
+   * explicitly-labeled metadata only — nothing sent silently.
+   */
+  readonly attachments?: ChatAttachmentService
   /**
    * Stage 28 local usage awareness (optional). When present, every
    * outbound provider call is recorded through the central tracker
@@ -347,7 +374,7 @@ export class WorkerToolRunner {
 
   /** True when at least one tool is advertised (not hard-deny, master on). */
   toolsAdvertised(workspaceId: number, sessionId: number): boolean {
-    for (const tool of ['workspace_read', 'workspace_search', 'git_read', 'change_propose', 'terminal_execute', 'runtime_start', 'runtime_observe', 'preview_inspect'] as const) {
+    for (const tool of ['workspace_read', 'workspace_search', 'git_read', 'change_propose', 'attachment_import', 'image_generate', 'terminal_execute', 'runtime_start', 'runtime_observe', 'preview_inspect'] as const) {
       const capability =
         tool === 'workspace_read'
           ? 'workspace.read'
@@ -357,15 +384,20 @@ export class WorkerToolRunner {
               ? 'git.read'
               : tool === 'change_propose'
                 ? 'change.propose'
-                : tool === 'runtime_observe'
-                  ? 'runtime.observe'
-                  : tool === 'preview_inspect'
-                    ? 'preview.inspect'
-                    : 'terminal.execute'
+                : tool === 'attachment_import'
+                  ? 'attachment.import'
+                  : tool === 'image_generate'
+                    ? 'image.generate'
+                    : tool === 'runtime_observe'
+                      ? 'runtime.observe'
+                      : tool === 'preview_inspect'
+                        ? 'preview.inspect'
+                        : 'terminal.execute'
       const decision = this.deps.gate.authorize({ workspaceId, sessionId, actor: 'worker', capability })
-      // terminal_execute and runtime_start are exact-approval only:
-      // advertised solely on requires_approval, never on persistent allow.
-      if (tool === 'terminal_execute' || tool === 'runtime_start') {
+      // image_generate, terminal_execute and runtime_start are
+      // exact-approval only: advertised solely on requires_approval,
+      // never on persistent allow.
+      if (tool === 'image_generate' || tool === 'terminal_execute' || tool === 'runtime_start') {
         if (decision.decision === 'requires_approval') {
           return true
         }
@@ -486,9 +518,10 @@ export class WorkerToolRunner {
     for (const schema of workerToolSchemas()) {
       const capability = capabilityForTool(schema.name)
       const decision = this.deps.gate.authorize({ workspaceId, sessionId, actor: 'worker', capability })
-      // terminal_execute and runtime_start are exact-approval only: never
-      // advertised on persistent allow, even if a tampered policy claims it.
-      if (schema.name === 'terminal_execute' || schema.name === 'runtime_start') {
+      // image_generate, terminal_execute and runtime_start are
+      // exact-approval only: never advertised on persistent allow,
+      // even if a tampered policy claims it.
+      if (schema.name === 'image_generate' || schema.name === 'terminal_execute' || schema.name === 'runtime_start') {
         if (decision.decision === 'requires_approval') {
           out.push(schema)
         }
@@ -499,6 +532,208 @@ export class WorkerToolRunner {
       }
     }
     return out
+  }
+
+  /**
+   * Step 2: Brain-plan attachment section (describe mode — the fixed
+   * Brain assignment never reroutes; a vision-capable Worker still
+   * receives bytes when delegation follows).
+   */
+  private planChatSection(messageId: number, providerId: string, model: string): ChatAttachmentSection {
+    return buildChatAttachmentSection({
+      sessions: this.deps.sessions,
+      attachments: this.deps.attachments,
+      messageId,
+      providerId,
+      model,
+      visionMode: 'describe'
+    })
+  }
+
+  /**
+   * Step 2: Worker-turn attachment section. Blobs travel only when
+   * explicitly relevant to the delegated task — otherwise
+   * explicitly-labeled metadata.
+   */
+  private workerChatSection(
+    messageId: number,
+    providerId: string,
+    model: string,
+    workerInstruction: string,
+    userRequest: string
+  ): ChatAttachmentSection {
+    const links = this.deps.sessions.listAttachmentsForMessage(messageId)
+    const relevant = workerAttachmentsRelevant({
+      workerInstruction,
+      userRequest,
+      attachments: links.map((link) => ({ name: link.originalName }))
+    })
+    return buildChatAttachmentSection({
+      sessions: this.deps.sessions,
+      attachments: this.deps.attachments,
+      messageId,
+      providerId,
+      model,
+      forceMetadataOnly: !relevant
+    })
+  }
+
+  /**
+   * Step 3: resolves attachment-import previews for approval
+   * summaries and pre-park checks. Returns the safe failure reason
+   * when the import cannot be proposed (unknown/unavailable target,
+   * unsafe destination, scope mismatch) — the caller fails bounded
+   * with no parking and no persistence.
+   */
+  private async previewAttachmentImports(
+    workspaceId: number,
+    sessionId: number,
+    parsed: { readonly tool: string } & Record<string, unknown>
+  ): Promise<
+    | { readonly ok: true; readonly previews: readonly { readonly fileName: string; readonly destination: string }[] }
+    | { readonly ok: false; readonly reason: string }
+  > {
+    const imports = (parsed as { imports?: unknown }).imports
+    if (!Array.isArray(imports)) {
+      return { ok: false, reason: WORKER_ATTACHMENT_IMPORT_UNKNOWN_MESSAGE }
+    }
+    try {
+      const previews = await this.deps.executor.describeAttachmentImports({
+        workspaceId,
+        sessionId,
+        imports: imports as { readonly attachmentId: string; readonly proposedRelativePath: string }[]
+      })
+      return { ok: true, previews }
+    } catch (error) {
+      if (error instanceof AttachmentImportError) {
+        return { ok: false, reason: error.message }
+      }
+      return { ok: false, reason: WORKER_ATTACHMENT_IMPORT_UNKNOWN_MESSAGE }
+    }
+  }
+
+  /**
+   * Step 5: collects this run's successfully generated images as
+   * assistant-message attachment links (insertion order, deduped,
+   * capped). Parses only this run's `image_generate` success events —
+   * payload IDs produced main-side by the generation service, never
+   * renderer/model paths. Each ID is re-validated against the
+   * attachment store; missing rows are skipped fail-closed. Returns []
+   * when the run generated nothing.
+   */
+  private collectRunImageAttachments(
+    runId: number,
+    now: number
+  ): {
+    readonly attachmentId: string
+    readonly originalName: string
+    readonly mimeType: string
+    readonly sizeBytes: number
+    readonly kind: 'image' | 'file'
+    readonly sha256: string
+    readonly createdAt: number
+  }[] {
+    const links: {
+      attachmentId: string
+      originalName: string
+      mimeType: string
+      sizeBytes: number
+      kind: 'image' | 'file'
+      sha256: string
+      createdAt: number
+    }[] = []
+    const seen = new Set<string>()
+    for (const event of this.deps.tools.listEvents(runId)) {
+      if (event.toolName !== 'image_generate' || event.status !== 'succeeded') {
+        continue
+      }
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(event.payload) as unknown
+      } catch {
+        continue
+      }
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        continue
+      }
+      const images = (parsed as Record<string, unknown>)['images']
+      if (!Array.isArray(images)) {
+        continue
+      }
+      for (const image of images) {
+        if (typeof image !== 'object' || image === null || Array.isArray(image)) {
+          continue
+        }
+        const attachmentId = (image as Record<string, unknown>)['attachmentId']
+        if (typeof attachmentId !== 'string' || seen.has(attachmentId)) {
+          continue
+        }
+        seen.add(attachmentId)
+        const row = this.deps.sessions.findChatAttachmentById(attachmentId)
+        if (row === undefined) {
+          continue
+        }
+        links.push({
+          attachmentId: row.id,
+          originalName: row.originalName,
+          mimeType: row.mimeType,
+          sizeBytes: row.sizeBytes,
+          kind: row.kind,
+          sha256: row.sha256,
+          createdAt: now
+        })
+        if (links.length >= MAX_GENERATED_IMAGES) {
+          return links
+        }
+      }
+    }
+    return links
+  }
+
+  /**
+   * Step 5: completes a delegate run with the final assistant message
+   * plus this run's generated-image links (existing attachment link
+   * rows — no schema change). Runs without generations take the exact
+   * legacy path.
+   */
+  private completeDelegateRun(input: {
+    runId: number
+    sessionId: number
+    content: string
+    planSummary: string
+    now: number
+    consumeLooplinkId: number | null
+  }): { messageId: number } {
+    const attachments = this.collectRunImageAttachments(input.runId, input.now)
+    if (attachments.length === 0) {
+      return this.deps.runs.completeRunWithAssistantMessage(
+        { runId: input.runId, sessionId: input.sessionId, content: input.content, action: 'delegate', planSummary: input.planSummary, now: input.now },
+        input.consumeLooplinkId === null ? undefined : { consumeLooplinkId: input.consumeLooplinkId }
+      )
+    }
+    return this.deps.runs.completeRunWithAssistantMessageAndAttachments(
+      { runId: input.runId, sessionId: input.sessionId, content: input.content, action: 'delegate', planSummary: input.planSummary, now: input.now },
+      attachments,
+      input.consumeLooplinkId === null ? undefined : { consumeLooplinkId: input.consumeLooplinkId }
+    )
+  }
+
+  /**
+   * Inserts the attachment review block ahead of the trailing user
+   * message. The block is part of the reviewed provider input.
+   */
+  private withChatAttachmentBlock(
+    base: readonly { readonly role: 'user' | 'assistant'; readonly content: string }[],
+    block: string | null
+  ): readonly { readonly role: 'user' | 'assistant'; readonly content: string }[] {
+    if (block === null || base.length === 0) {
+      return base
+    }
+    const trailing = base[base.length - 1]
+    if (trailing === undefined) {
+      return base
+    }
+    return [...base.slice(0, -1), { role: 'user' as const, content: block }, trailing]
   }
 
   private async runInner(workspaceId: number, sessionId: number): Promise<WorkRecoveryResult> {
@@ -569,14 +804,16 @@ export class WorkerToolRunner {
       // narrowed function type (narrowing is lost inside closures).
       // Bound to preserve adapter `this`.
       const generateStructured = brainAdapter.generateStructured.bind(brainAdapter)
+      const planSection = this.planChatSection(latest.id, brainResolved.adapter.id, brainModel)
       const planBase =
         persisted.length === 0
           ? context
           : [...context.slice(0, -1), { role: 'user' as const, content: formatProviderContext(persisted) }, trailing]
+      const planBaseWithChat = this.withChatAttachmentBlock(planBase, planSection.block)
       const planMessages =
         loop === null
-          ? planBase
-          : [...planBase.slice(0, -1), { role: 'user' as const, content: loop.block }, planBase[planBase.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }]
+          ? planBaseWithChat
+          : [...planBaseWithChat.slice(0, -1), { role: 'user' as const, content: loop.block }, planBaseWithChat[planBaseWithChat.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }]
       let plan: { action: 'answer' | 'delegate'; planSummary: string; finalAnswer: string | null; workerInstruction: string | null; workerProfile: string }
       try {
         const planned = await this.trackCall(
@@ -590,7 +827,8 @@ export class WorkerToolRunner {
             messages: planMessages,
             maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
             schemaName: BRAIN_PLAN_SCHEMA_NAME,
-            schema: BRAIN_PLAN_JSON_SCHEMA
+            schema: BRAIN_PLAN_JSON_SCHEMA,
+            ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {})
           })
         )
         plan = this.parsePlan(planned.outputText)
@@ -613,7 +851,9 @@ export class WorkerToolRunner {
       }
       const workerInstruction = plan.workerInstruction ?? ''
       const workerProfile = (plan.workerProfile ?? 'general') as 'general' | 'coding' | 'reasoning' | 'fast'
-      const workerRoute = this.deps.heart.resolveWorker(routing, workerProfile)
+      const chatLinkRows = this.deps.sessions.listAttachmentsForMessage(latest.id)
+      const chatNeedsVision = attachmentsNeedVision(chatLinkRows.map((link) => ({ kind: link.kind, size: link.sizeBytes })))
+      const workerRoute = this.deps.heart.resolveWorkerForAttachments(routing, workerProfile, chatNeedsVision)
       // Stage 28 Worker threshold route: resolved from the base route
       // using the SAME Work-start usage snapshot (no fresh query).
       // The selected assignment flows into every Worker turn, audit
@@ -654,7 +894,7 @@ export class WorkerToolRunner {
         try {
           turnResult = await this.workerTurn({
             workspaceId, sessionId, runId, workerRoute: selectedWorkerRoute, advertised, contextMessages, persisted, activeText,
-            continuityBlock, workerInstruction, history, operation: turn === 0 ? 'worker' : 'worker_followup'
+            activeMessageId: latest.id, continuityBlock, workerInstruction, history, operation: turn === 0 ? 'worker' : 'worker_followup'
           })
         } catch (error) {
           throw markInteractive(error)
@@ -690,9 +930,23 @@ export class WorkerToolRunner {
             summary = buildProposalApprovalSummary(resolvedForSummary.resolved)
           }
         }
+        // Step 3: resolved human-readable summary for attachment
+        // imports (exact attachment names plus destinations, non-apply
+        // copy). Unresolvable imports keep the fallback summary here;
+        // the approval-time precheck below fails them bounded.
+        if (parsed.tool === 'attachment_import') {
+          const previewed = await this.previewAttachmentImports(workspaceId, sessionId, parsed as { readonly tool: string } & Record<string, unknown>)
+          if (previewed.ok) {
+            summary = buildAttachmentImportApprovalSummary(previewed.previews)
+          }
+        }
         if (parsed.tool === 'terminal_execute') {
           const command = parsed as { program: string; args: readonly string[] }
           summary = buildTerminalApprovalSummary({ program: command.program, args: command.args })
+        }
+        if (parsed.tool === 'image_generate') {
+          const requested = parsed as { prompt: string; count: number; size?: string }
+          summary = buildImageGenerateApprovalSummary({ prompt: requested.prompt, count: requested.count, size: requested.size })
         }
         if (parsed.tool === 'runtime_start') {
           const command = parsed as { program: string; args: readonly string[]; port: number }
@@ -704,15 +958,19 @@ export class WorkerToolRunner {
           const deniedHistoryPayload =
             parsed.tool === 'change_propose'
               ? WORKER_PROPOSAL_DENY_MESSAGE
-              : parsed.tool === 'terminal_execute'
-                ? WORKER_TERMINAL_DENY_MESSAGE
-                : parsed.tool === 'runtime_start'
-                  ? WORKER_RUNTIME_DENY_MESSAGE
-                  : parsed.tool === 'runtime_observe'
-                    ? WORKER_RUNTIME_OBSERVE_DENY_MESSAGE
-                    : parsed.tool === 'preview_inspect'
-                      ? WORKER_PREVIEW_INSPECT_DENY_MESSAGE
-                      : ''
+              : parsed.tool === 'attachment_import'
+                ? WORKER_ATTACHMENT_IMPORT_DENY_MESSAGE
+                : parsed.tool === 'image_generate'
+                  ? WORKER_IMAGE_GENERATE_DENY_MESSAGE
+                  : parsed.tool === 'terminal_execute'
+                  ? WORKER_TERMINAL_DENY_MESSAGE
+                  : parsed.tool === 'runtime_start'
+                    ? WORKER_RUNTIME_DENY_MESSAGE
+                    : parsed.tool === 'runtime_observe'
+                      ? WORKER_RUNTIME_OBSERVE_DENY_MESSAGE
+                      : parsed.tool === 'preview_inspect'
+                        ? WORKER_PREVIEW_INSPECT_DENY_MESSAGE
+                        : ''
           this.deps.tools.appendEvent({
             workspaceId, sessionId, runId, toolName: parsed.tool, capability: capabilityForTool(parsed.tool),
             argsJson, summary, payload: '', bytes: 0, status: 'denied', approvalId: null, now: this.now()
@@ -746,6 +1004,26 @@ export class WorkerToolRunner {
               continue
             }
             summary = buildProposalApprovalSummary(precheck.resolved)
+          }
+          // Step 3: an unresolvable attachment import never parks — it
+          // fails bounded as a tool result with no transaction/set.
+          if (parsed.tool === 'attachment_import') {
+            const previewed = await this.previewAttachmentImports(workspaceId, sessionId, parsed as { readonly tool: string } & Record<string, unknown>)
+            if (!previewed.ok) {
+              const failedSummary = 'Propose importing a chat attachment into the project'
+              this.deps.tools.appendEvent({
+                workspaceId, sessionId, runId, toolName: parsed.tool, capability: capabilityForTool(parsed.tool),
+                argsJson, summary: failedSummary, payload: '', bytes: 0, status: 'failed', approvalId: null, now: this.now()
+              })
+              this.deps.runs.appendStepWithModel(
+                { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: failedSummary, now: this.now() },
+                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile }
+              )
+              history.push({ tool: parsed.tool, argsJson, status: 'failed', payload: previewed.reason, summary: failedSummary })
+              this.saveToolState({ runId, workerInstruction, activeUserMessageId: latest.id, continuityUsed: loop !== null, state: { workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history, toolCallCount, workerProviderId: selectedWorkerRoute.assignment.providerId, workerModel: selectedWorkerRoute.assignment.model, brainProviderId: brainRouted.assignment.providerId, brainModel, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, looplinkId, activeUserMessageId: latest.id } })
+              continue
+            }
+            summary = buildAttachmentImportApprovalSummary(previewed.previews)
           }
           // Stage 26: an already-active workspace runtime never parks — it
           // answers bounded with the live runtime identity (one tool call,
@@ -932,14 +1210,16 @@ export class WorkerToolRunner {
           execResult.status === 'succeeded'
             ? execResult.payload
             : (parsed.tool === 'change_propose' ||
-                  parsed.tool === 'terminal_execute' ||
-                  parsed.tool === 'runtime_start' ||
-                  parsed.tool === 'runtime_observe' ||
-                  parsed.tool === 'preview_inspect') &&
-                typeof execResult.reason === 'string' &&
-                execResult.reason !== ''
-              ? execResult.reason
-              : ''
+                parsed.tool === 'attachment_import' ||
+                parsed.tool === 'image_generate' ||
+                parsed.tool === 'terminal_execute' ||
+                parsed.tool === 'runtime_start' ||
+                parsed.tool === 'runtime_observe' ||
+                parsed.tool === 'preview_inspect') &&
+              typeof execResult.reason === 'string' &&
+              execResult.reason !== ''
+            ? execResult.reason
+            : ''
         history.push({ tool: parsed.tool, argsJson, status: execResult.status, payload: historyPayload, summary: execResult.summary })
         this.saveToolState({ runId, workerInstruction, activeUserMessageId: latest.id, continuityUsed: loop !== null, state: { workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history, toolCallCount, workerProviderId: selectedWorkerRoute.assignment.providerId, workerModel: selectedWorkerRoute.assignment.model, brainProviderId: brainRouted.assignment.providerId, brainModel, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, looplinkId, activeUserMessageId: latest.id } })
       }
@@ -983,9 +1263,8 @@ export class WorkerToolRunner {
         { runId, ordinal: 99, kind: 'brain_synthesis', status: 'completed', instruction: null, output: null, now: this.now() },
         { role: 'brain', providerId: brainRouted.assignment.providerId, model: brainModel, routeKey: 'primary', requestedProfile: null }
       )
-      const { messageId } = this.deps.runs.completeRunWithAssistantMessage(
-        { runId, sessionId, content: finalText, action: 'delegate', planSummary: plan.planSummary, now: this.now() },
-        loop === null ? undefined : { consumeLooplinkId: loop.looplinkId }
+      const { messageId } = this.completeDelegateRun(
+        { runId, sessionId, content: finalText, planSummary: plan.planSummary, now: this.now(), consumeLooplinkId: loop?.looplinkId ?? null }
       )
       return this.toCompleted(runId, messageId)
     } catch (error) {
@@ -1095,7 +1374,7 @@ export class WorkerToolRunner {
       // approval alone never authorizes a proposal. Stage 27
       // observations re-validate their bound runtime/path the same way.
       const execResult = await this.deps.executor.executeApproved({
-        workspaceId, sessionId, runId: stored.runId, tool: stored.toolName as 'workspace_read' | 'workspace_search' | 'git_read' | 'change_propose' | 'runtime_observe' | 'preview_inspect',
+        workspaceId, sessionId, runId: stored.runId, tool: stored.toolName as 'workspace_read' | 'workspace_search' | 'git_read' | 'change_propose' | 'attachment_import' | 'image_generate' | 'runtime_observe' | 'preview_inspect',
         args: parsedArgs as never, argsJson: stored.argsJson, approvalId, now: this.now()
       })
       if (!this.deps.tools.transitionApproval(approvalId, 'consumed', this.now())) {
@@ -1105,12 +1384,14 @@ export class WorkerToolRunner {
         execResult.status === 'succeeded'
           ? execResult.payload
           : (stored.toolName === 'change_propose' ||
-                stored.toolName === 'runtime_observe' ||
-                stored.toolName === 'preview_inspect') &&
-              typeof execResult.reason === 'string' &&
-              execResult.reason !== ''
-            ? execResult.reason
-            : ''
+              stored.toolName === 'attachment_import' ||
+              stored.toolName === 'image_generate' ||
+              stored.toolName === 'runtime_observe' ||
+              stored.toolName === 'preview_inspect') &&
+            typeof execResult.reason === 'string' &&
+            execResult.reason !== ''
+          ? execResult.reason
+          : ''
       return await this.continueAfterTool({ workspaceId, sessionId, runId: stored.runId, state, historyAppend: { tool: stored.toolName, argsJson: stored.argsJson, status: execResult.status, payload: approvedHistoryPayload, summary: execResult.summary } })
     }
     if (!this.deps.tools.transitionApproval(approvalId, 'denied', this.now())) {
@@ -1123,15 +1404,19 @@ export class WorkerToolRunner {
     const deniedHistoryPayload =
       stored.toolName === 'change_propose'
         ? WORKER_PROPOSAL_USER_DENY_MESSAGE
-        : stored.toolName === 'terminal_execute'
-          ? WORKER_TERMINAL_USER_DENY_MESSAGE
-          : stored.toolName === 'runtime_start'
-            ? WORKER_RUNTIME_USER_DENY_MESSAGE
-            : stored.toolName === 'runtime_observe'
-              ? WORKER_RUNTIME_OBSERVE_USER_DENY_MESSAGE
-              : stored.toolName === 'preview_inspect'
-                ? WORKER_PREVIEW_USER_DENY_MESSAGE
-                : ''
+        : stored.toolName === 'attachment_import'
+          ? WORKER_ATTACHMENT_IMPORT_USER_DENY_MESSAGE
+          : stored.toolName === 'image_generate'
+            ? WORKER_IMAGE_GENERATE_USER_DENY_MESSAGE
+            : stored.toolName === 'terminal_execute'
+            ? WORKER_TERMINAL_USER_DENY_MESSAGE
+            : stored.toolName === 'runtime_start'
+              ? WORKER_RUNTIME_USER_DENY_MESSAGE
+              : stored.toolName === 'runtime_observe'
+                ? WORKER_RUNTIME_OBSERVE_USER_DENY_MESSAGE
+                : stored.toolName === 'preview_inspect'
+                  ? WORKER_PREVIEW_USER_DENY_MESSAGE
+                  : ''
     return await this.continueAfterTool({ workspaceId, sessionId, runId: stored.runId, state, historyAppend: { tool: stored.toolName, argsJson: stored.argsJson, status: 'denied', payload: deniedHistoryPayload, summary: stored.summary } })
   }
 
@@ -1191,9 +1476,8 @@ export class WorkerToolRunner {
               { runId, ordinal: 99, kind: 'brain_synthesis', status: 'completed', instruction: null, output: null, now: this.now() },
               { role: 'brain', providerId: state.brainProviderId, model: state.brainModel, routeKey: 'primary', requestedProfile: null }
             )
-            const { messageId } = this.deps.runs.completeRunWithAssistantMessage(
-              { runId, sessionId, content: finalText, action: 'delegate', planSummary: state.planSummary, now: this.now() },
-              loop === null ? undefined : { consumeLooplinkId: loop.looplinkId }
+            const { messageId } = this.completeDelegateRun(
+              { runId, sessionId, content: finalText, planSummary: state.planSummary, now: this.now(), consumeLooplinkId: loop?.looplinkId ?? null }
             )
             return this.toCompleted(runId, messageId)
           }
@@ -1216,9 +1500,19 @@ export class WorkerToolRunner {
               resumeSummary = buildProposalApprovalSummary(resolvedForSummary.resolved)
             }
           }
+          if (parsed.tool === 'attachment_import') {
+            const previewed = await this.previewAttachmentImports(workspaceId, sessionId, parsed as { readonly tool: string } & Record<string, unknown>)
+            if (previewed.ok) {
+              resumeSummary = buildAttachmentImportApprovalSummary(previewed.previews)
+            }
+          }
           if (parsed.tool === 'terminal_execute') {
             const command = parsed as { program: string; args: readonly string[] }
             resumeSummary = buildTerminalApprovalSummary({ program: command.program, args: command.args })
+          }
+          if (parsed.tool === 'image_generate') {
+            const requested = parsed as { prompt: string; count: number; size?: string }
+            resumeSummary = buildImageGenerateApprovalSummary({ prompt: requested.prompt, count: requested.count, size: requested.size })
           }
           if (parsed.tool === 'runtime_start') {
             const command = parsed as { program: string; args: readonly string[]; port: number }
@@ -1229,15 +1523,19 @@ export class WorkerToolRunner {
             const deniedPayload =
               parsed.tool === 'change_propose'
                 ? WORKER_PROPOSAL_DENY_MESSAGE
-                : parsed.tool === 'terminal_execute'
-                  ? WORKER_TERMINAL_DENY_MESSAGE
-                  : parsed.tool === 'runtime_start'
-                    ? WORKER_RUNTIME_DENY_MESSAGE
-                    : parsed.tool === 'runtime_observe'
-                      ? WORKER_RUNTIME_OBSERVE_DENY_MESSAGE
-                      : parsed.tool === 'preview_inspect'
-                        ? WORKER_PREVIEW_INSPECT_DENY_MESSAGE
-                        : ''
+                : parsed.tool === 'attachment_import'
+                  ? WORKER_ATTACHMENT_IMPORT_DENY_MESSAGE
+                  : parsed.tool === 'image_generate'
+                    ? WORKER_IMAGE_GENERATE_DENY_MESSAGE
+                    : parsed.tool === 'terminal_execute'
+                    ? WORKER_TERMINAL_DENY_MESSAGE
+                    : parsed.tool === 'runtime_start'
+                      ? WORKER_RUNTIME_DENY_MESSAGE
+                      : parsed.tool === 'runtime_observe'
+                        ? WORKER_RUNTIME_OBSERVE_DENY_MESSAGE
+                        : parsed.tool === 'preview_inspect'
+                          ? WORKER_PREVIEW_INSPECT_DENY_MESSAGE
+                          : ''
             this.deps.tools.appendEvent({
               workspaceId, sessionId, runId, toolName: parsed.tool, capability: capabilityForTool(parsed.tool),
               argsJson, summary: resumeSummary, payload: '', bytes: 0, status: 'denied', approvalId: null, now: this.now()
@@ -1262,6 +1560,21 @@ export class WorkerToolRunner {
                 continue
               }
               summary = buildProposalApprovalSummary(precheck.resolved)
+            }
+            // Step 3: an unresolvable attachment import never parks.
+            if (parsed.tool === 'attachment_import') {
+              const previewed = await this.previewAttachmentImports(workspaceId, sessionId, parsed as { readonly tool: string } & Record<string, unknown>)
+              if (!previewed.ok) {
+                const failedSummary = 'Propose importing a chat attachment into the project'
+                this.deps.tools.appendEvent({
+                  workspaceId, sessionId, runId, toolName: parsed.tool, capability: capabilityForTool(parsed.tool),
+                  argsJson, summary: failedSummary, payload: '', bytes: 0, status: 'failed', approvalId: null, now: this.now()
+                })
+                history.push({ tool: parsed.tool, argsJson, status: 'failed', payload: previewed.reason, summary: failedSummary })
+                this.saveToolState({ runId, workerInstruction: state.workerInstruction, activeUserMessageId: state.activeUserMessageId, continuityUsed: state.continuityBlock !== null, state: { ...state, history: [...history] } })
+                continue
+              }
+              summary = buildAttachmentImportApprovalSummary(previewed.previews)
             }
             if (parsed.tool === 'runtime_start') {
               const command = parsed as { program: string; args: readonly string[]; port: number }
@@ -1369,6 +1682,7 @@ export class WorkerToolRunner {
             execResult.status === 'succeeded'
               ? execResult.payload
               : (parsed.tool === 'change_propose' ||
+                    parsed.tool === 'attachment_import' ||
                     parsed.tool === 'terminal_execute' ||
                     parsed.tool === 'runtime_start' ||
                     parsed.tool === 'runtime_observe' ||
@@ -1425,13 +1739,22 @@ export class WorkerToolRunner {
     contextMessages: { readonly role: 'user' | 'assistant'; readonly content: string }[]
     persisted: { readonly kind: string; readonly label: string; readonly relativePath: string | null; readonly lineStart: number | null; readonly lineEnd: number | null; readonly content: string }[]
     activeText: string
+    activeMessageId: number
     continuityBlock: string | null
     workerInstruction: string
     history: PersistedToolState['history']
   }): Promise<{ kind: 'tool_request'; tool: string; args: unknown } | { kind: 'final_text'; text: string }> {
     const resolved = await this.deps.providerService.resolveExplicitAssignment(input.workerRoute.assignment.providerId, input.workerRoute.assignment.model)
     try {
-      const messages = this.buildWorkerTurnMessages(input)
+      const chatSection = this.workerChatSection(
+        input.activeMessageId,
+        resolved.adapter.id,
+        resolved.model,
+        input.workerInstruction,
+        input.activeText
+      )
+      const messages = this.buildWorkerTurnMessages({ ...input, chatBlock: chatSection.block })
+      const chatPayloads = chatSection.payloads.length > 0 ? { attachments: chatSection.payloads } : {}
       if (typeof resolved.adapter.generateWorkerTurn === 'function') {
         const generateWorkerTurn = resolved.adapter.generateWorkerTurn.bind(resolved.adapter)
         const raw = await this.trackCall(
@@ -1444,7 +1767,8 @@ export class WorkerToolRunner {
             instructions: WORKER_TOOL_INSTRUCTIONS,
             messages,
             maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
-            tools: input.advertised.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))
+            tools: input.advertised.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
+            ...chatPayloads
           })
         )
         return this.normalizeTurn(raw)
@@ -1475,7 +1799,8 @@ export class WorkerToolRunner {
               arguments: { type: 'object' },
               finalText: { type: 'string' }
             }
-          }
+          },
+          ...chatPayloads
         })
       )
       return this.normalizeStructuredFallback(fallback.outputText)
@@ -1493,6 +1818,16 @@ export class WorkerToolRunner {
   }): Promise<{ kind: 'tool_request'; tool: string; args: unknown } | { kind: 'final_text'; text: string }> {
     const { state, workerResolved, workspaceId, sessionId } = input
     const advertised = this.advertisedTools(workspaceId, sessionId)
+    // Approval-resume rebuild: the attachment section is re-derived
+    // from the stored active message id (never persisted blobs — the
+    // parked state stays within its byte cap).
+    const resumeChatSection = this.workerChatSection(
+      state.activeUserMessageId,
+      state.workerProviderId,
+      workerResolved.model,
+      state.workerInstruction,
+      state.activeText
+    )
     const messages = this.buildWorkerTurnMessages({
       workspaceId,
       sessionId,
@@ -1503,11 +1838,13 @@ export class WorkerToolRunner {
       activeText: state.activeText,
       continuityBlock: state.continuityBlock,
       workerInstruction: state.workerInstruction,
-      history: state.history
+      history: state.history,
+      chatBlock: resumeChatSection.block
     })
+    const resumeChatPayloads = resumeChatSection.payloads.length > 0 ? { attachments: resumeChatSection.payloads } : {}
     const adapter = workerResolved.adapter as {
-      generateWorkerTurn?: (request: { apiKey: string; model: string; instructions: string; messages: unknown; maxOutputTokens: number; tools: unknown }) => Promise<unknown>
-      generateStructured?: (request: { apiKey: string; model: string; instructions: string; messages: unknown; maxOutputTokens: number; schemaName: string; schema: unknown }) => Promise<{ outputText: string }>
+      generateWorkerTurn?: (request: { apiKey: string; model: string; instructions: string; messages: unknown; maxOutputTokens: number; tools: unknown; attachments?: unknown }) => Promise<unknown>
+      generateStructured?: (request: { apiKey: string; model: string; instructions: string; messages: unknown; maxOutputTokens: number; schemaName: string; schema: unknown; attachments?: unknown }) => Promise<{ outputText: string }>
     }
     const turnMeta = { operation: 'worker_followup' as const, workspaceId, sessionId, runId: input.runId }
     if (typeof adapter.generateWorkerTurn === 'function') {
@@ -1518,7 +1855,7 @@ export class WorkerToolRunner {
         state.workerModel,
         () => generateWorkerTurn({
           apiKey: workerResolved.apiKey, model: workerResolved.model, instructions: WORKER_TOOL_INSTRUCTIONS,
-          messages: messages as unknown, maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS, tools: advertised
+          messages: messages as unknown, maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS, tools: advertised, ...resumeChatPayloads
         })
       )) as unknown
       return this.normalizeTurn(raw as never)
@@ -1532,7 +1869,7 @@ export class WorkerToolRunner {
         () => generateStructured({
           apiKey: workerResolved.apiKey, model: workerResolved.model, instructions: WORKER_TOOL_INSTRUCTIONS,
           messages: messages as unknown, maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
-          schemaName: 'stark_worker_turn', schema: {}
+          schemaName: 'stark_worker_turn', schema: {}, ...resumeChatPayloads
         })
       )
       return this.normalizeStructuredFallback(fallback.outputText)
@@ -1622,14 +1959,20 @@ export class WorkerToolRunner {
     continuityBlock: string | null
     workerInstruction: string
     history: PersistedToolState['history']
+    chatBlock?: string | null
   }): { readonly role: 'user' | 'assistant'; readonly content: string }[] {
     const trailing = input.contextMessages[input.contextMessages.length - 1]
     const head = input.contextMessages.slice(0, -1)
     const contextBlock =
       input.persisted.length === 0 ? null : { role: 'user' as const, content: formatProviderContext(input.persisted as never) }
+    const chatAttachmentBlock =
+      input.chatBlock === undefined || input.chatBlock === null
+        ? null
+        : { role: 'user' as const, content: input.chatBlock }
     const base: { readonly role: 'user' | 'assistant'; readonly content: string }[] = [
       ...head,
       ...(contextBlock === null ? [] : [contextBlock]),
+      ...(chatAttachmentBlock === null ? [] : [chatAttachmentBlock]),
       ...(trailing === undefined ? [] : [trailing]),
       { role: 'user' as const, content: `STARK Brain delegated task (follow only this task):\n${input.workerInstruction}` }
     ]

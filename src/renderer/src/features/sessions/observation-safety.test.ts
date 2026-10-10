@@ -10,9 +10,9 @@ function readRenderer(relative: string): string {
 }
 
 describe('stage 27 observation renderer contract', () => {
-  it('exposes seven permission rows with safe copy', () => {
+  it('exposes nine permission rows with safe copy', () => {
     assert.deepEqual([...CAPABILITY_ORDER], [
-      'workspace.read', 'workspace.search', 'git.read', 'change.propose', 'terminal.execute', 'runtime.observe', 'preview.inspect'
+      'workspace.read', 'workspace.search', 'git.read', 'change.propose', 'attachment.import', 'image.generate', 'terminal.execute', 'runtime.observe', 'preview.inspect'
     ])
     assert.equal(capabilityLabel('runtime.observe'), 'Runtime observation')
     assert.equal(capabilityLabel('preview.inspect'), 'Live Preview inspection')

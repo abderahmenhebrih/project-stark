@@ -13,12 +13,14 @@ function readShared(relative: string): string {
 }
 
 describe('capability registry contract', () => {
-  it('contains exactly the seven Stage 27 capabilities', () => {
+  it('contains exactly the nine capabilities (seven Stage 27 plus attachment import plus image generation)', () => {
     assert.deepEqual([...AGENT_CAPABILITIES], [
       'workspace.read',
       'workspace.search',
       'git.read',
       'change.propose',
+      'attachment.import',
+      'image.generate',
       'terminal.execute',
       'runtime.observe',
       'preview.inspect'
@@ -30,11 +32,13 @@ describe('capability registry contract', () => {
     assert.ok(!isKnownCapability(''))
   })
 
-  it('defines legal modes with terminal allow forbidden', () => {
+  it('defines legal modes with terminal, attachment-import, and image-generate allow forbidden', () => {
     assert.deepEqual([...legalModesFor('workspace.read')], ['deny', 'ask', 'allow'])
     assert.deepEqual([...legalModesFor('workspace.search')], ['deny', 'ask', 'allow'])
     assert.deepEqual([...legalModesFor('git.read')], ['deny', 'ask', 'allow'])
     assert.deepEqual([...legalModesFor('change.propose')], ['deny', 'ask', 'allow'])
+    assert.deepEqual([...legalModesFor('attachment.import')], ['deny', 'ask'])
+    assert.deepEqual([...legalModesFor('image.generate')], ['deny', 'ask'])
     assert.deepEqual([...legalModesFor('terminal.execute')], ['deny', 'ask'])
     assert.deepEqual([...legalModesFor('runtime.observe')], ['deny', 'ask', 'allow'])
     assert.deepEqual([...legalModesFor('preview.inspect')], ['deny', 'ask', 'allow'])

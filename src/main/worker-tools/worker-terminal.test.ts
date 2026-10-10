@@ -222,7 +222,9 @@ function setPolicies(h: Harness, terminal: 'deny' | 'ask'): void {
       { capability: 'change.propose', mode: 'allow' },
       { capability: 'terminal.execute', mode: terminal },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
     ]
   })
 }
@@ -248,10 +250,10 @@ function createRun(h: Harness, sessionId: number): number {
 }
 
 describe('stage 25 registry, schema, and validation', () => {
-  it('registry contains exactly eight tools with terminal mapping', () => {
-    assert.deepEqual([...WORKER_TOOLS].sort(), ['change_propose', 'git_read', 'preview_inspect', 'runtime_observe', 'runtime_start', 'terminal_execute', 'workspace_read', 'workspace_search'].sort())
+  it('registry contains exactly ten tools with terminal mapping', () => {
+    assert.deepEqual([...WORKER_TOOLS].sort(), ['attachment_import', 'change_propose', 'git_read', 'image_generate', 'preview_inspect', 'runtime_observe', 'runtime_start', 'terminal_execute', 'workspace_read', 'workspace_search'].sort())
     assert.equal(capabilityForTool('terminal_execute'), 'terminal.execute')
-    assert.equal(workerToolSchemas().length, 8)
+    assert.equal(workerToolSchemas().length, 10)
   })
 
   it('terminal schema is strict program plus argv', () => {
@@ -905,7 +907,9 @@ describe('stage 25 worker approval flows', () => {
               { capability: 'change.propose', mode: 'deny' },
               { capability: 'terminal.execute', mode: 'ask' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
             ]
           })
         }
@@ -1027,7 +1031,9 @@ describe('stage 25 bounds, recovery, and interactions', () => {
           { capability: 'change.propose', mode: 'deny' },
           { capability: 'terminal.execute', mode: 'ask' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       h.adapter.planScript = [delegatePlan()]
@@ -1263,7 +1269,9 @@ describe('stage 25 bounds, recovery, and interactions', () => {
           { capability: 'change.propose', mode: 'allow' },
           { capability: 'terminal.execute', mode: 'ask' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       h.adapter.planScript = [delegatePlan()]

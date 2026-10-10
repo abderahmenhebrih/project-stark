@@ -191,7 +191,9 @@ function allowPropose(h: ReturnType<typeof openHarness>): void {
       { capability: 'change.propose', mode: 'allow' },
       { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
     ]
   })
 }
@@ -206,14 +208,16 @@ function askPropose(h: ReturnType<typeof openHarness>): void {
       { capability: 'change.propose', mode: 'ask' },
       { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
     ]
   })
 }
 
 describe('stage 24 registry and mapping', () => {
-  it('registry contains exactly eight tools', () => {
-    assert.deepEqual([...WORKER_TOOLS].sort(), ['change_propose', 'git_read', 'preview_inspect', 'runtime_observe', 'runtime_start', 'terminal_execute', 'workspace_read', 'workspace_search'].sort())
+  it('registry contains exactly ten tools', () => {
+    assert.deepEqual([...WORKER_TOOLS].sort(), ['attachment_import', 'change_propose', 'git_read', 'image_generate', 'preview_inspect', 'runtime_observe', 'runtime_start', 'terminal_execute', 'workspace_read', 'workspace_search'].sort())
   })
 
   it('change_propose maps to change.propose', () => {
@@ -251,7 +255,9 @@ describe('stage 24 registry and mapping', () => {
           { capability: 'change.propose', mode: 'deny' },
           { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       const denied = h.runner.toolsAdvertised(h.workspaceId, sessionId)
@@ -266,7 +272,9 @@ describe('stage 24 registry and mapping', () => {
           { capability: 'change.propose', mode: 'allow' },
           { capability: 'terminal.execute', mode: 'ask' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       assert.equal(h.runner.toolsAdvertised(h.workspaceId, sessionId), false)
@@ -445,7 +453,9 @@ describe('stage 24 readRef authority', () => {
           { capability: 'change.propose', mode: 'allow' },
           { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       const sess2 = (await h.sessions.createSession({ workspaceId: ws2 })).id
@@ -826,7 +836,9 @@ describe('stage 24 capability gate and approvals', () => {
           { capability: 'change.propose', mode: 'deny' },
           { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       // Defense in depth: fake requests anyway
@@ -870,7 +882,9 @@ describe('stage 24 capability gate and approvals', () => {
           { capability: 'change.propose', mode: 'deny' },
           { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       const prop = await h.executor.execute({
@@ -1004,7 +1018,9 @@ describe('stage 24 capability gate and approvals', () => {
           { capability: 'change.propose', mode: 'ask' },
           { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       h.adapter.turnScript = [
@@ -1109,7 +1125,9 @@ describe('stage 24 bounds, persistence, recovery', () => {
           { capability: 'change.propose', mode: 'ask' },
           { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
         ]
       })
       h.adapter.planScript = [delegatePlan()]
@@ -1199,7 +1217,9 @@ describe('stage 24 bounds, persistence, recovery', () => {
             { capability: 'change.propose', mode: 'ask' },
             { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
-      { capability: 'preview.inspect', mode: 'deny' }
+      { capability: 'preview.inspect', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' }
           ]
         })
         h.adapter.planScript = [delegatePlan()]
@@ -1233,7 +1253,7 @@ describe('stage 24 bounds, persistence, recovery', () => {
 
   it('change_propose provider schema is strict with no path authority', () => {
     const schemas = workerToolSchemas()
-    assert.equal(schemas.length, 8)
+    assert.equal(schemas.length, 10)
     const propose = schemas.find((s) => s.name === 'change_propose')
     assert.ok(propose !== undefined)
     const text = JSON.stringify(propose.parameters)

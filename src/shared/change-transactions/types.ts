@@ -15,8 +15,28 @@
 export type ChangeTransactionStatus = 'pending' | 'applied' | 'rejected' | 'rolled_back'
 
 /**
+ * Review metadata for a binary chat-attachment import (Step 3).
+ * Present ONLY on binary ADD transactions created through the
+ * attachment-import flow. The renderer renders an asset card from
+ * this (never the raw manifest): thumbnail via the opaque
+ * attachment ID, destination, type/size, and reviewed SHA-256.
+ * No internal store paths are ever exposed.
+ */
+export interface ChangeTransactionBinaryImport {
+  readonly attachmentId: string
+  readonly fileName: string
+  readonly destination: string
+  readonly mimeType: string
+  readonly sizeBytes: number
+  readonly sha256: string
+  readonly kind: 'image' | 'file'
+}
+
+/**
  * One file inside a transaction. Revisions are SHA-256 hex digests over
  * exact bytes; contents are exact UTF-8 text. No absolute or temp paths.
+ * Binary attachment imports additionally carry `binaryImport` review
+ * metadata; their text contents are an opaque manifest, never diffed.
  */
 export interface ChangeTransactionFile {
   readonly relativePath: string
@@ -25,6 +45,7 @@ export interface ChangeTransactionFile {
   readonly appliedRevision: string | null
   readonly beforeContent: string
   readonly proposedContent: string
+  readonly binaryImport?: ChangeTransactionBinaryImport
 }
 
 /** Public transaction: persistence row mapped to display-safe data. */

@@ -191,6 +191,8 @@ function allowAll(h: ReturnType<typeof openHarness>): void {
       { capability: 'workspace.search', mode: 'allow' },
       { capability: 'git.read', mode: 'allow' },
       { capability: 'change.propose', mode: 'deny' },
+      { capability: 'attachment.import', mode: 'deny' },
+      { capability: 'image.generate', mode: 'deny' },
       { capability: 'terminal.execute', mode: 'deny' },
       { capability: 'runtime.observe', mode: 'deny' },
       { capability: 'preview.inspect', mode: 'deny' }
@@ -261,6 +263,8 @@ describe('tool work threshold routing', () => {
           { capability: 'workspace.search', mode: 'deny' },
           { capability: 'git.read', mode: 'deny' },
           { capability: 'change.propose', mode: 'deny' },
+          { capability: 'attachment.import', mode: 'deny' },
+          { capability: 'image.generate', mode: 'deny' },
           { capability: 'terminal.execute', mode: 'deny' },
           { capability: 'runtime.observe', mode: 'deny' },
           { capability: 'preview.inspect', mode: 'deny' }

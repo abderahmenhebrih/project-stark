@@ -39,6 +39,7 @@ import type { ExtensionActivationApi, ExtensionHostApi } from '../extension-host
 import type { ExtensionManagementApi } from '../extension-management/types'
 import type { FormatterApi } from '../formatter/types'
 import type { ChatAttachmentsApi } from '../chat-attachments/types'
+import type { VoiceApi } from '../voice/types'
 import type { WorkspaceApi } from '../workspace/types'
 
 /**
@@ -77,6 +78,7 @@ export interface StarkApi {
   extensionManagement: ExtensionManagementApi
   formatter: FormatterApi
   attachments: ChatAttachmentsApi
+  voice: VoiceApi
 }
 
 /** Lifecycle status shown by the development shell. */

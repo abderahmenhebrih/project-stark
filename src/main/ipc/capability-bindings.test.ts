@@ -52,6 +52,8 @@ describe('capability IPC bindings', () => {
             { capability: 'workspace.search', mode: 'ask' },
             { capability: 'git.read', mode: 'allow' },
             { capability: 'change.propose', mode: 'ask' },
+            { capability: 'attachment.import', mode: 'deny' },
+            { capability: 'image.generate', mode: 'deny' },
             { capability: 'terminal.execute', mode: 'ask' },
             { capability: 'runtime.observe', mode: 'deny' },
             { capability: 'preview.inspect', mode: 'deny' }
