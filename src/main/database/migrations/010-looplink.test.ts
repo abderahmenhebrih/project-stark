@@ -68,8 +68,8 @@ describe('migration 10 (looplink)', () => {
   it('fresh DB migrates to v10', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 18)
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(getUserVersion(db), 19)
     } finally {
       db.close()
     }
@@ -79,8 +79,8 @@ describe('migration 10 (looplink)', () => {
     const db = openFresh()
     try {
       seedV9(db)
-      assert.equal(runMigrations(db, migrations), 18)
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(getUserVersion(db), 19)
     } finally {
       db.close()
     }
@@ -90,7 +90,7 @@ describe('migration 10 (looplink)', () => {
     const db = openFresh()
     try {
       seedV9(db)
-      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(runMigrations(db, migrations), 19)
       for (const table of [
         'key_value',
         'workspaces',
@@ -164,7 +164,7 @@ describe('migration 10 (looplink)', () => {
           'payload_bytes, payload_hash, omitted_message_count, omitted_context_count, worker_result_omitted, ' +
           "omitted_change_count, created_at) VALUES (1, 1, 2, 'pending', '{}', 2, 'x', 0, 0, 0, 0, 1)"
       )
-      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(runMigrations(db, migrations), 19)
       const count: unknown = db.prepare('SELECT COUNT(*) AS n FROM looplink_handoffs').get()
       assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }))
     } finally {
@@ -210,7 +210,7 @@ describe('migration 10 (looplink)', () => {
   it('migration 10 is registered after migration 9', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     )
     assert.equal(migration010Looplink.version, 10)
   })

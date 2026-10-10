@@ -53,8 +53,8 @@ describe('migration 9 (heart)', () => {
   it('fresh DB migrates to v9', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 18)
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(getUserVersion(db), 19)
     } finally {
       db.close()
     }
@@ -64,8 +64,8 @@ describe('migration 9 (heart)', () => {
     const db = openFresh()
     try {
       seedV8(db)
-      assert.equal(runMigrations(db, migrations), 18)
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(getUserVersion(db), 19)
     } finally {
       db.close()
     }
@@ -75,7 +75,7 @@ describe('migration 9 (heart)', () => {
     const db = openFresh()
     try {
       seedV8(db)
-      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(runMigrations(db, migrations), 19)
       for (const table of [
         'key_value',
         'workspaces',
@@ -127,7 +127,7 @@ describe('migration 9 (heart)', () => {
       db.exec(
         "INSERT INTO ai_heart_settings (id, worker_mode, created_at, updated_at) VALUES (1, 'fixed', 1, 1)"
       )
-      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(runMigrations(db, migrations), 19)
       const count: unknown = db.prepare('SELECT COUNT(*) AS n FROM ai_heart_settings').get()
       assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }))
     } finally {
@@ -172,7 +172,7 @@ describe('migration 9 (heart)', () => {
   it('migration 9 is registered after migration 8', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     )
     assert.equal(migration009Heart.version, 9)
   })

@@ -9,12 +9,14 @@ import {
 } from 'react'
 import type { CodingMessage } from '../../../../shared/sessions/types'
 import type { SessionContextDraft } from '../../../../shared/context/types'
+import type { ChatAttachment } from '../../../../shared/chat-attachments/types'
 import {
   createCodingSession,
   listCodingSessions,
   listSessionMessages,
   sendSessionUserMessage
 } from '../../lib/sessions-api'
+import { chooseChatAttachments, removeChatAttachmentDraft } from '../../lib/attachments-api'
 import {
   SESSION_LIST_MESSAGE,
   SESSION_MESSAGES_MESSAGE,
@@ -142,6 +144,8 @@ export interface SessionChromeSnapshot {
   readonly sessionsLoading: boolean
   readonly looplinkActing: boolean
   readonly sendBusy: boolean
+  /** A creation is in flight: the shell disables + (one creation at a time). */
+  readonly creatingSession: boolean
 }
 
 /** Existing session actions forwarded to the shell unchanged. */
@@ -149,6 +153,12 @@ export interface SessionChromeActions {
   readonly newSession: () => void
   readonly selectSession: (sessionId: number) => void
   readonly continueLooplink: () => void
+  /**
+   * Closes the visible session tab (presentation only — never deletes
+   * persisted history, messages, or committed attachments). Guards
+   * unsent drafts with confirmation; see handleCloseRequest.
+   */
+  readonly closeSession: () => void
 }
 
 const OPENAI_PROVIDER_ID = 'openai' as const
@@ -193,6 +203,42 @@ function toSendErrorMessage(error: unknown): string {
 
 function roleLabel(role: CodingMessage['role']): string {
   return role === 'assistant' ? 'STARK' : 'YOU'
+}
+
+/** Content URL for one stored attachment (opaque ID only, main-resolved). */
+function attachmentContentUrl(id: string): string {
+  return `stark-attachment://${id}`
+}
+
+/** Human-readable byte size for attachment cards (display only). */
+function formatAttachmentSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return '0 B'
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`
+  }
+  const kilobytes = bytes / 1024
+  if (kilobytes < 1024) {
+    const rounded = Math.round(kilobytes * 10) / 10
+    return `${Number.isInteger(rounded) ? rounded.toFixed(0) : String(rounded)} KB`
+  }
+  const megabytes = kilobytes / 1024
+  const rounded = Math.round(megabytes * 10) / 10
+  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : String(rounded)} MB`
+}
+
+/** Short type label derived from the stored MIME type (display only). */
+function attachmentTypeLabel(attachment: ChatAttachment): string {
+  if (attachment.kind === 'image') {
+    return 'Image'
+  }
+  const slash = attachment.mimeType.indexOf('/')
+  const subtype = slash === -1 ? attachment.mimeType : attachment.mimeType.slice(slash + 1)
+  if (subtype === '' || subtype === 'octet-stream') {
+    return 'File'
+  }
+  return subtype.toUpperCase()
 }
 
 function formatTime(createdAt: number): string {
@@ -278,6 +324,19 @@ export function SessionPanel({
   const [approvalError, setApprovalError] = useState<string | null>(null)
   const [composer, setComposer] = useState('')
   const [apiKeyInput, setApiKeyInput] = useState('')
+  // Local file/image attachments staged for the next send. Draft-only:
+  // the panel remounts per workspace, committed rows persist server-side.
+  const [attachments, setAttachments] = useState<readonly ChatAttachment[]>([])
+  const [attachBusy, setAttachBusy] = useState(false)
+  const [attachError, setAttachError] = useState<string | null>(null)
+  // Session-creation guard (one creation at a time, no polling, no
+  // retry loop): the ref rejects re-entry synchronously across rapid
+  // + clicks; the state mirrors to the shell so + disables visibly.
+  const creatingRef = useRef(false)
+  const [creatingSession, setCreatingSession] = useState(false)
+  // Close-tab confirmation: set while the user decides about an unsent
+  // draft. Committed attachments are never touched by the close path.
+  const [confirmingClose, setConfirmingClose] = useState(false)
   const [revealKey, setRevealKey] = useState(false)
   const [modelDraft, setModelDraft] = useState<string | null>(null)
   const sessionsRequestRef = useRef(0)
@@ -739,9 +798,15 @@ export function SessionPanel({
   }
 
   async function handleNew(): Promise<void> {
-    if (state.loadingSessions) {
+    // Single-flight creation through the EXISTING session system
+    // (createCodingSession → session-created → chrome mirror): works
+    // with no AI provider connected, switches to the new session with
+    // an empty conversation, and never duplicates on rapid clicks.
+    if (state.loadingSessions || creatingRef.current) {
       return
     }
+    creatingRef.current = true
+    setCreatingSession(true)
     try {
       const session = await createCodingSession(workspaceId)
       dispatch({ type: 'session-created', session })
@@ -754,6 +819,9 @@ export function SessionPanel({
         requestId: state.sessionsRequestId,
         message: toErrorMessage(error, SESSION_LIST_MESSAGE)
       })
+    } finally {
+      creatingRef.current = false
+      setCreatingSession(false)
     }
   }
 
@@ -762,6 +830,58 @@ export function SessionPanel({
       return
     }
     dispatch({ type: 'session-selected', workspaceId, sessionId })
+  }
+
+  /**
+   * Closes the visible session tab. CLOSE ≠ DELETE: persisted history,
+   * database messages, and committed attachments are never touched —
+   * only the tab/workspace presentation changes. With a single active
+   * presentation (no multi-tab state in this architecture), closing
+   * selects the most recent remaining session, or creates a fresh
+   * local New session when none remains. An unsent draft (composer
+   * text or staged draft attachments) requires explicit confirmation
+   * first; confirming releases uncommitted draft assets through the
+   * existing narrow removeDraft API (bounded: at most 10).
+   */
+  function handleCloseRequest(): void {
+    if (state.selectedSessionId === null || creatingRef.current) {
+      return
+    }
+    setConfirmingClose(false)
+    if (isComposerEmpty(composer) && attachments.length === 0) {
+      void performClose()
+      return
+    }
+    setConfirmingClose(true)
+  }
+
+  function handleCloseCancel(): void {
+    setConfirmingClose(false)
+  }
+
+  async function performClose(): Promise<void> {
+    const closingId = state.selectedSessionId
+    if (closingId === null || creatingRef.current) {
+      return
+    }
+    setConfirmingClose(false)
+    // Release uncommitted draft assets only (best effort, bounded);
+    // committed attachments live server-side and are never removed.
+    const drafts = attachments
+    if (drafts.length > 0) {
+      setAttachments([])
+      await Promise.allSettled(drafts.map((draft) => removeChatAttachmentDraft(draft.id)))
+    }
+    setComposer('')
+    const fallback = state.sessions.find((entry) => entry.id !== closingId) ?? null
+    if (fallback !== null) {
+      dispatch({ type: 'session-selected', workspaceId, sessionId: fallback.id })
+      return
+    }
+    // No remaining session in this workspace: open a fresh local New
+    // session through the same guarded single-flight creation. The
+    // closed session stays in persisted history (nothing is deleted).
+    await handleNew()
   }
 
   function handleLoadOlder(): void {
@@ -809,7 +929,7 @@ export function SessionPanel({
     }
     const sessionId = state.selectedSessionId
     const content = composer
-    if (isComposerEmpty(content) || composerByteLength(content) > COMPOSER_MAX_BYTES) {
+    if ((isComposerEmpty(content) && attachments.length === 0) || composerByteLength(content) > COMPOSER_MAX_BYTES) {
       return
     }
     if (proposal.mode === 'propose') {
@@ -821,23 +941,15 @@ export function SessionPanel({
       return
     }
     const generateAfterSend = aiReady
-    const attached = [...contextDrafts]
     dispatch({ type: 'send-started', workspaceId, sessionId })
     try {
-      const result = await sendSessionUserMessage(
-        attached.length === 0
-          ? { workspaceId, sessionId, content }
-          : { workspaceId, sessionId, content, context: attached }
-      )
+      const result = await sendSessionUserMessage(messageSendPayload(sessionId, content))
       stickToBottomRef.current = true
       dispatch({ type: 'send-succeeded', workspaceId, session: result.session, message: result.message })
       // Clear only the sent text: keystrokes typed during the send are
       // newer composer state and must be preserved. The reducer drops
       // the result entirely if the selection moved on meanwhile.
-      setComposer((current) => (current === content ? '' : current))
-      // Drafts are renderer-local: sending consumes exactly the
-      // attached snapshot, so they clear on success only.
-      contextDraftsDispatch({ type: 'drafts-cleared', workspaceId })
+      clearSentComposer(content)
       if (generateAfterSend) {
         await runGeneration(sessionId)
       }
@@ -874,18 +986,12 @@ export function SessionPanel({
       return
     }
     const kind = eligibility.kind
-    const attached = [...contextDrafts]
     dispatch({ type: 'send-started', workspaceId, sessionId })
     try {
-      const result = await sendSessionUserMessage(
-        attached.length === 0
-          ? { workspaceId, sessionId, content }
-          : { workspaceId, sessionId, content, context: attached }
-      )
+      const result = await sendSessionUserMessage(messageSendPayload(sessionId, content))
       stickToBottomRef.current = true
       dispatch({ type: 'send-succeeded', workspaceId, session: result.session, message: result.message })
-      setComposer((current) => (current === content ? '' : current))
-      contextDraftsDispatch({ type: 'drafts-cleared', workspaceId })
+      clearSentComposer(content)
     } catch (error: unknown) {
       dispatch({
         type: 'send-failed',
@@ -1245,18 +1351,12 @@ export function SessionPanel({
     if (work.preparing) {
       return
     }
-    const attached = [...contextDrafts]
     dispatch({ type: 'send-started', workspaceId, sessionId })
     try {
-      const result = await sendSessionUserMessage(
-        attached.length === 0
-          ? { workspaceId, sessionId, content }
-          : { workspaceId, sessionId, content, context: attached }
-      )
+      const result = await sendSessionUserMessage(messageSendPayload(sessionId, content))
       stickToBottomRef.current = true
       dispatch({ type: 'send-succeeded', workspaceId, session: result.session, message: result.message })
-      setComposer((current) => (current === content ? '' : current))
-      contextDraftsDispatch({ type: 'drafts-cleared', workspaceId })
+      clearSentComposer(content)
     } catch (error: unknown) {
       dispatch({
         type: 'send-failed',
@@ -1379,6 +1479,57 @@ export function SessionPanel({
     contextDraftsDispatch({ type: 'draft-removed', workspaceId, draftId })
   }
 
+  /** Builds the send payload with context drafts plus staged attachment IDs. */
+  function messageSendPayload(
+    sessionId: number,
+    content: string
+  ): { workspaceId: number; sessionId: number; content: string; context?: readonly SessionContextDraft[]; attachments?: readonly string[] } {
+    const attached = [...contextDrafts]
+    const attachmentIds = attachments.map((entry) => entry.id)
+    return {
+      workspaceId,
+      sessionId,
+      content,
+      ...(attached.length > 0 ? { context: attached } : {}),
+      ...(attachmentIds.length > 0 ? { attachments: attachmentIds } : {})
+    }
+  }
+
+  /** Clears sent composer text, staged attachments, and context drafts. */
+  function clearSentComposer(content: string): void {
+    setComposer((current) => (current === content ? '' : current))
+    setAttachments([])
+    contextDraftsDispatch({ type: 'drafts-cleared', workspaceId })
+  }
+
+  function handleAttach(): void {
+    if (state.sending || attachBusy || proposal.preparing || work.preparing) {
+      return
+    }
+    setAttachBusy(true)
+    setAttachError(null)
+    chooseChatAttachments(workspaceId).then(
+      (picked) => {
+        setAttachBusy(false)
+        if (picked.length > 0) {
+          setAttachments((current) => [...current, ...picked])
+        }
+      },
+      (error: unknown) => {
+        setAttachBusy(false)
+        setAttachError(error instanceof Error && error.message !== '' ? error.message : 'We couldn’t attach those files.')
+      }
+    )
+  }
+
+  function handleRemoveAttachment(attachmentId: string): void {
+    setAttachments((current) => current.filter((entry) => entry.id !== attachmentId))
+    // Best effort: the backing draft asset is removed main-side when
+    // unreferenced; a failure leaves a recoverable orphan, never a
+    // broken message (links persist only on successful send).
+    void removeChatAttachmentDraft(attachmentId).catch(() => {})
+  }
+
   function handleRetry(): void {
     if (state.selectedSessionId === null || state.generating) {
       return
@@ -1393,7 +1544,7 @@ export function SessionPanel({
         { key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing },
         {
           hasSession: state.selectedSessionId !== null,
-          isEmpty: isComposerEmpty(composer),
+          isEmpty: isComposerEmpty(composer) && attachments.length === 0,
           sending: state.sending,
           overLimit
         }
@@ -1521,7 +1672,7 @@ export function SessionPanel({
   }
 
   const selectedSession = state.sessions.find((entry) => entry.id === state.selectedSessionId) ?? null
-  const empty = isComposerEmpty(composer)
+  const empty = isComposerEmpty(composer) && attachments.length === 0
   const overLimit = composerByteLength(composer) > COMPOSER_MAX_BYTES
   const eligibility = proposalEligibility(contextDrafts)
   const proposeMode = proposal.mode === 'propose'
@@ -1567,12 +1718,14 @@ export function SessionPanel({
         selectedSessionId: state.selectedSessionId,
         sessionsLoading: state.loadingSessions,
         looplinkActing: looplink.acting,
-        sendBusy: state.sending
+        sendBusy: state.sending,
+        creatingSession
       },
       {
         newSession: () => void handleNew(),
         selectSession: (sessionId: number) => handleSelect(sessionId),
-        continueLooplink: () => void handleContinueWithLooplink()
+        continueLooplink: () => void handleContinueWithLooplink(),
+        closeSession: () => handleCloseRequest()
       }
     )
   }, [
@@ -1582,6 +1735,9 @@ export function SessionPanel({
     state.selectedSessionId,
     state.loadingSessions,
     state.sending,
+    creatingSession,
+    composer,
+    attachments,
     looplink.acting
   ])
   /* eslint-enable react-hooks/exhaustive-deps */
@@ -1596,6 +1752,20 @@ export function SessionPanel({
       <p className="session__notice" role="status">
         {aiReady ? `OpenAI · ${provider.selectedModel ?? ''}` : 'Local session — AI provider not connected yet.'}
       </p>
+      {confirmingClose && (
+        <div className="session__confirm" role="alertdialog" aria-label="Close this session?">
+          <p className="session__confirm-title">Close this session?</p>
+          <p className="session__confirm-copy">You have an unsent draft.</p>
+          <div className="session__confirm-actions">
+            <button className="explorer__secondary" type="button" onClick={handleCloseCancel}>
+              Cancel
+            </button>
+            <button className="explorer__primary" type="button" onClick={() => void performClose()}>
+              Close
+            </button>
+          </div>
+        </div>
+      )}
       {settingsOpen && (
         <StarkSettingsSurface
           workspaceId={workspaceId}
@@ -1690,6 +1860,38 @@ export function SessionPanel({
                       <span className="session__role">{roleLabel(message.role)}</span>
                     </span>
                     <p className="session__content">{message.content}</p>
+                    {(message.attachments ?? []).length > 0 && (
+                      <div className="session__attachments-list" aria-label={`Attachments on message ${message.id}`}>
+                        {(message.attachments ?? []).map((attachment) => (
+                          <div key={attachment.id} className="session__attachment-card">
+                            {attachment.kind === 'image' ? (
+                              <div className="session__attachment-imagecard" title={attachment.name}>
+                                <img
+                                  className="session__attachment-image"
+                                  src={attachmentContentUrl(attachment.id)}
+                                  alt={attachment.name}
+                                  draggable={false}
+                                  loading="lazy"
+                                />
+                                <span className="session__attachment-name">{attachment.name}</span>
+                              </div>
+                            ) : (
+                              <div className="session__attachment-filecard" title={attachment.name}>
+                                <span className="session__attachment-filetype" aria-hidden="true">
+                                  {attachmentTypeLabel(attachment)}
+                                </span>
+                                <span className="session__attachment-meta">
+                                  <span className="session__attachment-name">{attachment.name}</span>
+                                  <span className="session__attachment-sub">
+                                    {attachmentTypeLabel(attachment)} · {formatAttachmentSize(attachment.size)}
+                                  </span>
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {(message.context ?? []).length > 0 && (
                       <div className="session__sent-context" aria-label={`Context sent with message ${message.id}`}>
                         {(message.context ?? []).map((item) => (
@@ -2171,6 +2373,41 @@ export function SessionPanel({
                 {contextDraftError}
               </p>
             )}
+            {(attachments.length > 0 || attachError !== null) && (
+              <div className="session__attachments" aria-label="Attached files">
+                {attachments.map((attachment) => (
+                  <span key={attachment.id} className="session__attachment-chip" title={attachment.name}>
+                    {attachment.kind === 'image' ? (
+                      <img
+                        className="session__attachment-thumb"
+                        src={attachmentContentUrl(attachment.id)}
+                        alt=""
+                        draggable={false}
+                      />
+                    ) : (
+                      <span className="session__attachment-file" aria-hidden="true">
+                        {attachmentTypeLabel(attachment)}
+                      </span>
+                    )}
+                    <span className="session__chip-label">{attachment.name}</span>
+                    <button
+                      className="session__chip-remove"
+                      type="button"
+                      onClick={() => handleRemoveAttachment(attachment.id)}
+                      aria-label={`Remove ${attachment.name}`}
+                      title={`Remove ${attachment.name}`}
+                    >
+                      <StarkIcon name="close" size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {attachError !== null && (
+              <p className="session__error" role="alert">
+                {attachError}
+              </p>
+            )}
             {state.sendError !== null && (
               <p className="session__error" role="alert">
                 {state.sendError}
@@ -2288,6 +2525,16 @@ export function SessionPanel({
                       ? 'Stored locally. STARK will reply.'
                       : 'Stored locally. No AI reply yet.'}
               </p>
+              <button
+                className="explorer__secondary session__attach"
+                type="button"
+                onClick={handleAttach}
+                disabled={state.sending || attachBusy || proposal.preparing || work.preparing}
+                aria-label="Attach files"
+                title="Attach files"
+              >
+                <StarkIcon name="paperclip" size={15} />
+              </button>
               <button
                 className="explorer__primary session__send"
                 type="button"

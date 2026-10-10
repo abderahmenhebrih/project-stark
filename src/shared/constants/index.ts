@@ -99,6 +99,8 @@ export const IPC_CHANNELS = {
   accountCancelSignIn: 'stark:account:cancel-sign-in',
   accountSignOut: 'stark:account:sign-out',
   accountUpdated: 'stark:account:updated',
+  attachmentsChoose: 'stark:attachments:choose',
+  attachmentsRemoveDraft: 'stark:attachments:remove-draft',
   extensionsSearch: 'stark:extensions:search',
   extensionsListFeatured: 'stark:extensions:list-featured',
   extensionsInstall: 'stark:extensions:install',

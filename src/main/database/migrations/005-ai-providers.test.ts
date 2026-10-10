@@ -43,8 +43,8 @@ describe('migration 5 (AI providers)', () => {
   it('fresh DB migrates through v6 with provider tables', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 18)
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(getUserVersion(db), 19)
     } finally {
       db.close()
     }
@@ -54,8 +54,8 @@ describe('migration 5 (AI providers)', () => {
     const db = openFresh()
     try {
       seedV4(db)
-      assert.equal(runMigrations(db, migrations), 18)
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(getUserVersion(db), 19)
     } finally {
       db.close()
     }
@@ -65,7 +65,7 @@ describe('migration 5 (AI providers)', () => {
     const db = openFresh()
     try {
       seedV4(db)
-      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(runMigrations(db, migrations), 19)
       for (const table of ['key_value', 'workspaces', 'change_transactions', 'coding_sessions', 'coding_messages']) {
         const count: unknown = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()
         assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }), table)
@@ -142,7 +142,7 @@ describe('migration 5 (AI providers)', () => {
     try {
       runMigrations(db, migrations)
       db.exec("INSERT INTO ai_provider_configs (provider_id, selected_model, created_at, updated_at) VALUES ('openai', 'gpt-x', 1, 1)")
-      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(runMigrations(db, migrations), 19)
       const row: unknown = db.prepare('SELECT selected_model FROM ai_provider_configs WHERE provider_id = ?').get('openai')
       assert.equal(JSON.stringify(row), JSON.stringify({ selected_model: 'gpt-x' }))
     } finally {
@@ -199,7 +199,7 @@ describe('migration 5 (AI providers)', () => {
   it('migration 5 remains registered before migration 6', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     )
     assert.equal(migration005AiProviders.version, 5)
   })

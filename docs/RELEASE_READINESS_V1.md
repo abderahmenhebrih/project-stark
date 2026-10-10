@@ -18,9 +18,11 @@ Baseline: `npm run release:check` ALL CHECKS PASSED
 
 ## Schema
 
-Current schema: **v18**. No migration 019 exists; Stage 31 adds no
-tables. Singleton cloud tables (`cloud_account`, `cloud_auth_session`)
-from v18 remain the only account storage.
+Current schema: **v19** (chat attachments step: append-only migration
+019 `message-attachments` adds `chat_attachments` +
+`message_attachments`; migrations 001–018 untouched). Singleton cloud
+tables (`cloud_account`, `cloud_auth_session`) from v18 remain the
+only account storage.
 
 ## Implemented stages
 

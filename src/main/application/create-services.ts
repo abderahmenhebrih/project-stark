@@ -51,7 +51,9 @@ import { openSystemBrowserOnce } from '../cloud-account/browser-opener'
 import { SupabaseAuthAdapter, loadSupabasePublicConfig } from '../cloud-account/supabase-auth-adapter'
 import type { BrowserOpener, CloudAuthAdapter } from '../cloud-account/cloud-account-types'
 import { SessionContextService } from '../session-context/session-context-service'
+import { ChatAttachmentService } from '../chat-attachments/service'
 import { ExtensionRegistryService } from '../extension-registry/extension-registry-service'
+import { ExtensionIconService } from '../extension-icons/extension-icon-service'
 import { SettingsService } from '../settings/settings-service'
 import { WorkspaceFileWriteService } from '../workspace-files/workspace-file-write-service'
 import { WorkspaceFilesService } from '../workspace-files/workspace-files-service'
@@ -79,6 +81,8 @@ export interface ApplicationServices {
   readonly gitService: GitService
   readonly codingSessionService: CodingSessionService
   readonly sessionContextService: SessionContextService
+  /** Chat attachments (local files + images). Absent without an attachment store root. */
+  readonly chatAttachmentService?: ChatAttachmentService
   readonly aiProviderService: AiProviderService
   readonly aiCompletionService: AiCompletionService
   readonly aiCodeProposalService: AiCodeProposalService
@@ -118,6 +122,13 @@ export interface ApplicationServices {
   readonly usageService?: AiUsageService
   /** Extension catalog (display only). Stateless network service, always present. */
   readonly extensionRegistryService: ExtensionRegistryService
+  /**
+   * Main-owned extension-icon delivery (icons only, never a generic
+   * remote-image proxy). Shared by the catalog service (which
+   * resolves icons to opaque resource URLs) and the protocol handler
+   * in main/index.ts (which serves the cached bytes by opaque ID).
+   */
+  readonly extensionIconService: ExtensionIconService
   /** Stage 29 optional cloud account. Absent in older harnesses without cloud tables. */
   readonly cloudAccountStore?: CloudAccountRepository
   readonly cloudAccountService?: CloudAccountService
@@ -151,6 +162,8 @@ export interface ServiceDependencies {
   readonly usageStore?: AiUsageRepository
   /** Stage 29 cloud-account repository. Optional so older harnesses keep working. */
   readonly cloudAccountStore?: CloudAccountRepository
+  /** Chat-attachment store root (main-owned userData subdirectory). Optional so older harnesses keep working. */
+  readonly attachmentStoreRoot?: string
 }
 
 /**
@@ -230,9 +243,15 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
   const usage = usageService === undefined || usageTracker === undefined ? undefined : { tracker: usageTracker, service: usageService }
   const workspaceFilesService = new WorkspaceFilesService(deps.workspaces)
   const workspaceSearchService = new WorkspaceSearchService(deps.workspaces)
-  const extensionRegistryService = new ExtensionRegistryService()
+  const extensionIconService = new ExtensionIconService()
+  const extensionRegistryService = new ExtensionRegistryService(undefined, extensionIconService)
   const sessionContextService = new SessionContextService(deps.workspaces, workspaceFilesService)
-  // Shared per-session AI lock: normal generation and code proposals
+  // Chat attachments (local files + images, inert): built only when a
+  // main-owned store root is supplied; older harnesses omit it.
+  const chatAttachmentService =
+    deps.attachmentStoreRoot === undefined
+      ? undefined
+      : new ChatAttachmentService(deps.attachmentStoreRoot, deps.workspaces, deps.codingSessions)  // Shared per-session AI lock: normal generation and code proposals
   // for the same session exclude each other.
   const aiOperationGuard = new AiOperationGuard()
   // Stage 23 pending approvals (optional): while an approval waits,
@@ -477,13 +496,16 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
     workspaceFileWriteService: fileWriteService,
     workspaceSearchService,
     extensionRegistryService,
+    extensionIconService,
     changeTransactionService,
     terminalService: new TerminalService(deps.workspaces),
     gitService,
     codingSessionService: new CodingSessionService(deps.workspaces, deps.codingSessions, {
-      contextService: sessionContextService
+      contextService: sessionContextService,
+      attachmentService: chatAttachmentService
     }),
     sessionContextService,
+    chatAttachmentService,
     aiProviderService,
     aiCompletionService,
     aiCodeProposalService: new AiCodeProposalService(

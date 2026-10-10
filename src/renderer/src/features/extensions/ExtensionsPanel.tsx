@@ -81,6 +81,8 @@ export function ExtensionsPanel(): ReactElement {
   const requestIdRef = useRef(0)
   const [installingIds, setInstallingIds] = useState<readonly string[]>([])
   const [failedIds, setFailedIds] = useState<readonly string[]>([])
+  /** Renderer-safe failure copy per entry, as returned by main (matched, never raw internals). */
+  const [failedMessages, setFailedMessages] = useState<Readonly<Record<string, string>>>({})
   const [installedByKey, setInstalledByKey] = useState<Readonly<Record<string, InstalledExtensionEntry>>>({})
   const [confirmingKey, setConfirmingKey] = useState<string | null>(null)
   const [uninstallingKeys, setUninstallingKeys] = useState<readonly string[]>([])
@@ -227,15 +229,25 @@ export function ExtensionsPanel(): ReactElement {
       return
     }
     setFailedIds((ids) => ids.filter((id) => id !== entry.id))
+    setFailedMessages((messages) => {
+      if (messages[entry.id] === undefined) {
+        return messages
+      }
+      const next = { ...messages }
+      delete next[entry.id]
+      return next
+    })
     setInstallingIds((ids) => (ids.includes(entry.id) ? ids : [...ids, entry.id]))
     installExtension({ namespace: entry.namespace, name: entry.name, version: entry.version }).then(
       () => {
         setInstallingIds((ids) => ids.filter((id) => id !== entry.id))
         refreshInstalled()
       },
-      () => {
+      (error: unknown) => {
         setInstallingIds((ids) => ids.filter((id) => id !== entry.id))
         setFailedIds((ids) => (ids.includes(entry.id) ? ids : [...ids, entry.id]))
+        const copy = error instanceof Error && error.message !== '' ? error.message : 'Install failed'
+        setFailedMessages((messages) => ({ ...messages, [entry.id]: copy }))
       }
     )
   }
@@ -260,9 +272,15 @@ export function ExtensionsPanel(): ReactElement {
       )
     }
     if (failedIds.includes(entry.id)) {
+      // Main returns normalized safe copy only: the standing size
+      // policy names itself, everything else stays a calm failure.
+      const copy = failedMessages[entry.id] ?? 'Install failed'
+      const tooLarge = copy.includes('50 MiB safety limit')
       return (
         <span className="extensions__install-failed">
-          <span className="extensions__install-failed-copy">Install failed</span>
+          <span className="extensions__install-failed-copy">
+            {tooLarge ? 'Extension package exceeds STARK’s 50 MiB safety limit.' : 'Install failed'}
+          </span>
           <button className="extensions__retry" type="button" onClick={() => handleInstall(entry)}>
             Retry
           </button>

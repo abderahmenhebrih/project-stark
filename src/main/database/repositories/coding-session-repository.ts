@@ -96,6 +96,119 @@ export interface AppendCodingMessage {
   readonly retitle: { readonly expectedTitle: string; readonly newTitle: string } | null
 }
 
+/** Raw chat-attachment row as stored (snake_case, metadata only). */
+export interface StoredChatAttachment {
+  readonly id: string
+  readonly originalName: string
+  readonly mimeType: string
+  readonly sizeBytes: number
+  readonly kind: 'image' | 'file'
+  readonly sha256: string
+  readonly createdAt: number
+}
+
+/** One attachment row to persist when main stores a picked file. */
+export interface NewChatAttachment {
+  readonly id: string
+  readonly originalName: string
+  readonly mimeType: string
+  readonly sizeBytes: number
+  readonly kind: 'image' | 'file'
+  readonly sha256: string
+  readonly createdAt: number
+}
+
+/** Raw message-attachment link row as stored (snake_case). */
+export interface StoredMessageAttachment {
+  readonly id: number
+  readonly messageId: number
+  readonly attachmentId: string
+  readonly originalName: string
+  readonly mimeType: string
+  readonly sizeBytes: number
+  readonly kind: 'image' | 'file'
+  readonly sha256: string
+  readonly createdAt: number
+}
+
+/** One message-attachment link to persist alongside a new message. */
+export interface NewMessageAttachment {
+  readonly attachmentId: string
+  readonly originalName: string
+  readonly mimeType: string
+  readonly sizeBytes: number
+  readonly kind: 'image' | 'file'
+  readonly sha256: string
+  readonly createdAt: number
+}
+
+const VALID_ATTACHMENT_KINDS: readonly string[] = ['image', 'file']
+
+function mapChatAttachment(row: unknown): StoredChatAttachment {
+  if (!isRecord(row)) {
+    throw new DatabaseError('stored chat attachment row is invalid')
+  }
+  const id = row['id']
+  const originalName = row['original_name']
+  const mimeType = row['mime_type']
+  const sizeBytes = row['size_bytes']
+  const kind = row['kind']
+  const sha256 = row['sha256']
+  const createdAt = row['created_at']
+  if (
+    typeof id !== 'string' ||
+    typeof originalName !== 'string' ||
+    typeof mimeType !== 'string' ||
+    typeof sizeBytes !== 'number' ||
+    typeof kind !== 'string' ||
+    !VALID_ATTACHMENT_KINDS.includes(kind) ||
+    typeof sha256 !== 'string' ||
+    typeof createdAt !== 'number'
+  ) {
+    throw new DatabaseError('stored chat attachment row is invalid')
+  }
+  return { id, originalName, mimeType, sizeBytes, kind: kind as 'image' | 'file', sha256, createdAt }
+}
+
+function mapMessageAttachment(row: unknown): StoredMessageAttachment {
+  if (!isRecord(row)) {
+    throw new DatabaseError('stored message attachment row is invalid')
+  }
+  const id = row['id']
+  const messageId = row['message_id']
+  const attachmentId = row['attachment_id']
+  const originalName = row['original_name']
+  const mimeType = row['mime_type']
+  const sizeBytes = row['size_bytes']
+  const kind = row['kind']
+  const sha256 = row['sha256']
+  const createdAt = row['created_at']
+  if (
+    typeof id !== 'number' ||
+    typeof messageId !== 'number' ||
+    typeof attachmentId !== 'string' ||
+    typeof originalName !== 'string' ||
+    typeof mimeType !== 'string' ||
+    typeof sizeBytes !== 'number' ||
+    typeof kind !== 'string' ||
+    !VALID_ATTACHMENT_KINDS.includes(kind) ||
+    typeof sha256 !== 'string' ||
+    typeof createdAt !== 'number'
+  ) {
+    throw new DatabaseError('stored message attachment row is invalid')
+  }
+  return {
+    id,
+    messageId,
+    attachmentId,
+    originalName,
+    mimeType,
+    sizeBytes,
+    kind: kind as 'image' | 'file',
+    sha256,
+    createdAt
+  }
+}
 /** Raw message-context row as stored (snake_case). */
 export interface StoredMessageContext {
   readonly id: number
@@ -188,6 +301,12 @@ export class CodingSessionRepository {
   private readonly findMessageStmt: StatementSync
   private readonly insertMessageContextStmt: StatementSync
   private readonly listMessageContextStmt: StatementSync
+  private readonly insertChatAttachmentStmt: StatementSync
+  private readonly findChatAttachmentStmt: StatementSync
+  private readonly countAttachmentReferencesStmt: StatementSync
+  private readonly insertMessageAttachmentStmt: StatementSync
+  private readonly listMessageAttachmentsStmt: StatementSync
+  private readonly deleteChatAttachmentStmt: StatementSync
 
   constructor(db: DatabaseSync) {
     this.db = db
@@ -225,6 +344,26 @@ export class CodingSessionRepository {
       'SELECT id, message_id, kind, label, relative_path, line_start, line_end, content, content_bytes, created_at ' +
         'FROM message_context_items WHERE message_id = ? ORDER BY id ASC'
     )
+    this.insertChatAttachmentStmt = db.prepare(
+      'INSERT INTO chat_attachments (id, original_name, mime_type, size_bytes, kind, sha256, created_at) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?)'
+    )
+    this.findChatAttachmentStmt = db.prepare(
+      'SELECT id, original_name, mime_type, size_bytes, kind, sha256, created_at FROM chat_attachments WHERE id = ?'
+    )
+    this.countAttachmentReferencesStmt = db.prepare(
+      'SELECT COUNT(*) AS n FROM message_attachments WHERE attachment_id = ?'
+    )
+    this.insertMessageAttachmentStmt = db.prepare(
+      'INSERT INTO message_attachments ' +
+        '(message_id, attachment_id, original_name, mime_type, size_bytes, kind, sha256, created_at) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    )
+    this.listMessageAttachmentsStmt = db.prepare(
+      'SELECT id, message_id, attachment_id, original_name, mime_type, size_bytes, kind, sha256, created_at ' +
+        'FROM message_attachments WHERE message_id = ? ORDER BY id ASC'
+    )
+    this.deleteChatAttachmentStmt = db.prepare('DELETE FROM chat_attachments WHERE id = ?')
   }
 
   /** Inserts a session row and returns its id. */
@@ -294,14 +433,28 @@ export class CodingSessionRepository {
   }
 
   /**
-   * Atomically inserts one message, its context rows, and advances the
-   * session timestamp (plus the conditional first-message retitle).
-   * Either everything lands or nothing does — a message without its
-   * context rows (or vice versa) is impossible.
+   * Atomically inserts one message, its context rows, its attachment
+   * links, and advances the session timestamp (plus the conditional
+   * first-message retitle). Either everything lands or nothing does —
+   * a message without its rows (or vice versa) is impossible.
    */
   appendMessageWithContext(
     input: AppendCodingMessage,
     contextItems: readonly NewMessageContext[]
+  ): { messageId: number; titleChanged: boolean } {
+    return this.appendMessageWithAttachments(input, contextItems, [])
+  }
+
+  /**
+   * Atomically inserts one message, its context rows, its attachment
+   * links, and advances the session timestamp (plus the conditional
+   * first-message retitle). Either everything lands or nothing does —
+   * a message without its rows (or vice versa) is impossible.
+   */
+  appendMessageWithAttachments(
+    input: AppendCodingMessage,
+    contextItems: readonly NewMessageContext[],
+    attachments: readonly NewMessageAttachment[]
   ): { messageId: number; titleChanged: boolean } {
     let messageId: number
     let titleChanged = false
@@ -320,6 +473,18 @@ export class CodingSessionRepository {
           item.content,
           item.contentBytes,
           item.createdAt
+        )
+      }
+      for (const attachment of attachments) {
+        this.insertMessageAttachmentStmt.run(
+          messageId,
+          attachment.attachmentId,
+          attachment.originalName,
+          attachment.mimeType,
+          attachment.sizeBytes,
+          attachment.kind,
+          attachment.sha256,
+          attachment.createdAt
         )
       }
       if (input.retitle !== null) {
@@ -356,6 +521,79 @@ export class CodingSessionRepository {
       throw new DatabaseError('stored message context rows are invalid')
     }
     return rows.map(mapMessageContext)
+  }
+
+  /** Persists one attachment metadata row (backing file stored main-side). */
+  insertChatAttachment(input: NewChatAttachment): void {
+    this.insertChatAttachmentStmt.run(
+      input.id,
+      input.originalName,
+      input.mimeType,
+      input.sizeBytes,
+      input.kind,
+      input.sha256,
+      input.createdAt
+    )
+  }
+
+  /** Finds one attachment metadata row by opaque id, or undefined. */
+  findChatAttachmentById(id: string): StoredChatAttachment | undefined {
+    const row: unknown = this.findChatAttachmentStmt.get(id)
+    return row === undefined ? undefined : mapChatAttachment(row)
+  }
+
+  /** Counts message links referencing one attachment (commit detection). */
+  countAttachmentReferences(attachmentId: string): number {
+    const row: unknown = this.countAttachmentReferencesStmt.get(attachmentId)
+    if (!isRecord(row) || typeof row['n'] !== 'number') {
+      throw new DatabaseError('stored message attachment rows are invalid')
+    }
+    return row['n']
+  }
+
+  /** Deletes one attachment metadata row (backing file removed main-side). */
+  deleteChatAttachment(id: string): void {
+    this.deleteChatAttachmentStmt.run(id)
+  }
+
+  /** All attachment links for one message, insertion order. */
+  listAttachmentsForMessage(messageId: number): StoredMessageAttachment[] {
+    const rows: unknown = this.listMessageAttachmentsStmt.all(messageId)
+    if (!Array.isArray(rows)) {
+      throw new DatabaseError('stored message attachment rows are invalid')
+    }
+    return rows.map(mapMessageAttachment)
+  }
+
+  /**
+   * Attachment links for many messages in one query. Returns a map
+   * from message id to its links (insertion order); messages without
+   * links are absent from the map.
+   */
+  listAttachmentsForMessages(messageIds: readonly number[]): Map<number, StoredMessageAttachment[]> {
+    const grouped = new Map<number, StoredMessageAttachment[]>()
+    if (messageIds.length === 0) {
+      return grouped
+    }
+    const placeholders = messageIds.map(() => '?').join(',')
+    const rows: unknown = this.db
+      .prepare(
+        'SELECT id, message_id, attachment_id, original_name, mime_type, size_bytes, kind, sha256, created_at ' +
+          `FROM message_attachments WHERE message_id IN (${placeholders}) ORDER BY message_id ASC, id ASC`
+      )
+      .all(...messageIds)
+    if (!Array.isArray(rows)) {
+      throw new DatabaseError('stored message attachment rows are invalid')
+    }
+    for (const row of rows.map(mapMessageAttachment)) {
+      const existing = grouped.get(row.messageId)
+      if (existing === undefined) {
+        grouped.set(row.messageId, [row])
+      } else {
+        existing.push(row)
+      }
+    }
+    return grouped
   }
 
   /**

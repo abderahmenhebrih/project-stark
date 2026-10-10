@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, utilityProcess } from 'electron'
+import { app, BrowserWindow, dialog, protocol, utilityProcess } from 'electron'
 import { join } from 'node:path'
 import { IPC_CHANNELS } from '../shared/constants'
 import type { CloudAccountStatus } from '../shared/cloud-account/types'
@@ -17,6 +17,9 @@ import {
   ExtensionInstallService
 } from './extension-install/extension-install-service'
 import { ExtensionHostManager, type ExtensionHostLauncher } from './extension-host/extension-host-manager'
+import { electronAttachmentPicker } from './chat-attachments/picker'
+import { ATTACHMENT_PROTOCOL, serveAttachmentRequest } from './chat-attachments/protocol'
+import { EXTENSION_ICON_PROTOCOL, serveExtensionIconRequest } from './extension-icons/protocol'
 import { registerIpcHandlers } from './ipc'
 import { createTerminalEventSink } from './ipc/terminal'
 import { applyContentSecurityPolicy } from './security/session'
@@ -61,6 +64,23 @@ const diagnostics = new DiagnosticLogger()
 
 /** Process-lifetime shutdown guard: late child events drop after quit begins. */
 const shutdownGuard = new ShutdownGuard()
+
+/**
+ * Registers the stark-attachment:// content scheme before app ready
+ * (Electron requires scheme privileges up front). The request handler
+ * itself is installed once services exist below; the scheme serves
+ * STARK-owned attachment bytes by opaque ID only.
+ */
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: ATTACHMENT_PROTOCOL,
+    privileges: { standard: true, secure: true, supportFetchAPI: true, allowServiceWorkers: false, corsEnabled: false }
+  },
+  {
+    scheme: EXTENSION_ICON_PROTOCOL,
+    privileges: { standard: true, secure: true, supportFetchAPI: true, allowServiceWorkers: false, corsEnabled: false }
+  }
+])
 
 /**
  * Exactly-once fatal-startup presenter: one minimal safe dialog
@@ -317,7 +337,8 @@ void app.whenReady().then(() => {
     usageStore: starkDatabase.getUsage(),
     cloudAccountStore: starkDatabase.getCloudAccount(),
     codingSessions: starkDatabase.getCodingSessions(),
-    aiProviders: starkDatabase.getAiProviders()
+    aiProviders: starkDatabase.getAiProviders(),
+    attachmentStoreRoot: join(app.getPath('userData'), 'attachments')
   })
   accountServices = services
   // Bounded startup recovery, once, in explicit order: leftover
@@ -416,6 +437,8 @@ void app.whenReady().then(() => {
       join(app.getPath('userData'), EXTENSION_INSTALL_DIR_NAME)
     ),
     extensionHostManager,
+    attachmentService: services.chatAttachmentService,
+    attachmentPicker: electronAttachmentPicker,
     changeTransactionService: services.changeTransactionService,
     terminalService: services.terminalService,
     terminalManager,
@@ -444,6 +467,23 @@ void app.whenReady().then(() => {
   // STARK account status fans out to every open renderer. Payloads are
   // trusted safe statuses only (no tokens) via the preload validator.
   services.cloudAccountService?.setEmitter(broadcastAccountStatus)
+  // Attachment bytes serve by opaque ID only: the handler resolves
+  // through the attachment store, so URL pathnames never reach the
+  // filesystem. Unknown IDs answer 404 with no detail.
+  if (services.chatAttachmentService !== undefined) {
+    const attachmentService = services.chatAttachmentService
+    protocol.handle(ATTACHMENT_PROTOCOL, (request) => serveAttachmentRequest(request.url, (id) => attachmentService.readAttachmentContent(id)))
+  }
+  // Extension-icon bytes serve by opaque ID only: the handler resolves
+  // through the icon service cache populated during catalog loads, so
+  // icon URLs never reach the filesystem and unknown IDs answer 404
+  // with no detail. Icons only — never a generic remote-image proxy.
+  {
+    const iconService = services.extensionIconService
+    protocol.handle(EXTENSION_ICON_PROTOCOL, (request) =>
+      serveExtensionIconRequest(request.url, (id) => iconService.readIconContent(id))
+    )
+  }
   printTemporaryAiBuildDiag()
   createMainWindow()
   // STARK startup never blocks on authentication: the window is already

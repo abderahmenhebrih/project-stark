@@ -18,8 +18,8 @@ describe('migration 18 (cloud account)', () => {
   it('fresh database migrates to schema version 18', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 18)
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(getUserVersion(db), 19)
       assert.ok(tableExists(db, 'cloud_account'))
       assert.ok(tableExists(db, 'cloud_auth_session'))
     } finally {
@@ -27,15 +27,15 @@ describe('migration 18 (cloud account)', () => {
     }
   })
 
-  it('v17 database upgrades to v18 preserving existing rows', () => {
+  it('v17 database upgrades to v19 preserving existing rows', () => {
     const db = openFresh()
     try {
       const without18 = migrations.filter((migration) => migration.version <= 17)
       assert.equal(runMigrations(db, without18), 17)
       db.exec("INSERT INTO key_value (key, value, updated_at) VALUES ('stark.settings', '{\"a\":1}', 1)")
       db.exec("INSERT INTO workspaces (root_path, display_name, created_at, last_opened_at) VALUES ('w', 'w', 1, 1)")
-      assert.equal(runMigrations(db, migrations), 18)
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(getUserVersion(db), 19)
       const settings: unknown = db.prepare("SELECT value FROM key_value WHERE key = 'stark.settings'").get()
       assert.equal(JSON.stringify(settings), JSON.stringify({ value: '{"a":1}' }))
       const workspace: unknown = db.prepare('SELECT COUNT(*) AS n FROM workspaces').get()
@@ -85,7 +85,7 @@ describe('migration 18 (cloud account)', () => {
         "INSERT INTO cloud_account (id, cloud_user_id, provider, created_at, updated_at, last_authenticated_at) " +
           "VALUES (1, 'u1', 'google', 1, 1, 1)"
       )
-      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(runMigrations(db, migrations), 19)
       const count: unknown = db.prepare('SELECT COUNT(*) AS n FROM cloud_account').get()
       assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }))
     } finally {
@@ -93,10 +93,10 @@ describe('migration 18 (cloud account)', () => {
     }
   })
 
-  it('migrations remain registered in ascending order ending at 18', () => {
+  it('migrations remain registered in ascending order ending at 19', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     )
   })
 })

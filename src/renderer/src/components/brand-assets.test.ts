@@ -169,13 +169,13 @@ describe('D05 official STARK brand assets', () => {
     assert.ok(tokens.toLowerCase().includes('--stark-magenta: #ff2ea6'), 'magenta token must stay #ff2ea6')
   })
 
-  it('no new IPC and schema remains v18 with main/preload renderer-only', () => {
+  it('no new IPC and schema remains v19 with main/preload renderer-only', () => {
     const dir = join(process.cwd(), 'src', 'main', 'database', 'migrations')
     const files = readdirSync(dir).filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
-    assert.ok(files.includes('018-cloud-account.ts'), 'migration 018 must exist (schema v18)')
-    assert.ok(!files.some((file) => file.startsWith('019')), 'no migration 019 may appear for a branding pass')
+    assert.ok(files.includes('019-message-attachments.ts'), 'migration 019 must exist (schema v19)')
+    assert.ok(!files.some((file) => file.startsWith('020')), 'no migration 020 may appear for a branding pass')
     const index = readSource('src', 'main', 'database', 'migrations', 'index.ts')
-    assert.ok(!index.includes('019'), 'migration registry must stay at v18')
+    assert.ok(index.includes('019'), 'migration registry must include v19')
     for (const area of ['main', 'preload']) {
       const root = join(process.cwd(), 'src', area)
       const sources = walk(root)

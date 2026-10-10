@@ -80,6 +80,19 @@ describe('extensions install surface', () => {
     }
   })
 
+  it('catalog icons render from normalized URLs with one-shot fallback', () => {
+    const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
+    assert.ok(panel.includes('src={entry.iconUrl}'), 'rows must render the normalized icon URL')
+    assert.ok(panel.includes('entry.iconUrl === null'), 'absent icons must fall back without requesting')
+    assert.ok(panel.includes('onError={() => setFailed(true)}'), 'a failed load must swap that row once')
+    assert.ok(panel.includes('extensions__icon-fallback'), 'fallback must be the local generic glyph')
+    assert.equal(panel.split('onError').length - 1, 1, 'exactly one error handler may exist, so no reload loop is possible')
+    const css = readRenderer('features/extensions/ExtensionsPanel.css')
+    const icon = css.match(/\.extensions__icon\s*\{[^}]*\}/)
+    assert.ok(icon !== null && icon[0].includes('width: 40px'), 'icon box must stay fixed at 40px')
+    assert.ok(icon[0].includes('object-fit: contain'), 'icons must preserve aspect ratio')
+  })
+
   it('no activation, host execution, or update surface exists', () => {
     const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
     for (const forbidden of ['>Enable<', '>Disable<', '>Run<', '>Update<', 'Enable extensions', 'auto-update', 'Auto-update', '.vsix', 'activationEvents', 'postinstall', 'deactivate', 'child_process', 'require(', 'import(']) {
@@ -131,7 +144,7 @@ describe('extensions install surface', () => {
     }
     const dir = join(process.cwd(), 'src', 'main', 'database', 'migrations')
     const files = readdirSync(dir).filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
-    assert.ok(files.includes('018-cloud-account.ts'), 'migration 018 must exist (schema v18)')
-    assert.ok(!files.some((file) => file.startsWith('019')), 'no migration 019 may appear')
+    assert.ok(files.includes('019-message-attachments.ts'), 'migration 019 must exist (schema v19)')
+    assert.ok(!files.some((file) => file.startsWith('020')), 'no migration 020 may appear')
   })
 })

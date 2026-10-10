@@ -124,6 +124,7 @@ import type {
   UninstalledExtensionEntry
 } from '../shared/extension-registry/types'
 import type { ExtensionHostStatus, ExtensionHostApi } from '../shared/extension-host/types'
+import type { ChatAttachmentsApi, ChatAttachment, ChooseAttachmentsRequest } from '../shared/chat-attachments/types'
 import { isCloudAccountStatus } from '../shared/cloud-account/types'
 import type { AppInfo, StarkApi } from '../shared/types'
 
@@ -406,6 +407,15 @@ function createExtensionHostApi(): ExtensionHostApi {
   }
 }
 
+function createAttachmentsApi(): ChatAttachmentsApi {
+  return {
+    choose: (request: ChooseAttachmentsRequest): Promise<readonly ChatAttachment[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.attachmentsChoose, request) as Promise<readonly ChatAttachment[]>,
+    removeDraft: (attachmentId: string): Promise<ChatAttachment> =>
+      ipcRenderer.invoke(IPC_CHANNELS.attachmentsRemoveDraft, attachmentId) as Promise<ChatAttachment>
+  }
+}
+
 function createAccountApi(): CloudAccountApi {
   return {
     getStatus: (): Promise<CloudAccountStatus> =>
@@ -504,7 +514,8 @@ const starkApi: StarkApi = {
   usage: createUsageApi(),
   account: createAccountApi(),
   extensions: createExtensionsApi(),
-  extensionHost: createExtensionHostApi()
+  extensionHost: createExtensionHostApi(),
+  attachments: createAttachmentsApi()
 }
 
 contextBridge.exposeInMainWorld('stark', starkApi)

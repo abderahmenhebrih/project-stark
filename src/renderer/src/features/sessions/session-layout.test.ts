@@ -33,9 +33,12 @@ describe('stage 31 session layout', () => {
     assert.ok(chrome.includes('<StarkMark'), 'global bar must carry the STARK identity')
     assert.ok(chrome.includes('workspaceName'), 'global bar must carry the workspace identity')
     assert.ok(chrome.includes('onToggleSidebar'), 'drawer visibility must be user-controlled')
-    assert.ok(chrome.includes('onToggleTerminal'), 'terminal visibility must be user-controlled')
+    assert.ok(!chrome.includes('onToggleTerminal'), 'terminal must not live in the top bar')
+    assert.ok(!chrome.includes('name="terminal"'), 'terminal icon must not live in the top bar')
     assert.ok(chrome.includes('onOpenSearch'), 'workspace search must stay one click away')
     assert.ok(chrome.includes('onOpenSettings'), 'settings must stay one click away')
+    const rail = readRenderer('features/explorer/ActivityRail.tsx')
+    assert.ok(rail.includes('onToggleTerminal'), 'terminal visibility must be rail-controlled through the existing behavior')
   })
 
   it('workspace tools live in an overlay drawer, not a permanent column', () => {

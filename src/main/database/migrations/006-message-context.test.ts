@@ -54,8 +54,8 @@ describe('migration 6 (message context)', () => {
   it('fresh DB migrates to v6', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 18)
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(getUserVersion(db), 19)
     } finally {
       db.close()
     }
@@ -65,8 +65,8 @@ describe('migration 6 (message context)', () => {
     const db = openFresh()
     try {
       seedV5(db)
-      assert.equal(runMigrations(db, migrations), 18)
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(getUserVersion(db), 19)
     } finally {
       db.close()
     }
@@ -76,7 +76,7 @@ describe('migration 6 (message context)', () => {
     const db = openFresh()
     try {
       seedV5(db)
-      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(runMigrations(db, migrations), 19)
       for (const table of [
         'key_value',
         'workspaces',
@@ -164,7 +164,7 @@ describe('migration 6 (message context)', () => {
         "INSERT INTO message_context_items (message_id, kind, label, relative_path, line_start, line_end, content, content_bytes, created_at) " +
           "VALUES (1, 'manual-note', 'Note', NULL, NULL, NULL, 'hi', 2, 1)"
       )
-      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(runMigrations(db, migrations), 19)
       const count: unknown = db.prepare('SELECT COUNT(*) AS n FROM message_context_items').get()
       assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }))
     } finally {
@@ -206,7 +206,7 @@ describe('migration 6 (message context)', () => {
   it('migration 6 is registered after migration 5', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     )
     assert.equal(migration006MessageContext.version, 6)
   })

@@ -326,7 +326,7 @@ describe('stage 25 command repository', () => {
   it('schema is v18 with executions table, UNIQUE approval, and run index', () => {
     const h = openHarness()
     try {
-      assert.equal(getUserVersion(h.db), 18)
+      assert.equal(getUserVersion(h.db), 19)
       const table: unknown = h.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'worker_command_executions'").get()
       assert.ok(table !== undefined)
       const index: unknown = h.db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_worker_command_run_created'").get()

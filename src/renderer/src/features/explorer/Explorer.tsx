@@ -1121,7 +1121,7 @@ export function Explorer({
   // Directory chevrons resolve per expanded state via the drawer tree.
   return (
     <div ref={workareaRef} className="workspace" data-canvas-view={canvasView}>
-      <WorkspaceToolsDrawer open={sidebarOpen} activity={activity} onActivityChange={onActivityChange} onClose={onCloseSidebar}>
+      <WorkspaceToolsDrawer open={sidebarOpen} activity={activity} onActivityChange={onActivityChange} onClose={onCloseSidebar} terminalOpen={terminalOpen} onToggleTerminal={onToggleTerminal}>
         <div className="workbench__sidebar-body">
           {activity === 'explorer' ? (
             <>

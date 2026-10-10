@@ -5,6 +5,7 @@ import type {
   SendUserMessageResult
 } from '../../shared/sessions/types'
 import type { CodingSessionService } from '../sessions/coding-session-service'
+import { ChatAttachmentError, toPublicAttachmentError } from '../chat-attachments/errors'
 import { SessionContextError, toPublicContextError } from '../session-context/errors'
 import { toPublicSessionError } from '../sessions/errors'
 import type { IpcBinding } from './binding'
@@ -14,8 +15,8 @@ import type { IpcBinding } from './binding'
  * (create, list, list-messages, send-user-message). No SQL, no
  * arbitrary-role inserts, no assistant writes, no chat:run or
  * model:complete, no generic storage. Payloads are opaque to this layer — the service
- * validates workspace/session IDs, pages, and content at runtime.
- * Registration through handleSecureIpc happens in ./index.ts.
+ * validates workspace/session IDs, pages, content, and attachment IDs
+ * at runtime. Registration through handleSecureIpc happens in ./index.ts.
  */
 export function createSessionBindings(service: CodingSessionService): readonly IpcBinding[] {
   return [
@@ -47,6 +48,10 @@ export function createSessionBindings(service: CodingSessionService): readonly I
           // Context attachment failures carry their own safe copy.
           if (error instanceof SessionContextError) {
             throw toPublicContextError('send', error)
+          }
+          // Chat-attachment failures carry their own safe copy.
+          if (error instanceof ChatAttachmentError) {
+            throw toPublicAttachmentError('send', error)
           }
           throw toPublicSessionError('send', error)
         })

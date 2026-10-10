@@ -21,7 +21,7 @@ describe('schema guard (Stage 30)', () => {
     const db = openFresh()
     try {
       runMigrations(db, migrations)
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(getUserVersion(db), 19)
       assert.throws(
         () => runMigrations(db, migrations.filter((migration) => migration.version <= 17)),
         (error: unknown) =>
@@ -43,7 +43,7 @@ describe('schema guard (Stage 30)', () => {
           migrations.filter((migration) => migration.version <= 5)
         )
       )
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(getUserVersion(db), 19)
     } finally {
       db.close()
     }
@@ -84,11 +84,11 @@ describe('schema guard (Stage 30)', () => {
     }
   })
 
-  it('migration registry stays ordered exactly once, 1..18, append-only', () => {
+  it('migration registry stays ordered exactly once, 1..19, append-only', () => {
     validateMigrations(migrations)
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     )
     const names = migrations.map((migration) => migration.name)
     assert.equal(new Set(names).size, names.length)

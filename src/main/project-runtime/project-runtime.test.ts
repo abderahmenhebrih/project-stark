@@ -400,7 +400,7 @@ describe('stage 26 runtime repository', () => {
   it('schema is v18 with sessions table, UNIQUE approval, and workspace index', () => {
     const h = openHarness()
     try {
-      assert.equal(getUserVersion(h.db), 18)
+      assert.equal(getUserVersion(h.db), 19)
       const table: unknown = h.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_runtime_sessions'").get()
       assert.ok(table !== undefined)
       const index: unknown = h.db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_project_runtime_workspace_created'").get()

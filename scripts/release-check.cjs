@@ -53,8 +53,8 @@ function auditPackageConfig() {
   for (const expected of ['nsis', 'dmg', 'AppImage']) {
     if (!targets.includes(expected)) fail(`packaging targets must include ${expected}`);
   }
-  if (!existsSync(join(ROOT, 'src', 'main', 'database', 'migrations', '018-cloud-account.ts'))) {
-    fail('migration 018 must exist (schema v18)');
+  if (!existsSync(join(ROOT, 'src', 'main', 'database', 'migrations', '019-message-attachments.ts'))) {
+    fail('migration 019 must exist (schema v19)');
   }
   process.stdout.write('[release:check] package-config audit ok\n');
 }
@@ -70,7 +70,7 @@ function auditArtifactsAndDocs() {
     if (!existsSync(join(ROOT, doc))) fail(`missing ${doc}`);
   }
   const readiness = readFileSync(join(ROOT, 'docs/RELEASE_READINESS_V1.md'), 'utf8');
-  if (!readiness.includes('v18')) fail('readiness doc must record schema v18');
+  if (!readiness.includes('v19')) fail('readiness doc must record schema v19');
   // Stage 31: accept the pre-acceptance record ("NOT YET EXECUTED") or the
   // finalized Stage 31 outcome (acceptance executed, decision recorded).
   // The gate previously required NOT YET EXECUTED forever, which made the

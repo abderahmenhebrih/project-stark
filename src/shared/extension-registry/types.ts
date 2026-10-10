@@ -10,7 +10,7 @@
  * No install/update/uninstall surface exists in this step.
  */
 
-/** One normalized catalog entry. Icon is a validated HTTPS URL or null. */
+/** One normalized catalog entry. Icon is an opaque main-owned resource URL or null. */
 export interface ExtensionEntry {
   readonly id: string
   readonly namespace: string

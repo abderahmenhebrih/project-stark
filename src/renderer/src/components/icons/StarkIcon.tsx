@@ -18,6 +18,7 @@ export type StarkIconName =
   | 'send'
   | 'refresh'
   | 'extensions'
+  | 'paperclip'
 
 interface StarkIconProps {
   readonly name: StarkIconName
@@ -131,6 +132,11 @@ const PATHS: Record<StarkIconName, ReactElement> = {
       <rect x="8.5" y="2.5" width="5" height="5" rx="1" />
       <rect x="2.5" y="8.5" width="5" height="5" rx="1" />
       <path d="M8.5 10.5v-2h5v5h-5v-1" />
+    </>
+  ),
+  paperclip: (
+    <>
+      <path d="M11.5 7.5l-4.2 4.2a2.1 2.1 0 0 1-3-3l5.6-5.6a3.4 3.4 0 0 1 4.8 4.8l-5.6 5.6" />
     </>
   )
 }

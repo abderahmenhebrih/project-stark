@@ -47,6 +47,18 @@ export function validateUserMessageContent(content: unknown): string {
   if (content.trim().length === 0) {
     throw new InvalidSessionMessageError()
   }
+  return validateUserMessageContentAllowEmpty(content)
+}
+
+/**
+ * Validates message content that may be empty because attachments
+ * carry the message. All byte/control/surrogate rules still apply —
+ * only the empty rejection is lifted.
+ */
+export function validateUserMessageContentAllowEmpty(content: unknown): string {
+  if (typeof content !== 'string') {
+    throw new InvalidSessionMessageError()
+  }
   // NUL byte written as an escape on purpose: no raw control bytes in source.
   if (content.includes('\0')) {
     throw new InvalidSessionMessageError()

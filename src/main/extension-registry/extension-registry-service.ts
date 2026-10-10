@@ -26,6 +26,17 @@ export const EXTENSION_REGISTRY_MAX_QUERY_LENGTH = 100
 /** Normalized description bound (characters). */
 export const EXTENSION_REGISTRY_MAX_DESCRIPTION_LENGTH = 300
 
+/**
+ * Narrow icon-resolution seam (extension icons only). The production
+ * wiring supplies the main-owned ExtensionIconService, which maps a
+ * validated catalog icon source to an opaque
+ * `stark-extension-icon://<id>` resource URL served by main. Tests
+ * omit it (remote validated URLs pass through) or inject a fake.
+ */
+export interface ExtensionIconResolver {
+  resolveIcon(sourceUrl: string | null, identity: { namespace: string; name: string; version: string }): Promise<string | null>
+}
+
 /** Minimal fetch shape (global fetch in production, fakes in tests). */
 export type RegistryFetch = (
   url: string,
@@ -44,28 +55,62 @@ function validatedQuery(value: unknown): string {
 }
 
 /**
- * Icon allowlist: absolute HTTPS URLs on the registry origin under
- * its API file path only. Anything else (relative paths, other
- * hosts, non-HTTPS) normalizes to null and the renderer falls back
- * to its local generic icon.
+ * Strict Open VSX extension-resource URL helper.
+ *
+ * Accepts ONLY the registry resource form confirmed by live
+ * inspection of search/featured responses (absolute
+ * `https://open-vsx.org/api/...` icon URLs), plus relative resource
+ * references resolved against the fixed registry origin and then
+ * re-checked by the same allowlist. Everything else normalizes to
+ * null and the renderer falls back to its local generic icon:
+ * non-HTTPS schemes, foreign hosts, subdomain tricks, userinfo,
+ * non-default ports, protocol-relative externals, traversal, and any
+ * Open VSX path outside the confirmed resource prefix.
  */
 export function validatedIconUrl(value: unknown): string | null {
   if (typeof value !== 'string' || value === '') {
     return null
   }
+  let candidate = value
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(candidate)) {
+    if (candidate.startsWith('//')) {
+      return null
+    }
+    try {
+      candidate = new URL(candidate, OPEN_VSX_BASE_URL).toString()
+    } catch {
+      return null
+    }
+  }
   let parsed: URL
   try {
-    parsed = new URL(value)
+    parsed = new URL(candidate)
   } catch {
     return null
   }
   if (parsed.protocol !== 'https:') {
     return null
   }
+  if (parsed.username !== '' || parsed.password !== '') {
+    return null
+  }
   if (parsed.hostname.toLowerCase() !== 'open-vsx.org') {
     return null
   }
+  if (parsed.port !== '') {
+    return null
+  }
   if (!parsed.pathname.startsWith('/api/')) {
+    return null
+  }
+  if (parsed.pathname.includes('..')) {
+    return null
+  }
+  try {
+    if (decodeURIComponent(parsed.pathname).includes('..')) {
+      return null
+    }
+  } catch {
     return null
   }
   return parsed.toString()
@@ -150,9 +195,11 @@ function buildFeaturedUrl(): string {
 
 export class ExtensionRegistryService {
   private readonly fetchImpl: RegistryFetch
+  private readonly icons: ExtensionIconResolver | undefined
 
-  constructor(fetchImpl: RegistryFetch = globalThis.fetch as unknown as RegistryFetch) {
+  constructor(fetchImpl: RegistryFetch = globalThis.fetch as unknown as RegistryFetch, icons?: ExtensionIconResolver) {
     this.fetchImpl = fetchImpl
+    this.icons = icons
   }
 
   /** Text search over the registry (one bounded request, no retries). */
@@ -204,6 +251,37 @@ export class ExtensionRegistryService {
         entries.push(entry)
       }
     }
-    return { entries, truncated: totalSize > entries.length }
+    return { entries: await this.resolveEntryIcons(entries), truncated: totalSize > entries.length }
+  }
+
+  /**
+   * Maps validated catalog icon sources to opaque main-owned resource
+   * URLs (one bounded attempt each, in parallel). Without a resolver
+   * (tests) entries pass through untouched. Catalog delivery never
+   * fails because of icons: every individual failure resolves to null
+   * and the renderer falls back once for that entry.
+   */
+  private async resolveEntryIcons(entries: ExtensionEntry[]): Promise<ExtensionEntry[]> {
+    if (this.icons === undefined) {
+      return entries
+    }
+    const resolved = await Promise.all(
+      entries.map(async (entry) => {
+        if (entry.iconUrl === null) {
+          return entry
+        }
+        try {
+          const iconUrl = await this.icons?.resolveIcon(entry.iconUrl, {
+            namespace: entry.namespace,
+            name: entry.name,
+            version: entry.version
+          })
+          return { ...entry, iconUrl: iconUrl ?? null }
+        } catch {
+          return { ...entry, iconUrl: null }
+        }
+      })
+    )
+    return resolved
   }
 }

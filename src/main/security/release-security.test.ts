@@ -262,7 +262,7 @@ describe('release security matrix (Stage 30)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       runMigrations(db, migrations)
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(getUserVersion(db), 19)
       for (const table of ['worker_command_executions', 'project_runtime_sessions']) {
         const row = db
           .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")

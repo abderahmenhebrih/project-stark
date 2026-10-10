@@ -183,8 +183,8 @@ describe('D06 live workspace search', () => {
     assert.ok(validation.includes('ALLOWED_REQUEST_KEYS'), 'backend request bounds must stay intact')
     const dir = join(process.cwd(), 'src', 'main', 'database', 'migrations')
     const files = readdirSync(dir).filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
-    assert.ok(files.includes('018-cloud-account.ts'), 'migration 018 must exist (schema v18)')
-    assert.ok(!files.some((file) => file.startsWith('019')), 'no migration 019 may appear for a search pass')
+    assert.ok(files.includes('019-message-attachments.ts'), 'migration 019 must exist (schema v19)')
+    assert.ok(!files.some((file) => file.startsWith('020')), 'no migration 020 may appear for a search pass')
     for (const area of ['main', 'preload']) {
       const root = join(process.cwd(), 'src', area)
       const entries: string[] = readdirSync(root)

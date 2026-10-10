@@ -12,6 +12,7 @@
  */
 
 import type { SessionContextDraft, SessionContextItem } from '../context/types'
+import type { ChatAttachment } from '../chat-attachments/types'
 
 /** A persisted coding session belonging to exactly one workspace. */
 export interface CodingSession {
@@ -37,6 +38,12 @@ export interface CodingMessage {
    * Always populated by list/send paths; empty when none.
    */
   readonly context?: readonly SessionContextItem[]
+  /**
+   * Local file/image attachments persisted with this message.
+   * Always populated by list/send paths; empty when none. Inert
+   * metadata only — never forwarded to any AI provider.
+   */
+  readonly attachments?: readonly ChatAttachment[]
 }
 
 /** Session creation carries the workspace reference only. */
@@ -70,23 +77,30 @@ export interface CodingMessagePage {
  * role, timestamps, or IDs — main forces `role: 'user'`.
  * Optional `context` carries draft descriptors; file-based items are
  * re-resolved from disk by main, so submitted content is not trusted.
+ * Optional `attachments` carries main-issued attachment IDs chosen
+ * through the native picker; main re-validates every ID from the
+ * attachment store at send time. Empty text is allowed when at least
+ * one valid attachment is present.
  */
 export interface SendUserMessageRequest {
   readonly workspaceId: number
   readonly sessionId: number
   readonly content: string
   readonly context?: readonly SessionContextDraft[]
+  readonly attachments?: readonly string[]
 }
 
 /**
  * Send response: the persisted message plus the updated session, so
  * the UI can refresh title/ordering atomically from one round trip.
- * Includes the persisted context items actually stored.
+ * Includes the persisted context items and chat attachments actually
+ * stored.
  */
 export interface SendUserMessageResult {
   readonly session: CodingSession
   readonly message: CodingMessage
   readonly context?: readonly SessionContextItem[]
+  readonly attachments?: readonly ChatAttachment[]
 }
 
 /** Sessions slice of the preload bridge (`window.stark.sessions`). */

@@ -14,6 +14,7 @@ import {
   extractVsix,
   readExtensionManifest,
   validatedArchiveEntryPath,
+  validatedDownloadRedirectUrl,
   validatedDownloadUrl,
   validatedInstallIdentity,
   type InstallFetch
@@ -192,11 +193,48 @@ describe('download URL allowlist', () => {
       'https://evil.example/x.vsix',
       'https://open-vsx.org.evil.example/api/x',
       'https://open-vsx.org/other/x.vsix',
+      'https://openvsx.eclipsecontent.org/esbenp/prettier-vscode/12.4.0/x.vsix',
       '/api/x/file/x.vsix',
       '',
       null
     ]) {
       assert.equal(validatedDownloadUrl(bad), null)
+    }
+  })
+
+  it('admits the confirmed asset host only with identity-pinned vsix paths', () => {
+    const identity = { namespace: 'esbenp', name: 'prettier-vscode', version: '12.4.0' }
+    // Registry-origin hops still pass.
+    assert.equal(
+      validatedDownloadRedirectUrl('https://open-vsx.org/api/esbenp/prettier-vscode/12.4.0/file/x.vsix', identity),
+      'https://open-vsx.org/api/esbenp/prettier-vscode/12.4.0/file/x.vsix'
+    )
+    // Live universal form (prettier): /<ns>/<name>/<version>/<file>.vsix
+    const universal = 'https://openvsx.eclipsecontent.org/esbenp/prettier-vscode/12.4.0/esbenp.prettier-vscode-12.4.0.vsix'
+    assert.equal(validatedDownloadRedirectUrl(universal, identity), universal)
+    // Live platform form (pyrefly): /<ns>/<name>/<platform>/<version>/<file>.vsix
+    const platform = 'https://openvsx.eclipsecontent.org/meta/pyrefly/win32-x64/1.3.9003/meta.pyrefly-1.3.9003@win32-x64.vsix'
+    const pyrefly = { namespace: 'meta', name: 'pyrefly', version: '1.3.9003' }
+    assert.equal(validatedDownloadRedirectUrl(platform, pyrefly), platform)
+    for (const bad of [
+      'https://evil.example/esbenp/prettier-vscode/12.4.0/x.vsix',
+      'https://openvsx.eclipsecontent.org.evil.example/esbenp/prettier-vscode/12.4.0/x.vsix',
+      'https://sub.openvsx.eclipsecontent.org/esbenp/prettier-vscode/12.4.0/x.vsix',
+      'https://openvsx.eclipsecontent.org/other/prettier-vscode/12.4.0/x.vsix',
+      'https://openvsx.eclipsecontent.org/esbenp/other/12.4.0/x.vsix',
+      'https://openvsx.eclipsecontent.org/esbenp/prettier-vscode/9.9.9/x.vsix',
+      'https://openvsx.eclipsecontent.org/esbenp/prettier-vscode/12.4.0/not-a-vsix.zip',
+      'https://openvsx.eclipsecontent.org/esbenp/prettier-vscode/12.4.0/../x.vsix',
+      'https://openvsx.eclipsecontent.org/esbenp/prettier-vscode/12.4.0/x.vsix?sig=1',
+      'https://user@openvsx.eclipsecontent.org/esbenp/prettier-vscode/12.4.0/x.vsix',
+      'https://openvsx.eclipsecontent.org:8443/esbenp/prettier-vscode/12.4.0/x.vsix',
+      'http://openvsx.eclipsecontent.org/esbenp/prettier-vscode/12.4.0/x.vsix',
+      'https://openvsx.eclipsecontent.org/esbenp/prettier-vscode/x.vsix',
+      'https://open-vsx.org/other/x.vsix',
+      '',
+      null
+    ]) {
+      assert.equal(validatedDownloadRedirectUrl(bad, identity), null)
     }
   })
 })
@@ -425,6 +463,92 @@ describe('install pipeline', () => {
       assert.deepEqual(stagingLeft, [])
     } finally {
       rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('streams WHATWG response bodies (real network shape, no Node .pipe)', async () => {
+    // Regression: real fetch bodies are WHATWG ReadableStreams
+    // (async-iterable, no `.pipe`). The old Node-only guard rejected
+    // every genuine download after the redirect was followed.
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-webstream-'))
+    try {
+      const vsix = goodZip()
+      async function* webChunks(): AsyncGenerator<Buffer> {
+        yield vsix.subarray(0, 512)
+        yield vsix.subarray(512)
+      }
+      const webBody = webChunks()
+      assert.equal(typeof (webBody as unknown as { pipe?: unknown }).pipe, 'undefined')
+      const fetch: InstallFetch = async (url: string, init) => {
+        if (url.includes('/file/')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: (name: string) => (name === 'content-length' ? String(vsix.length) : null) },
+            json: async (): Promise<unknown> => ({}),
+            body: webBody
+          }
+        }
+        return metadataFetch([])(url, init)
+      }
+      const service = new ExtensionInstallService(dir, fetch)
+      const result = await service.install({ namespace: 'esbenp', name: 'prettier-vscode', version: '12.4.0' })
+      assert.equal(result.status, 'installed')
+      assert.ok(existsSync(join(dir, 'esbenp.prettier-vscode', '12.4.0', 'extension', 'package.json')))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('installs through the official Open VSX asset-host redirect', async () => {    // Live shape: the metadata download URL answers 302 to
+    // https://openvsx.eclipsecontent.org/<ns>/<name>/<version>/<file>.
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-cdn-'))
+    try {
+      const vsix = goodZip()
+      const cdnUrl = 'https://openvsx.eclipsecontent.org/esbenp/prettier-vscode/12.4.0/esbenp.prettier-vscode-12.4.0.vsix'
+      const fetch: InstallFetch = async (url: string, init) => {
+        if (!url.includes('/file/') && !url.startsWith('https://openvsx.eclipsecontent.org/')) {
+          return metadataFetch([])(url, init)
+        }
+        if (url === DOWNLOAD_URL) {
+          return {
+            ok: false,
+            status: 302,
+            headers: { get: (name: string) => (name === 'location' ? cdnUrl : null) },
+            json: async (): Promise<unknown> => ({}),
+            body: null
+          }
+        }
+        assert.equal(url, cdnUrl)
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (name: string) => (name === 'content-length' ? String(vsix.length) : null) },
+          json: async (): Promise<unknown> => ({}),
+          body: Readable.from([vsix])
+        }
+      }
+      const service = new ExtensionInstallService(dir, fetch)
+      const result = await service.install({ namespace: 'esbenp', name: 'prettier-vscode', version: '12.4.0' })
+      assert.equal(result.status, 'installed')
+      assert.ok(existsSync(join(dir, 'esbenp.prettier-vscode', '12.4.0', 'extension', 'package.json')))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('safe error codes map to displayable copy without internals', async () => {
+    const { ExtensionInstallError } = await import('./errors')
+    const { PACKAGE_TOO_LARGE_COPY, GENERIC_INSTALL_COPY } = await import('./errors')
+    assert.equal(
+      toPublicExtensionInstallError(new ExtensionInstallError('Package exceeds the size limit.', { code: 'package_too_large' })).message,
+      PACKAGE_TOO_LARGE_COPY
+    )
+    assert.ok(PACKAGE_TOO_LARGE_COPY.includes('50 MiB'))
+    for (const code of ['network_error', 'timeout', 'invalid_download_source', 'invalid_archive', 'manifest_mismatch', 'storage_error'] as const) {
+      const publicError = toPublicExtensionInstallError(new ExtensionInstallError('internal detail /tmp/x 500', { code }))
+      assert.equal(publicError.message, GENERIC_INSTALL_COPY)
+      assert.ok(!publicError.message.includes('/tmp/'), `code ${code} must not leak paths`)
     }
   })
 

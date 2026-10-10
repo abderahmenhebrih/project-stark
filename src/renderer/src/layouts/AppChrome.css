@@ -119,6 +119,31 @@
   white-space: nowrap;
 }
 
+/* Presentation-only close affordance at the far right of the tab:
+   compact, visible on the active tab, hover feedback. Closes the
+   tab presentation — never deletes history, messages, or committed
+   attachments. */
+.app-chrome__tab-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--stark-text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.app-chrome__tab-close:hover {
+  color: var(--stark-text);
+  background: var(--stark-bg);
+}
+
 .app-chrome__newtab {
   flex: 0 0 auto;
   min-width: 40px;
@@ -168,6 +193,17 @@
   border: 1px solid var(--stark-border);
   border-radius: var(--stark-radius-md);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+/* Portal placement: the dropdown renders into document.body with
+   fixed positioning, escaping the header's overflow clipping and
+   every chrome/tab stacking context. Layer 50 sits above the session
+   tabs and the workspace tools drawer, below true modal dialogs. */
+.app-chrome__menu--portal {
+  position: fixed;
+  left: auto;
+  top: auto;
+  z-index: 50;
 }
 
 .app-chrome__menu-label {
@@ -289,6 +325,7 @@
 
 .app-chrome__control:focus-visible,
 .app-chrome__newtab:focus-visible,
+.app-chrome__tab-close:focus-visible,
 .app-chrome__identity:focus-visible,
 .app-chrome__history-item:focus-visible,
 .app-chrome__menu-item:focus-visible,

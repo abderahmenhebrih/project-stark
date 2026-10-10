@@ -257,7 +257,15 @@ describe('stage 31 frontend shell', () => {
     assert.ok(chrome.includes('app-chrome__tab'), 'active session must render as a desktop tab')
     assert.ok(chrome.includes('sessionTitle'), 'tab must show the selected session title')
     assert.ok(chrome.includes('app-chrome__tab-dot'), 'tab must carry the magenta AI identity cue')
-    assert.ok(!chrome.includes('name="close"'), 'tab must not render a destructive close affordance')
+    // Presentation-only close: a compact X at the far right of the
+    // tab closes the presentation without deleting history. It must
+    // carry an accessible label, stop propagation, and never read as
+    // Delete.
+    assert.ok(chrome.includes('app-chrome__tab-close'), 'tab must render a compact close affordance')
+    assert.ok(chrome.includes('aria-label="Close session"'), 'close must be keyboard-accessible with a label')
+    assert.ok(chrome.includes('stopPropagation'), 'close must not trigger tab selection underneath')
+    assert.ok(chrome.includes('onCloseSession'), 'close must invoke the existing presentation-close action')
+    assert.ok(!chrome.includes('Delete session') && !chrome.includes('aria-label="Delete'), 'close must never read as delete')
     const tabs = chrome.match(/role="tab"/g) ?? []
     assert.equal(tabs.length, 1, 'only the active session renders as a tab; no fake multi-tab system')
     assert.ok(chrome.includes('app-chrome__newtab'), 'New Session + must sit beside the tab')
@@ -465,12 +473,12 @@ describe('stage 31 frontend shell', () => {
     }
   })
 
-  it('schema remains v18 with no migration 019', () => {
+  it('schema remains v19 with no migration 020', () => {
     const dir = join(process.cwd(), 'src', 'main', 'database', 'migrations')
     const files = readdirSync(dir).filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
-    assert.ok(files.includes('018-cloud-account.ts'), 'migration 018 must exist (schema v18)')
-    assert.ok(!files.some((file) => file.startsWith('019')), 'no migration 019 may appear for a visual pass')
+    assert.ok(files.includes('019-message-attachments.ts'), 'migration 019 must exist (schema v19)')
+    assert.ok(!files.some((file) => file.startsWith('020')), 'no migration 020 may appear for a visual pass')
     const index = readSource('src', 'main', 'database', 'migrations', 'index.ts')
-    assert.ok(!index.includes('019'), 'migration registry must stay at v18')
+    assert.ok(index.includes('019'), 'migration registry must include v19')
   })
 })

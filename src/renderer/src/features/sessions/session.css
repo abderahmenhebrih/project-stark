@@ -45,6 +45,42 @@
   text-align: center;
 }
 
+/* Close-tab draft guard: compact inline confirmation reusing the
+   existing secondary/primary button styling. Committed attachments
+   are never affected — only uncommitted drafts are released. */
+.session__confirm {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 760px;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  background: var(--stark-elevated);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-md);
+}
+
+.session__confirm-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--stark-text);
+}
+
+.session__confirm-copy {
+  margin: 0;
+  font-size: 12px;
+  color: var(--stark-text-dim);
+}
+
+.session__confirm-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .session__select {
   flex: 1;
   min-width: 0;
@@ -394,6 +430,138 @@
 
 .session__chip-remove:hover {
   color: var(--stark-text);
+}
+
+/* Chat-attachment drafts staged above the composer input. */
+.session__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--stark-space-xs);
+  min-width: 0;
+}
+
+.session__attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 260px;
+  min-height: 30px;
+  padding: 3px 4px 3px 6px;
+  font-size: 11px;
+  color: var(--stark-text);
+  background: var(--stark-bg);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+}
+
+.session__attachment-thumb {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.session__attachment-file {
+  flex: 0 0 auto;
+  max-width: 64px;
+  padding: 2px 4px;
+  font-family: var(--stark-font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--stark-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border: 1px solid var(--stark-border);
+  border-radius: 4px;
+}
+
+.session__attach {
+  min-width: 34px;
+}
+
+/* Persisted message attachments: bounded thumbnails + file cards. */
+.session__attachments-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--stark-space-sm);
+  min-width: 0;
+}
+
+.session__attachment-card {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.session__attachment-imagecard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-width: 320px;
+}
+
+.session__attachment-image {
+  display: block;
+  width: auto;
+  max-width: 320px;
+  max-height: 240px;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid var(--stark-border);
+  background: var(--stark-bg);
+}
+
+.session__attachment-name {
+  min-width: 0;
+  font-size: 11px;
+  color: var(--stark-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session__attachment-filecard {
+  display: flex;
+  align-items: center;
+  gap: var(--stark-space-sm);
+  min-width: 0;
+  max-width: 320px;
+  padding: var(--stark-space-sm);
+  background: var(--stark-bg);
+  border: 1px solid var(--stark-border);
+  border-radius: 10px;
+}
+
+.session__attachment-filetype {
+  flex: 0 0 auto;
+  padding: 4px 6px;
+  font-family: var(--stark-font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--stark-text-dim);
+  border: 1px solid var(--stark-border);
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.session__attachment-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session__attachment-sub {
+  font-size: 11px;
+  color: var(--stark-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Looplink continuity + shared context lists. */

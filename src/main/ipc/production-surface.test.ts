@@ -29,6 +29,7 @@ import type { CredentialProtector } from '../ai/credential-protector'
 import type { AiProviderAdapter, ProviderGenerateRequest, ProviderGenerateResult } from '../ai/provider-adapter'
 import { ProviderRegistry } from '../ai/provider-adapter'
 import { ExtensionHostManager } from '../extension-host/extension-host-manager'
+import { ChatAttachmentService } from '../chat-attachments/service'
 import type { ProviderModel } from '../../shared/providers/types'
 import { createIpcBindings } from './index'
 
@@ -172,6 +173,8 @@ const EXPECTED_PRODUCTION_CHANNELS: readonly string[] = [
   IPC_CHANNELS.accountStartSignIn,
   IPC_CHANNELS.accountCancelSignIn,
   IPC_CHANNELS.accountSignOut,
+  IPC_CHANNELS.attachmentsChoose,
+  IPC_CHANNELS.attachmentsRemoveDraft,
   IPC_CHANNELS.extensionsSearch,
   IPC_CHANNELS.extensionsListFeatured,
   IPC_CHANNELS.extensionsInstall,
@@ -234,6 +237,14 @@ describe('authoritative production IPC surface', () => {
             }
           }
         }),
+        attachmentService: new ChatAttachmentService(
+          join(installRoot, 'attachments'),
+          new WorkspaceRepository(db),
+          new CodingSessionRepository(db)
+        ),
+        attachmentPicker: {
+          pickFiles: async () => undefined
+        },
         workspaces: new WorkspaceRepository(db),
         codingSessions: new CodingSessionRepository(db)
       }).map((binding) => binding.channel)
@@ -325,7 +336,11 @@ describe('authoritative production IPC surface', () => {
       'createExtensionsApi()',
       'extensions: createExtensionsApi()',
       'createExtensionHostApi()',
-      'extensionHost: createExtensionHostApi()'
+      'extensionHost: createExtensionHostApi()',
+      'IPC_CHANNELS.attachmentsChoose',
+      'IPC_CHANNELS.attachmentsRemoveDraft',
+      'createAttachmentsApi()',
+      'attachments: createAttachmentsApi()'
     ]) {
       assert.ok(source.includes(expected), `preload must contain ${expected}`)
     }

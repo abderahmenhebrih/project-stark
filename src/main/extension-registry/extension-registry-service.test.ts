@@ -11,6 +11,7 @@ import {
   type RegistryFetch
 } from './extension-registry-service'
 import { InvalidExtensionRegistryRequestError, toPublicExtensionRegistryError } from './errors'
+import { buildCspPolicy } from '../security/csp'
 
 function okFetch(payload: unknown, calls: string[]): RegistryFetch {
   return async (url: string) => {
@@ -113,20 +114,77 @@ describe('extension hit normalization', () => {
     assert.equal(entry?.rating, null)
   })
 
-  it('allows only registry-origin HTTPS icon URLs', () => {
-    const good = 'https://open-vsx.org/api/a/b/1.0.0/file/icon.png'
-    assert.equal(validatedIconUrl(good), good)
+  it('retains legitimate inspected Open VSX icon URLs', () => {
+    // Exact icon forms returned live by /api/-/search (featured,
+    // query=python, query=eslint): absolute registry file URLs.
+    for (const good of [
+      'https://open-vsx.org/api/meta/pyrefly/alpine-arm64/1.3.9003/file/pyrefly-symbol.png',
+      'https://open-vsx.org/api/ms-python/debugpy/darwin-arm64/2026.6.0/file/icon.png',
+      'https://open-vsx.org/api/ms-python/python/2026.4.0/file/icon.png',
+      'https://open-vsx.org/api/dbaeumer/vscode-eslint/3.0.34/file/eslint_icon.png',
+      'https://open-vsx.org/api/manuth/eslint-language-service/1.1.3/file/Icon.png',
+      'https://open-vsx.org/api/a/b/1.0.0/file/icon.png'
+    ]) {
+      assert.equal(validatedIconUrl(good), good)
+    }
+  })
+
+  it('resolves relative registry resources against the fixed origin', () => {
+    assert.equal(
+      validatedIconUrl('/api/a/b/1.0.0/file/icon.png'),
+      'https://open-vsx.org/api/a/b/1.0.0/file/icon.png'
+    )
+  })
+
+  it('rejects non-allowlisted icon URLs', () => {
     for (const bad of [
       'http://open-vsx.org/api/a/b/1.0.0/file/icon.png',
       'https://evil.example/icon.png',
+      'https://open-vsx.org.evil.example/api/x/file/icon.png',
+      'https://user:pass@open-vsx.org/api/x/file/icon.png',
+      'https://open-vsx.org:8443/api/x/file/icon.png',
+      'javascript:alert(1)',
+      'file:///etc/icon.png',
+      'blob:https://open-vsx.org/uuid',
+      'data:image/png;base64,AAA',
+      '//evil.example/x.png',
       'https://open-vsx.org/other/icon.png',
-      '/api/a/b/1.0.0/file/icon.png',
+      'https://open-vsx.org/vscode/unpkg/a/b/icon.png',
+      'https://open-vsx.org/api/../evil.png',
+      'https://open-vsx.org/api/%2e%2e/evil.png',
       '',
       null,
       42
     ]) {
       assert.equal(validatedIconUrl(bad), null)
     }
+  })
+
+  it('carries retained icon URLs through normalization', () => {
+    const entry = normalizeExtensionHit(
+      sampleHit({ files: { icon: 'https://open-vsx.org/api/ms-python/python/2026.4.0/file/icon.png' } })
+    )
+    assert.equal(entry?.iconUrl, 'https://open-vsx.org/api/ms-python/python/2026.4.0/file/icon.png')
+    const missing = normalizeExtensionHit(sampleHit({ files: {} }))
+    assert.equal(missing?.iconUrl, null)
+  })
+
+  it('CSP names the main-owned icon scheme and no remote image origin', () => {
+    // Stabilization pass: icons render via opaque
+    // stark-extension-icon:// IDs served by main, so no remote image
+    // host may appear in img-src (the Open VSX 302 to its asset host
+    // is followed main-side, never by renderer <img>).
+    const prod = buildCspPolicy(true, undefined)
+    assert.ok(prod.includes('img-src'), 'production policy must carry img-src')
+    assert.ok(prod.includes('stark-extension-icon:'), 'production img-src must name the main-owned icon scheme')
+    assert.ok(!prod.includes('https://open-vsx.org'), 'production img-src must not name remote image origins')
+    assert.ok(!prod.includes('*'), 'production CSP must not wildcard')
+    const dev = buildCspPolicy(false, 'http://localhost:5173/')
+    assert.ok(dev.includes('stark-extension-icon:'), 'dev img-src must name the icon scheme or icons cannot load')
+    const devTokens = dev.split(/[;\s]+/)
+    assert.ok(!devTokens.includes('https:'), 'dev CSP must not open image loading to arbitrary HTTPS hosts')
+    assert.ok(!devTokens.some((token) => token.startsWith('*.')), 'dev CSP must not wildcard hosts')
+    assert.ok(!devTokens.includes('https://open-vsx.org'), 'dev img-src must not name remote image origins')
   })
 
   it('public errors never leak internals', () => {
@@ -139,7 +197,6 @@ describe('extension hit normalization', () => {
     )
   })
 })
-
 describe('extension featured catalog', () => {
   it('loads the popular catalog without a query', async () => {
     const calls: string[] = []
@@ -151,5 +208,60 @@ describe('extension featured catalog', () => {
     const url = calls[0] ?? ''
     assert.ok(url.includes('sortBy=downloadCount'), 'default catalog must prefer popular ordering')
     assert.ok(!url.includes('query='), 'default catalog must not invent query text')
+  })
+})
+
+describe('extension icon resolution (main-owned delivery)', () => {
+  it('maps validated sources to opaque URLs through the injected resolver', async () => {
+    const seen: { source: string | null; namespace: string; name: string; version: string }[] = []
+    const service = new ExtensionRegistryService(okFetch({ extensions: [sampleHit()], totalSize: 1 }, []), {
+      resolveIcon: async (sourceUrl, identity) => {
+        seen.push({ source: sourceUrl, ...identity })
+        return 'stark-extension-icon://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+      }
+    })
+    const result = await service.search('prettier')
+    assert.equal(result.entries[0]?.iconUrl, 'stark-extension-icon://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
+    assert.deepEqual(seen, [
+      {
+        source: 'https://open-vsx.org/api/esbenp/prettier-vscode/12.4.0/file/icon.png',
+        namespace: 'esbenp',
+        name: 'prettier-vscode',
+        version: '12.4.0'
+      }
+    ])
+  })
+
+  it('keeps the catalog delivery working when one icon genuinely fails', async () => {
+    const service = new ExtensionRegistryService(
+      okFetch(
+        {
+          extensions: [
+            sampleHit(),
+            sampleHit({
+              namespace: 'other',
+              name: 'ext',
+              files: { icon: 'https://open-vsx.org/api/other/ext/1.0.0/file/icon.png' }
+            })
+          ],
+          totalSize: 2
+        },
+        []
+      ),
+      {
+        resolveIcon: async (sourceUrl) =>
+          sourceUrl?.includes('esbenp') === true ? 'stark-extension-icon://cccccccccccccccccccccccccccccccc' : null
+      }
+    )
+    const result = await service.search('prettier')
+    assert.equal(result.entries.length, 2)
+    assert.equal(result.entries[0]?.iconUrl, 'stark-extension-icon://cccccccccccccccccccccccccccccccc')
+    assert.equal(result.entries[1]?.iconUrl, null)
+  })
+
+  it('passes remote validated URLs through when no resolver is injected', async () => {
+    const service = new ExtensionRegistryService(okFetch({ extensions: [sampleHit()], totalSize: 1 }, []))
+    const result = await service.search('prettier')
+    assert.equal(result.entries[0]?.iconUrl, 'https://open-vsx.org/api/esbenp/prettier-vscode/12.4.0/file/icon.png')
   })
 })

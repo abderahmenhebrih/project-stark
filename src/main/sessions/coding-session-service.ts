@@ -5,13 +5,15 @@ import type {
   SendUserMessageResult
 } from '../../shared/sessions/types'
 import type { SessionContextItem } from '../../shared/context/types'
-import type { NewMessageContext, StoredMessageContext } from '../database/repositories/coding-session-repository'
+import type { ChatAttachment } from '../../shared/chat-attachments/types'
+import type { NewMessageAttachment, NewMessageContext, StoredMessageAttachment, StoredMessageContext } from '../database/repositories/coding-session-repository'
 import type { CodingSessionRepository } from '../database/repositories/coding-session-repository'
 import type { WorkspaceRepository } from '../database/repositories/workspace-repository'
 import type { SessionContextService } from '../session-context/session-context-service'
+import type { ChatAttachmentService } from '../chat-attachments/service'
 import { InvalidSessionRequestError, SessionNotFoundError, SessionWorkspaceMismatchError, SessionWorkspaceUnavailableError } from './errors'
 import { NEW_SESSION_TITLE, MAX_MESSAGE_PAGE_SIZE, MAX_RECENT_SESSIONS } from './limits'
-import { validateUserMessageContent } from './message-validation'
+import { validateUserMessageContent, validateUserMessageContentAllowEmpty } from './message-validation'
 import { deriveSessionTitle } from './session-title'
 
 function isValidId(value: unknown): value is number {
@@ -35,6 +37,8 @@ export interface CodingSessionServiceOptions {
   readonly now?: () => number
   /** Explicit-context service (Stage 15). Absent in older harnesses. */
   readonly contextService?: SessionContextService
+  /** Chat-attachment service. Absent in older harnesses (no attachments). */
+  readonly attachmentService?: ChatAttachmentService
 }
 
 /**
@@ -59,9 +63,11 @@ export class CodingSessionService {
   ) {
     this.now = options?.now ?? Date.now
     this.context = options?.contextService
+    this.attachments = options?.attachmentService
   }
 
   private readonly context: SessionContextService | undefined
+  private readonly attachments: ChatAttachmentService | undefined
 
   private requireWorkspace(workspaceId: number): void {
     if (this.workspaces.findById(workspaceId) === undefined) {
@@ -93,7 +99,8 @@ export class CodingSessionService {
       readonly content: string
       readonly createdAt: number
     },
-    context: readonly StoredMessageContext[] = []
+    context: readonly StoredMessageContext[] = [],
+    attachments: readonly StoredMessageAttachment[] = []
   ): CodingMessage {
     return {
       id: stored.id,
@@ -101,7 +108,18 @@ export class CodingSessionService {
       role: stored.role,
       content: stored.content,
       createdAt: stored.createdAt,
-      context: context.map((entry) => this.toPublicContextItem(entry))
+      context: context.map((entry) => this.toPublicContextItem(entry)),
+      attachments: attachments.map((entry) => this.toPublicAttachment(entry))
+    }
+  }
+
+  private toPublicAttachment(stored: StoredMessageAttachment): ChatAttachment {
+    return {
+      id: stored.attachmentId,
+      name: stored.originalName,
+      mimeType: stored.mimeType,
+      size: stored.sizeBytes,
+      kind: stored.kind
     }
   }
 
@@ -191,20 +209,25 @@ export class CodingSessionService {
     const hasMore = probe.length > MAX_MESSAGE_PAGE_SIZE
     const page = (hasMore ? probe.slice(0, MAX_MESSAGE_PAGE_SIZE) : probe).reverse()
     const contextByMessage = this.sessions.listContextForMessages(page.map((stored) => stored.id))
+    const attachmentsByMessage = this.sessions.listAttachmentsForMessages(page.map((stored) => stored.id))
     return {
-      messages: page.map((stored) => this.toPublicMessage(stored, contextByMessage.get(stored.id) ?? [])),
+      messages: page.map((stored) =>
+        this.toPublicMessage(stored, contextByMessage.get(stored.id) ?? [], attachmentsByMessage.get(stored.id) ?? [])
+      ),
       hasMore
     }
   }
 
   /**
    * Persists one user message (role forced to 'user') with its explicit
-   * context attachments, and advances the session timestamp, deriving
-   * the deterministic title when the first message lands on an
-   * untitled session — all atomically.
+   * context attachments and local file/image attachments, and advances
+   * the session timestamp, deriving the deterministic title when the
+   * first message lands on an untitled session — all atomically.
+   * Empty text is allowed when at least one valid attachment is
+   * present; the title then derives from the first attachment name.
    */
   async sendUserMessage(payload: unknown): Promise<SendUserMessageResult> {
-    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'content', 'context'])) {
+    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'content', 'context', 'attachments'])) {
       throw new InvalidSessionRequestError('message request is invalid')
     }
     const record = payload as Record<string, unknown>
@@ -212,7 +235,6 @@ export class CodingSessionService {
     if (!isValidId(workspaceId) || !isValidId(sessionId)) {
       throw new InvalidSessionRequestError('session reference is invalid')
     }
-    const validated = validateUserMessageContent(content)
     this.requireWorkspace(workspaceId)
     const session = this.sessions.findSessionById(sessionId)
     if (session === undefined) {
@@ -222,12 +244,16 @@ export class CodingSessionService {
       throw new SessionWorkspaceMismatchError()
     }
     const now = this.now()
-    const attachments = await this.resolveSendContext(workspaceId, record['context'], now)
+    const attachments = await this.resolveSendAttachments(record['attachments'], now)
+    const validated =
+      attachments.length > 0 ? validateUserMessageContentAllowEmpty(content) : validateUserMessageContent(content)
+    const titleSource = validated !== '' ? validated : `Attachment: ${attachments[0]?.originalName ?? 'file'}`
+    const contextAttachments = await this.resolveSendContext(workspaceId, record['context'], now)
     const retitle =
       session.title === NEW_SESSION_TITLE
-        ? { expectedTitle: NEW_SESSION_TITLE, newTitle: deriveSessionTitle(validated) }
+        ? { expectedTitle: NEW_SESSION_TITLE, newTitle: deriveSessionTitle(titleSource) }
         : null
-    const { messageId } = this.sessions.appendMessageWithContext(
+    const { messageId } = this.sessions.appendMessageWithAttachments(
       {
         sessionId,
         role: 'user',
@@ -235,6 +261,7 @@ export class CodingSessionService {
         now,
         retitle
       },
+      contextAttachments,
       attachments
     )
     const message = this.sessions.findMessageById(messageId)
@@ -244,11 +271,23 @@ export class CodingSessionService {
     }
     const stored = this.sessions.listContextForMessage(messageId)
     const persisted = stored.map((entry) => this.toPublicContextItem(entry))
+    const storedAttachments = this.sessions.listAttachmentsForMessage(messageId)
     return {
       session: this.toPublicSession(updated),
-      message: this.toPublicMessage(message, stored),
-      context: persisted
+      message: this.toPublicMessage(message, stored, storedAttachments),
+      context: persisted,
+      attachments: storedAttachments.map((entry) => this.toPublicAttachment(entry))
     }
+  }
+
+  private async resolveSendAttachments(ids: unknown, now: number): Promise<NewMessageAttachment[]> {
+    if (ids === undefined) {
+      return []
+    }
+    if (this.attachments === undefined) {
+      throw new InvalidSessionRequestError('message attachments are not supported here')
+    }
+    return this.attachments.resolveAttachmentsForSend(ids, now)
   }
 
   private async resolveSendContext(workspaceId: number, drafts: unknown, now: number): Promise<NewMessageContext[]> {

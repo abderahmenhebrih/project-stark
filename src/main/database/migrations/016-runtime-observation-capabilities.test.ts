@@ -71,8 +71,8 @@ describe('migration 16 (runtime observation capabilities)', () => {
   it('fresh DB migrates to v17', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 18)
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(getUserVersion(db), 19)
     } finally {
       db.close()
     }
@@ -82,8 +82,8 @@ describe('migration 16 (runtime observation capabilities)', () => {
     const db = openFresh()
     try {
       assert.equal(runMigrations(db, V15), 15)
-      assert.equal(runMigrations(db, migrations), 18)
-      assert.equal(getUserVersion(db), 18)
+      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(getUserVersion(db), 19)
     } finally {
       db.close()
     }
@@ -93,7 +93,7 @@ describe('migration 16 (runtime observation capabilities)', () => {
     const db = openFresh()
     try {
       seedV15WithFiveCaps(db)
-      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(runMigrations(db, migrations), 19)
       const policies = policiesFor(db, 1)
       assert.equal(policies.size, 7)
       assert.equal(policies.get('workspace.read'), 'allow')
@@ -112,8 +112,8 @@ describe('migration 16 (runtime observation capabilities)', () => {
     const db = openFresh()
     try {
       seedV15WithFiveCaps(db)
-      assert.equal(runMigrations(db, migrations), 18)
-      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(runMigrations(db, migrations), 19)
       const count = db
         .prepare('SELECT COUNT(*) AS n FROM workspace_capability_policies WHERE workspace_id = 1')
         .get() as { n: number }
@@ -128,7 +128,7 @@ describe('migration 16 (runtime observation capabilities)', () => {
     try {
       assert.equal(runMigrations(db, V15), 15)
       db.exec("INSERT INTO workspaces (root_path, display_name, created_at, last_opened_at) VALUES ('w', 'w', 1, 1)")
-      assert.equal(runMigrations(db, migrations), 18)
+      assert.equal(runMigrations(db, migrations), 19)
       const count = db
         .prepare('SELECT COUNT(*) AS n FROM workspace_capability_policies WHERE workspace_id = 1')
         .get() as { n: number }
@@ -185,7 +185,7 @@ describe('migration 16 (runtime observation capabilities)', () => {
   it('migration 16 is registered after migration 15', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     )
     assert.equal(migration016RuntimeObservationCapabilities.version, 16)
   })

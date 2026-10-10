@@ -6,18 +6,26 @@
  *
  * Production serves only packaged files, so the policy trusts 'self'
  * (plus data: images/fonts and the inline <style> block in index.html).
- * Extension-catalog artwork loads from the fixed Open VSX registry
- * origin only — the main process allowlists icon URLs to that same
- * origin, so img-src names it explicitly and nothing else remote.
+ * Extension-catalog artwork loads from the main-owned
+ * stark-extension-icon: resource scheme (opaque IDs only, resolved
+ * store-side after main validates the official Open VSX icon source
+ * and retrieves the bounded image bytes itself) — the renderer never
+ * fetches remote icon bytes, so no remote image origin is named here.
+ * Chat-attachment thumbnails load from the main-owned
+ * stark-attachment:// content scheme (opaque IDs only, resolved
+ * store-side), so img-src names that scheme explicitly too.
  * Development additionally trusts the Vite dev-server origin for
- * scripts, HMR websockets, and styles — nothing broader.
+ * scripts, HMR websockets, and styles — nothing broader. The dev
+ * img-src carries the same icon scheme: without it every catalog
+ * icon fails to load under `npm run dev` and the UI falls back to
+ * the generic glyph for all entries.
  */
 
 const PROD_CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: https://open-vsx.org",
+  "img-src 'self' data: stark-attachment: stark-extension-icon:",
   "font-src 'self' data:",
   "object-src 'none'",
   "base-uri 'self'",
@@ -39,7 +47,7 @@ export function buildCspPolicy(isPackaged: boolean, devServerUrl: string | undef
         `default-src 'self' ${origin}`,
         `script-src 'self' 'unsafe-inline' 'unsafe-eval' ${origin}`,
         `style-src 'self' 'unsafe-inline' ${origin}`,
-        `img-src 'self' data: ${origin}`,
+        `img-src 'self' data: stark-attachment: stark-extension-icon: ${origin}`,
         `font-src 'self' data: ${origin}`,
         `connect-src 'self' ${origin} ${wsOrigin}`,
         "object-src 'none'",

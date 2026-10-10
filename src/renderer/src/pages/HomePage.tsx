@@ -46,6 +46,7 @@ function sameChromeSnapshot(
     prev.sessionsLoading === next.sessionsLoading &&
     prev.looplinkActing === next.looplinkActing &&
     prev.sendBusy === next.sendBusy &&
+    prev.creatingSession === next.creatingSession &&
     prev.sessions.length === next.sessions.length &&
     prev.sessions.every(
       (entry, index) =>
@@ -139,6 +140,9 @@ export function HomePage(): ReactElement {
   const handleSelectSession = useCallback((sessionId: number) => {
     sessionActionsRef.current?.selectSession(sessionId)
   }, [])
+  const handleCloseSession = useCallback(() => {
+    sessionActionsRef.current?.closeSession()
+  }, [])
   const handleContinueLooplink = useCallback(() => {
     sessionActionsRef.current?.continueLooplink()
   }, [])
@@ -190,8 +194,6 @@ export function HomePage(): ReactElement {
         workspacePath={active.rootPath}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={handleToggleSidebar}
-        terminalOpen={terminalOpen}
-        onToggleTerminal={handleToggleTerminal}
         onOpenSearch={handleOpenSearch}
         onOpenSettings={() => handleOpenSettings('ai')}
         onOpenAccount={() => handleOpenSettings('account')}
@@ -200,6 +202,7 @@ export function HomePage(): ReactElement {
         sessions={chromeSession?.sessions ?? []}
         selectedSessionId={chromeSession?.selectedSessionId ?? null}
         sessionsLoading={chromeSession?.sessionsLoading ?? false}
+        creatingSession={chromeSession?.creatingSession ?? false}
         looplinkActing={chromeSession?.looplinkActing ?? false}
         looplinkDisabled={
           chromeSession === null ||
@@ -209,6 +212,7 @@ export function HomePage(): ReactElement {
         }
         onNewSession={handleNewSession}
         onSelectSession={handleSelectSession}
+        onCloseSession={handleCloseSession}
         onContinueLooplink={handleContinueLooplink}
         onSwitchWorkspace={handleSwitchWorkspace}
       />

@@ -118,8 +118,10 @@ export function validatedInstallIdentity(value: unknown): ValidatedInstallIdenti
 
 /**
  * Download-URL allowlist: absolute HTTPS on the registry origin under
- * its API path. Applies to metadata-resolved URLs and every redirect
- * hop. Anything else normalizes to null (caller fails the install).
+ * its API path. Applies to metadata-resolved URLs. Redirect hops use
+ * validatedDownloadRedirectUrl below, which additionally admits the
+ * single confirmed official asset host with identity-pinned paths.
+ * Anything else normalizes to null (caller fails the install).
  */
 export function validatedDownloadUrl(value: unknown): string | null {
   if (typeof value !== 'string' || value === '') {
@@ -139,6 +141,98 @@ export function validatedDownloadUrl(value: unknown): string | null {
   }
   if (!parsed.pathname.startsWith('/api/')) {
     return null
+  }
+  return parsed.toString()
+}
+
+/**
+ * Explicitly confirmed official Open VSX asset host. Verified from
+ * live Open VSX 302 `location` responses for VSIX file URLs (served
+ * under the Eclipse Foundation content network). Every real package
+ * download redirects here, so the previous registry-origin-only
+ * allowlist rejected ALL genuine installs at the first hop. No
+ * wildcard, no subdomain allowance — exactly this hostname, with the
+ * path pinned to the requested install identity below.
+ */
+export const EXTENSION_INSTALL_CDN_HOST = 'openvsx.eclipsecontent.org'
+
+const CDN_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+/**
+ * Redirect-hop allowlist (pure, testable): registry-origin API hops
+ * as above, plus the confirmed asset host ONLY with an
+ * identity-pinned path:
+ * - `/<namespace>/<name>/<version>/<file>.vsix` (universal), or
+ * - `/<namespace>/<name>/<platform>/<version>/<file>.vsix`
+ *   (platform-specific, e.g. meta/pyrefly/win32-x64/1.3.9003/...).
+ * Namespace/name/version must equal the requested identity; the file
+ * segment must end in `.vsix`; no userinfo, ports, queries, or
+ * traversal. Applies to the initial download URL and every redirect
+ * hop. Anything else normalizes to null (caller fails the install).
+ */
+export function validatedDownloadRedirectUrl(value: unknown, identity: ValidatedInstallIdentity): string | null {
+  if (typeof value !== 'string' || value === '') {
+    return null
+  }
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'https:') {
+    return null
+  }
+  if (parsed.username !== '' || parsed.password !== '' || parsed.port !== '') {
+    return null
+  }
+  if (parsed.search !== '' || parsed.hash !== '') {
+    return null
+  }
+  const host = parsed.hostname.toLowerCase()
+  if (host === 'open-vsx.org') {
+    if (!parsed.pathname.startsWith('/api/')) {
+      return null
+    }
+    return parsed.toString()
+  }
+  if (host !== EXTENSION_INSTALL_CDN_HOST) {
+    return null
+  }
+  let segments = parsed.pathname.split('/').filter((segment) => segment !== '')
+  try {
+    segments = segments.map((segment) => decodeURIComponent(segment))
+  } catch {
+    return null
+  }
+  if (segments.length !== 4 && segments.length !== 5) {
+    return null
+  }
+  const [namespace, name] = segments
+  const version = segments[segments.length - 2]
+  const file = segments[segments.length - 1]
+  if (namespace !== identity.namespace || name !== identity.name || version !== identity.version) {
+    return null
+  }
+  if (file === undefined || file.length > EXTENSION_INSTALL_MAX_PATH_LENGTH) {
+    return null
+  }
+  // Platform builds name files `<ns>.<name>-<version>@<platform>.vsix`
+  // (live shape, e.g. meta.pyrefly-1.3.9003@win32-x64.vsix): the file
+  // segment alone may additionally carry exactly one `@`.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._@-]*\.vsix$/.test(file)) {
+    return null
+  }
+  for (const segment of segments.slice(0, -1)) {
+    if (
+      segment === '' ||
+      segment === '.' ||
+      segment === '..' ||
+      segment.length > EXTENSION_INSTALL_MAX_ID_LENGTH ||
+      !CDN_SEGMENT.test(segment)
+    ) {
+      return null
+    }
   }
   return parsed.toString()
 }
@@ -169,14 +263,14 @@ interface InstallMetadata {
 
 function readVersionMetadata(payload: unknown): InstallMetadata {
   if (typeof payload !== 'object' || payload === null) {
-    throw new ExtensionInstallError('Registry metadata was malformed.')
+    throw new ExtensionInstallError('Registry metadata was malformed.', { code: 'invalid_download_source' })
   }
   const files = (payload as Record<string, unknown>)['files']
   const download =
     typeof files === 'object' && files !== null ? (files as Record<string, unknown>)['download'] : null
   const downloadUrl = validatedDownloadUrl(download)
   if (downloadUrl === null) {
-    throw new ExtensionInstallError('Registry metadata was malformed.')
+    throw new ExtensionInstallError('Registry metadata was malformed.', { code: 'invalid_download_source' })
   }
   return { downloadUrl }
 }
@@ -214,7 +308,7 @@ export class ExtensionInstallService {
     const identity = validatedInstallIdentity(rawIdentity)
     const key = `${identity.namespace}.${identity.name}@${identity.version}`
     if (this.uninstallInFlight.has(key)) {
-      throw new ExtensionInstallError('Uninstall in progress.')
+      throw new ExtensionInstallError('Uninstall in progress.', { code: 'storage_error' })
     }
     const existing = this.inFlight.get(key)
     if (existing !== undefined) {
@@ -268,7 +362,7 @@ export class ExtensionInstallService {
     // proves the target stays strictly beneath the install root.
     const expected = join(this.installDirName(identity), identity.version)
     if (relative(root, versionDir) !== expected) {
-      throw new ExtensionInstallError('Uninstall target is not safe.')
+      throw new ExtensionInstallError('Uninstall target is not safe.', { code: 'storage_error' })
     }
     const record = this.readInstallRecord(versionDir)
     if (
@@ -278,7 +372,7 @@ export class ExtensionInstallService {
       record['version'] !== identity.version ||
       record['source'] !== 'open-vsx'
     ) {
-      throw new ExtensionInstallError('Uninstall target is not safe.')
+      throw new ExtensionInstallError('Uninstall target is not safe.', { code: 'storage_error' })
     }
     const plan = collectRemovalPlan(versionDir)
     for (const file of plan.files) {
@@ -416,7 +510,7 @@ export class ExtensionInstallService {
     mkdirSync(staging, { recursive: true })
     mkdirSync(tmpDir, { recursive: true })
     try {
-      const sha256 = await this.downloadPackage(downloadUrl, tmpFile)
+      const sha256 = await this.downloadPackage(downloadUrl, tmpFile, identity)
       await extractVsix(tmpFile, staging)
       const manifest = readExtensionManifest(staging, identity)
       writeFileSync(
@@ -478,30 +572,32 @@ export class ExtensionInstallService {
         redirect: 'manual'
       })
     } catch (error: unknown) {
-      throw new ExtensionInstallError('Registry request failed.', { cause: error })
+      throw new ExtensionInstallError('Registry request failed.', { cause: error, code: 'network_error' })
     }
     if (!response.ok) {
-      throw new ExtensionInstallError('Registry request failed.')
+      throw new ExtensionInstallError('Registry request failed.', { code: 'network_error' })
     }
     try {
       return await response.json()
     } catch (error: unknown) {
-      throw new ExtensionInstallError('Registry response was malformed.', { cause: error })
+      throw new ExtensionInstallError('Registry response was malformed.', { cause: error, code: 'invalid_download_source' })
     }
   }
 
   /**
-   * Bounded package download with manual redirect validation. Every
-   * hop must satisfy the download allowlist (max 3 hops); the body
-   * streams through a byte counter capped at 50 MiB whether or not
-   * Content-Length is present.
+   * Bounded package download with manual redirect validation. The
+   * initial metadata-resolved URL plus every hop must satisfy the
+   * redirect allowlist (registry origin, or the single confirmed
+   * official asset host with an identity-pinned path; max 3 hops);
+   * the body streams through a byte counter capped at 50 MiB whether
+   * or not Content-Length is present.
    */
-  private async downloadPackage(url: string, tmpFile: string): Promise<string> {
+  private async downloadPackage(url: string, tmpFile: string, identity: ValidatedInstallIdentity): Promise<string> {
     let current = url
     for (let hop = 0; hop <= 3; hop += 1) {
-      const allowed = validatedDownloadUrl(current)
+      const allowed = validatedDownloadRedirectUrl(current, identity)
       if (allowed === null) {
-        throw new ExtensionInstallError('Registry redirect escaped the allowlist.')
+        throw new ExtensionInstallError('Registry redirect escaped the allowlist.', { code: 'invalid_download_source' })
       }
       let response: {
         readonly ok: boolean
@@ -516,30 +612,41 @@ export class ExtensionInstallService {
           redirect: 'manual'
         })
       } catch (error: unknown) {
-        throw new ExtensionInstallError('Package download failed.', { cause: error })
+        throw new ExtensionInstallError('Package download failed.', { cause: error, code: this.codeForFetchFailure(error) })
       }
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location')
         if (location === null || location === '') {
-          throw new ExtensionInstallError('Registry redirect escaped the allowlist.')
+          throw new ExtensionInstallError('Registry redirect escaped the allowlist.', { code: 'invalid_download_source' })
         }
         try {
           current = new URL(location, allowed).toString()
         } catch {
-          throw new ExtensionInstallError('Registry redirect escaped the allowlist.')
+          throw new ExtensionInstallError('Registry redirect escaped the allowlist.', { code: 'invalid_download_source' })
         }
         continue
       }
       if (!response.ok) {
-        throw new ExtensionInstallError('Package download failed.')
+        throw new ExtensionInstallError('Package download failed.', { code: 'network_error' })
       }
       const declared = parseContentLength(response.headers.get('content-length'))
       if (declared !== null && declared > EXTENSION_INSTALL_MAX_VSIX_BYTES) {
-        throw new ExtensionInstallError('Package exceeds the size limit.')
+        throw new ExtensionInstallError('Package exceeds the size limit.', { code: 'package_too_large' })
       }
       return this.streamToTempFile(response.body, tmpFile)
     }
-    throw new ExtensionInstallError('Registry redirect escaped the allowlist.')
+    throw new ExtensionInstallError('Registry redirect escaped the allowlist.', { code: 'invalid_download_source' })
+  }
+
+  /** Timeouts keep their code for main-side diagnosis; copy stays calm. */
+  private codeForFetchFailure(error: unknown): 'timeout' | 'network_error' {
+    if (typeof DOMException !== 'undefined' && error instanceof DOMException && error.name === 'TimeoutError') {
+      return 'timeout'
+    }
+    if (typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'TimeoutError') {
+      return 'timeout'
+    }
+    return 'network_error'
   }
 
   private async streamToTempFile(body: unknown, tmpFile: string): Promise<string> {
@@ -549,16 +656,24 @@ export class ExtensionInstallService {
       transform(chunk: Buffer, _encoding, callback): void {
         bytes += chunk.length
         if (bytes > EXTENSION_INSTALL_MAX_VSIX_BYTES) {
-          callback(new ExtensionInstallError('Package exceeds the size limit.'))
+          callback(new ExtensionInstallError('Package exceeds the size limit.', { code: 'package_too_large' }))
           return
         }
         hash.update(chunk)
         callback(null, chunk)
       }
     })
-    const source = body as NodeJS.ReadableStream | null
-    if (source === null || typeof source !== 'object' || typeof (source as { pipe?: unknown }).pipe !== 'function') {
-      throw new ExtensionInstallError('Package download failed.')
+    const source = body as NodeJS.ReadableStream | AsyncIterable<unknown> | null
+    // Real network bodies are WHATWG ReadableStreams (async-iterable,
+    // no Node `.pipe`); fixture fakes use Node Readables. Accept
+    // either — anything else fails the download without detail.
+    const pipeable =
+      source !== null &&
+      typeof source === 'object' &&
+      (typeof (source as { pipe?: unknown }).pipe === 'function' ||
+        typeof (source as AsyncIterable<unknown>)[Symbol.asyncIterator] === 'function')
+    if (!pipeable || source === null) {
+      throw new ExtensionInstallError('Package download failed.', { code: 'network_error' })
     }
     try {
       await pipeline(source as NodeJS.ReadableStream, counter, createWriteStream(tmpFile, { flags: 'wx', mode: 0o600 }))
@@ -566,7 +681,7 @@ export class ExtensionInstallService {
       if (error instanceof ExtensionInstallError) {
         throw error
       }
-      throw new ExtensionInstallError('Package download failed.', { cause: error })
+      throw new ExtensionInstallError('Package download failed.', { cause: error, code: 'network_error' })
     }
     return hash.digest('hex')
   }
@@ -587,23 +702,23 @@ export function readExtensionManifest(stagingDir: string, identity: ValidatedIns
   try {
     size = statSync(manifestPath).size
   } catch {
-    throw new ExtensionInstallError('Extension manifest is missing.')
+    throw new ExtensionInstallError('Extension manifest is missing.', { code: 'manifest_mismatch' })
   }
   if (size > EXTENSION_INSTALL_MAX_MANIFEST_BYTES) {
-    throw new ExtensionInstallError('Extension manifest is missing.')
+    throw new ExtensionInstallError('Extension manifest is missing.', { code: 'manifest_mismatch' })
   }
   let parsed: unknown
   try {
     parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as unknown
   } catch {
-    throw new ExtensionInstallError('Extension manifest is missing.')
+    throw new ExtensionInstallError('Extension manifest is missing.', { code: 'manifest_mismatch' })
   }
   if (typeof parsed !== 'object' || parsed === null) {
-    throw new ExtensionInstallError('Extension manifest is missing.')
+    throw new ExtensionInstallError('Extension manifest is missing.', { code: 'manifest_mismatch' })
   }
   const record = parsed as Record<string, unknown>
   if (record['name'] !== identity.name || record['publisher'] !== identity.namespace || record['version'] !== identity.version) {
-    throw new ExtensionInstallError('Extension manifest is missing.')
+    throw new ExtensionInstallError('Extension manifest is missing.', { code: 'manifest_mismatch' })
   }
   const displayName = typeof record['displayName'] === 'string' && record['displayName'].trim() !== '' ? record['displayName'].trim() : identity.name
   return { displayName }
@@ -636,23 +751,23 @@ export function collectRemovalPlan(versionDir: string): RemovalPlan {
     try {
       entries = readdirSync(current)
     } catch {
-      throw new ExtensionInstallError('Uninstall target is not safe.')
+      throw new ExtensionInstallError('Uninstall target is not safe.', { code: 'storage_error' })
     }
     dirs.push(current)
     for (const name of entries) {
       seen += 1
       if (seen > EXTENSION_UNINSTALL_MAX_ENTRIES) {
-        throw new ExtensionInstallError('Uninstall target is not safe.')
+        throw new ExtensionInstallError('Uninstall target is not safe.', { code: 'storage_error' })
       }
       const full = join(current, name)
       let stats
       try {
         stats = lstatSync(full)
       } catch {
-        throw new ExtensionInstallError('Uninstall target is not safe.')
+        throw new ExtensionInstallError('Uninstall target is not safe.', { code: 'storage_error' })
       }
       if (stats.isSymbolicLink() || (!stats.isFile() && !stats.isDirectory())) {
-        throw new ExtensionInstallError('Uninstall target is not safe.')
+        throw new ExtensionInstallError('Uninstall target is not safe.', { code: 'storage_error' })
       }
       if (stats.isDirectory()) {
         stack.push(full)
@@ -672,27 +787,27 @@ export function collectRemovalPlan(versionDir: string): RemovalPlan {
  */
 export function validatedArchiveEntryPath(fileName: string): string {
   if (typeof fileName !== 'string' || fileName === '' || fileName.length > EXTENSION_INSTALL_MAX_PATH_LENGTH) {
-    throw new ExtensionInstallError('Archive entry is not safe.')
+    throw new ExtensionInstallError('Archive entry is not safe.', { code: 'invalid_archive' })
   }
   if (fileName.includes('\0')) {
-    throw new ExtensionInstallError('Archive entry is not safe.')
+    throw new ExtensionInstallError('Archive entry is not safe.', { code: 'invalid_archive' })
   }
   if (fileName.includes('\\')) {
-    throw new ExtensionInstallError('Archive entry is not safe.')
+    throw new ExtensionInstallError('Archive entry is not safe.', { code: 'invalid_archive' })
   }
   if (fileName.startsWith('/')) {
-    throw new ExtensionInstallError('Archive entry is not safe.')
+    throw new ExtensionInstallError('Archive entry is not safe.', { code: 'invalid_archive' })
   }
   if (/^[A-Za-z]:/.test(fileName)) {
-    throw new ExtensionInstallError('Archive entry is not safe.')
+    throw new ExtensionInstallError('Archive entry is not safe.', { code: 'invalid_archive' })
   }
   const withoutTrailingSlash = fileName.endsWith('/') ? fileName.slice(0, -1) : fileName
   if (withoutTrailingSlash === '') {
-    throw new ExtensionInstallError('Archive entry is not safe.')
+    throw new ExtensionInstallError('Archive entry is not safe.', { code: 'invalid_archive' })
   }
   for (const segment of withoutTrailingSlash.split('/')) {
     if (segment === '' || segment === '.' || segment === '..') {
-      throw new ExtensionInstallError('Archive entry is not safe.')
+      throw new ExtensionInstallError('Archive entry is not safe.', { code: 'invalid_archive' })
     }
   }
   return fileName
@@ -712,7 +827,7 @@ export async function extractVsix(archivePath: string, stagingDir: string): Prom
   const zipfile = await yauzl.openPromise(archivePath, { lazyEntries: true, strictFileNames: true })
   try {
     if (zipfile.entryCount > EXTENSION_INSTALL_MAX_ENTRIES) {
-      throw new ExtensionInstallError('Archive exceeds its limits.')
+      throw new ExtensionInstallError('Archive exceeds its limits.', { code: 'package_too_large' })
     }
     let seen = 0
     let totalBytes = 0
@@ -723,24 +838,24 @@ export async function extractVsix(archivePath: string, stagingDir: string): Prom
       }
       seen += 1
       if (seen > EXTENSION_INSTALL_MAX_ENTRIES) {
-        throw new ExtensionInstallError('Archive exceeds its limits.')
+        throw new ExtensionInstallError('Archive exceeds its limits.', { code: 'package_too_large' })
       }
       const name = validatedArchiveEntryPath(entry.fileName)
       const fileType = unixFileType(entry.externalFileAttributes)
       if (fileType !== 0 && fileType !== UNIX_IFREG && fileType !== UNIX_IFDIR) {
-        throw new ExtensionInstallError('Archive entry is not safe.')
+        throw new ExtensionInstallError('Archive entry is not safe.', { code: 'invalid_archive' })
       }
       const dest = resolve(join(stagingDir, name))
       const base = resolve(stagingDir)
       if (dest !== base && !dest.startsWith(base + sep)) {
-        throw new ExtensionInstallError('Archive entry is not safe.')
+        throw new ExtensionInstallError('Archive entry is not safe.', { code: 'invalid_archive' })
       }
       if (name.endsWith('/')) {
         mkdirSync(dest, { recursive: true })
         continue
       }
       if (entry.uncompressedSize > EXTENSION_INSTALL_MAX_ENTRY_BYTES) {
-        throw new ExtensionInstallError('Archive exceeds its limits.')
+        throw new ExtensionInstallError('Archive exceeds its limits.', { code: 'package_too_large' })
       }
       totalBytes = await streamEntry(zipfile, entry, dest, totalBytes)
     }
@@ -798,7 +913,7 @@ async function streamEntry(
         } catch {
           // Best effort.
         }
-        throw new ExtensionInstallError('Archive exceeds its limits.')
+        throw new ExtensionInstallError('Archive exceeds its limits.', { code: 'package_too_large' })
       }
       chunks.push(buffer)
     }
@@ -806,7 +921,7 @@ async function streamEntry(
     if (error instanceof ExtensionInstallError) {
       throw error
     }
-    throw new ExtensionInstallError('Archive entry could not be read.', { cause: error })
+    throw new ExtensionInstallError('Archive entry could not be read.', { cause: error, code: 'invalid_archive' })
   }
   const parent = join(dest, '..')
   mkdirSync(parent, { recursive: true })

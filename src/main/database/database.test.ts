@@ -12,13 +12,13 @@ function makeTempDir(): string {
 }
 
 describe('StarkDatabase lifecycle', () => {
-  it('initializes in-memory with schema version 17', () => {
+  it('initializes in-memory with schema version 19', () => {
     const database = new StarkDatabase()
     try {
       database.initialize(':memory:')
       assert.equal(database.isOpen(), true)
-      assert.equal(database.getSchemaVersion(), 18)
-      assert.equal(database.readStoredSchemaVersion(), 18)
+      assert.equal(database.getSchemaVersion(), 19)
+      assert.equal(database.readStoredSchemaVersion(), 19)
     } finally {
       database.close()
     }
@@ -97,14 +97,14 @@ describe('StarkDatabase lifecycle', () => {
       try {
         first.initialize(file)
         first.getKeyValue().set('survive', [1, 2, 3])
-        assert.equal(first.getSchemaVersion(), 18)
+        assert.equal(first.getSchemaVersion(), 19)
       } finally {
         first.close()
       }
       const second = new StarkDatabase()
       try {
         second.initialize(file)
-        assert.equal(second.getSchemaVersion(), 18)
+        assert.equal(second.getSchemaVersion(), 19)
         assert.deepEqual(second.getKeyValue().get('survive'), [1, 2, 3])
       } finally {
         second.close()

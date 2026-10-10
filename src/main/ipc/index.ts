@@ -34,6 +34,8 @@ import type { WorkspaceSearchService } from '../workspace-search/workspace-searc
 import type { ExtensionRegistryService } from '../extension-registry/extension-registry-service'
 import type { ExtensionInstallService } from '../extension-install/extension-install-service'
 import type { ExtensionHostManager } from '../extension-host/extension-host-manager'
+import type { AttachmentPicker } from '../chat-attachments/picker'
+import type { ChatAttachmentService } from '../chat-attachments/service'
 import { getAppInfo } from '../services/app-info'
 import type { IpcBinding } from './binding'
 import { createAiBindings } from './ai'
@@ -61,6 +63,7 @@ import { createWorkspaceSearchBindings } from './workspace-search'
 import { createExtensionsBindings } from './extensions'
 import { createExtensionInstallBindings } from './extension-install'
 import { createExtensionHostBindings } from './extension-host'
+import { createAttachmentBindings } from './attachments'
 import { createAccountBindings } from './account'
 
 /**
@@ -103,6 +106,9 @@ export interface IpcDependencies {
   readonly extensionInstallService?: ExtensionInstallService
   /** Extension Host broker (foundation only). Optional in older harnesses; absent means no host channels. */
   readonly extensionHostManager?: ExtensionHostManager
+  /** Chat attachments (local files + images). Optional in older harnesses; absent means no attachment channels. */
+  readonly attachmentService?: ChatAttachmentService
+  readonly attachmentPicker?: AttachmentPicker
   readonly changeTransactionService: ChangeTransactionService
   readonly terminalService: TerminalService
   readonly terminalManager: TerminalManager
@@ -204,6 +210,9 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
   }
   if (deps.extensionHostManager !== undefined) {
     bindings.push(...createExtensionHostBindings(deps.extensionHostManager))
+  }
+  if (deps.attachmentService !== undefined && deps.attachmentPicker !== undefined) {
+    bindings.push(...createAttachmentBindings(deps.attachmentService, deps.attachmentPicker))
   }
   if (deps.cloudAccountService !== undefined) {
     bindings.push(...createAccountBindings(deps.cloudAccountService))

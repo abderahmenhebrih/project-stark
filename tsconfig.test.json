@@ -64,6 +64,7 @@
     "src/renderer/src/features/sessions/composer-keys.test.ts",
     "src/renderer/src/features/sessions/session-content-safety.test.ts",
     "src/renderer/src/features/sessions/session-layout.test.ts",
+    "src/renderer/src/features/sessions/attachment-surface.test.ts",
     "src/renderer/src/features/sessions/session-context-state.ts",
     "src/renderer/src/features/sessions/session-context-state.test.ts",
     "src/renderer/src/features/sessions/session-context-safety.test.ts",
@@ -115,6 +116,7 @@
     "src/renderer/src/features/workbench/stark-shell.test.ts",
     "src/renderer/src/components/brand-assets.test.ts",
     "src/renderer/src/layouts/chrome-polish.test.ts",
+    "src/renderer/src/layouts/stabilization-chrome.test.ts",
     "src/renderer/src/features/explorer/fileIconForName.ts",
     "src/renderer/src/features/extensions/extensions-surface.test.ts",
     "src/renderer/src/lib/double-submit-guards.test.ts"
