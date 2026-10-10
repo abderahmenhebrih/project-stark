@@ -19,6 +19,8 @@ interface AppChromeProps {
   readonly sessionTitle: string
   readonly sessions: readonly SessionChromeSession[]
   readonly selectedSessionId: number | null
+  /** Renderer-local open tabs in strip order (presentation only). */
+  readonly openSessionIds: readonly number[]
   readonly sessionsLoading: boolean
   /** A creation is in flight: + stays disabled until it settles. */
   readonly creatingSession: boolean
@@ -26,8 +28,12 @@ interface AppChromeProps {
   readonly looplinkDisabled: boolean
   readonly onNewSession: () => void
   readonly onSelectSession: (sessionId: number) => void
+  /** Switches to an already-open tab (no backend mutation). */
+  readonly onSelectSessionTab: (sessionId: number) => void
   /** Closes the visible tab (presentation only — history is preserved). */
   readonly onCloseSession: () => void
+  /** Closes one open tab by id (presentation only — history is preserved). */
+  readonly onCloseSessionTab: (sessionId: number) => void
   readonly onContinueLooplink: () => void
   /** Guarded workspace-root switch (same flow as “Open another folder”). */
   readonly onSwitchWorkspace: () => void
@@ -38,6 +44,8 @@ interface SessionOptionsMenuProps {
   readonly anchor: { readonly left: number; readonly bottom: number; readonly top: number }
   readonly sessions: readonly SessionChromeSession[]
   readonly selectedSessionId: number | null
+  /** Tabs already open: marked subtly, never duplicated on select. */
+  readonly openSessionIds: readonly number[]
   readonly looplinkActing: boolean
   readonly looplinkDisabled: boolean
   readonly onSelectSession: (sessionId: number) => void
@@ -63,6 +71,7 @@ function SessionOptionsMenu({
   anchor,
   sessions,
   selectedSessionId,
+  openSessionIds,
   looplinkActing,
   looplinkDisabled,
   onSelectSession,
@@ -144,11 +153,14 @@ function SessionOptionsMenu({
                 className={
                   entry.id === selectedSessionId
                     ? 'app-chrome__history-item app-chrome__history-item--active'
-                    : 'app-chrome__history-item'
+                    : openSessionIds.includes(entry.id)
+                      ? 'app-chrome__history-item app-chrome__history-item--open'
+                      : 'app-chrome__history-item'
                 }
                 type="button"
                 role="menuitem"
                 aria-current={entry.id === selectedSessionId}
+                title={openSessionIds.includes(entry.id) ? `${entry.title} (open)` : entry.title}
                 onClick={() => {
                   onSelectSession(entry.id)
                   onClose()
@@ -181,11 +193,11 @@ function SessionOptionsMenu({
 /**
  * Single desktop chrome row (60–64px): workspace-tools menu,
  * STARK identity, clickable workspace name (secondary-brand accent,
- * same guarded switch flow as “Open another folder”), then the
- * active session tab as the visual centerpiece with a New-session
- * action, a presentation-only close affordance, and a
- * History/Looplink overflow. Flexible empty space follows before the
- * icon-only utilities (search, settings, account). The terminal lives
+ * same guarded switch flow as “Open another folder”), then the open
+ * session tabs as a scrollable strip (one tab selected at a time)
+ * with a New-session action, per-tab presentation-only close
+ * affordances, and a History/Looplink overflow. Flexible empty space
+ * follows before the icon-only utilities (search, settings, account). The terminal lives
  * on the activity rail below Extensions — never in this bar.
  * Renderer-local view state only — session data is mirrored from
  * SessionPanel, which stays the single owner.
@@ -202,13 +214,16 @@ export function AppChrome({
   sessionTitle,
   sessions,
   selectedSessionId,
+  openSessionIds,
   sessionsLoading,
   creatingSession,
   looplinkActing,
   looplinkDisabled,
   onNewSession,
   onSelectSession,
+  onSelectSessionTab,
   onCloseSession,
+  onCloseSessionTab,
   onContinueLooplink,
   onSwitchWorkspace
 }: AppChromeProps): ReactElement {
@@ -261,29 +276,73 @@ export function AppChrome({
         <span className="app-chrome__workspace">{workspaceName}</span>
       </button>
       <span className="app-chrome__divider" aria-hidden="true" />
-      <div className="app-chrome__tabs" role="tablist" aria-label="Active session">
-        <div
-          className="app-chrome__tab"
-          role="tab"
-          aria-selected="true"
-          aria-label={`Active session: ${sessionTitle}`}
-          title={sessionTitle}
-        >
-          <span className="app-chrome__tab-dot" aria-hidden="true" />
-          <span className="app-chrome__tab-title">{sessionTitle}</span>
-          <button
-            className="app-chrome__tab-close"
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation()
-              onCloseSession()
-            }}
-            aria-label="Close session"
-            title="Close session"
+      <div className="app-chrome__tabs" role="tablist" aria-label="Open sessions">
+        {openSessionIds.length === 0 ? (
+          <div
+            className="app-chrome__tab"
+            role="tab"
+            aria-selected="true"
+            aria-label={`Active session: ${sessionTitle}`}
+            title={sessionTitle}
           >
-            <StarkIcon name="close" size={13} />
-          </button>
-        </div>
+            <span className="app-chrome__tab-dot" aria-hidden="true" />
+            <span className="app-chrome__tab-title">{sessionTitle}</span>
+            <button
+              className="app-chrome__tab-close"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                onCloseSession()
+              }}
+              aria-label="Close session"
+              title="Close session"
+            >
+              <StarkIcon name="close" size={13} />
+            </button>
+          </div>
+        ) : (
+          openSessionIds.map((sessionId) => {
+            const title = sessions.find((entry) => entry.id === sessionId)?.title ?? sessionTitle
+            const active = sessionId === selectedSessionId
+            return (
+              <div
+                key={sessionId}
+                className={active ? 'app-chrome__tab app-chrome__tab--active' : 'app-chrome__tab'}
+                role="tab"
+                aria-selected={active}
+                aria-label={active ? `Active session: ${title}` : `Open session: ${title}`}
+                title={title}
+                tabIndex={active ? undefined : 0}
+                onClick={() => {
+                  if (!active) {
+                    onSelectSessionTab(sessionId)
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (!active && (event.key === 'Enter' || event.key === ' ')) {
+                    event.preventDefault()
+                    onSelectSessionTab(sessionId)
+                  }
+                }}
+              >
+                <span className="app-chrome__tab-dot" aria-hidden="true" />
+                <span className="app-chrome__tab-title">{title}</span>
+                <button
+                  className="app-chrome__tab-close"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onCloseSessionTab(sessionId)
+                  }}
+                  aria-label="Close session"
+                  title="Close session"
+                >
+                  <StarkIcon name="close" size={13} />
+                </button>
+              </div>
+            )
+          })
+        )}
       </div>
       <button
         className="app-chrome__newtab"
@@ -314,6 +373,7 @@ export function AppChrome({
           anchor={anchor}
           sessions={sessions}
           selectedSessionId={selectedSessionId}
+          openSessionIds={openSessionIds}
           looplinkActing={looplinkActing}
           looplinkDisabled={looplinkDisabled}
           onSelectSession={onSelectSession}

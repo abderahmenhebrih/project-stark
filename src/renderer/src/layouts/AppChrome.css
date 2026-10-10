@@ -73,30 +73,50 @@
   white-space: nowrap;
 }
 
+/* Open-session tab strip: a horizontally scrollable row that yields
+   width before the utilities. Tabs shrink to their minimum first;
+   overflow scrolls inside the strip — + ... search, settings, and
+   profile stay reachable and the page never scrolls sideways. */
 .app-chrome__tabs {
-  flex: 0 1 300px;
-  min-width: 180px;
-  max-width: 420px;
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   display: flex;
   align-items: center;
-  overflow: hidden;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  padding: 2px;
+}
+
+.app-chrome__tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .app-chrome__tab {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 0 1 auto;
+  width: 220px;
+  min-width: 130px;
+  max-width: 320px;
   min-height: 44px;
   max-height: 48px;
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 14px;
-  background: var(--stark-elevated);
-  border: 1px solid var(--stark-border);
+  padding: 6px 8px 6px 14px;
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 10px;
   overflow: hidden;
   white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.app-chrome__tab--active {
+  background: var(--stark-elevated);
+  border-color: var(--stark-border);
 }
 
 .app-chrome__tab-dot {
@@ -259,6 +279,11 @@
   color: var(--stark-lime);
 }
 
+/* Already-open sessions read subtly brighter in history (no dupes). */
+.app-chrome__history-item--open {
+  color: var(--stark-text);
+}
+
 .app-chrome__menu-divider {
   flex: 0 0 auto;
   height: 1px;
@@ -325,6 +350,7 @@
 
 .app-chrome__control:focus-visible,
 .app-chrome__newtab:focus-visible,
+.app-chrome__tab:focus-visible,
 .app-chrome__tab-close:focus-visible,
 .app-chrome__identity:focus-visible,
 .app-chrome__history-item:focus-visible,

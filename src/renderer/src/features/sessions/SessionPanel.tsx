@@ -5,6 +5,7 @@ import {
   useState,
   type Dispatch,
   type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactElement
 } from 'react'
 import type { CodingMessage } from '../../../../shared/sessions/types'
@@ -108,6 +109,18 @@ import { normalizeChangeSetProposalError } from '../../lib/change-set-error'
 import { attachmentAiState } from './attachment-ai-inclusion'
 import { VoiceInputButton } from './VoiceInputButton'
 import { appendTranscription } from './voice-recorder'
+import {
+  closeSessionTab,
+  discardSessionDraft,
+  emptySessionTabDraft,
+  isSessionTabDirty,
+  MAX_OPEN_SESSION_TABS,
+  openSessionTab,
+  stashSessionDraft,
+  TAB_LIMIT_NOTICE,
+  type SessionTabDraft
+} from './session-tabs'
+import { STARK_WORDMARK_URL } from '../../components/brandAssets'
 import './session.css'
 
 interface SessionPanelProps {
@@ -144,6 +157,8 @@ export interface SessionChromeSnapshot {
   readonly title: string
   readonly sessions: readonly SessionChromeSession[]
   readonly selectedSessionId: number | null
+  /** Renderer-local open tabs (presentation only, order = strip order). */
+  readonly openSessionIds: readonly number[]
   readonly sessionsLoading: boolean
   readonly looplinkActing: boolean
   readonly sendBusy: boolean
@@ -162,6 +177,11 @@ export interface SessionChromeActions {
    * unsent drafts with confirmation; see handleCloseRequest.
    */
   readonly closeSession: () => void
+  /**
+   * Closes one open tab by id (inactive tabs included). Same
+   * presentation-only semantics with the same draft guard.
+   */
+  readonly closeSessionTab: (sessionId: number) => void
 }
 
 const OPENAI_PROVIDER_ID = 'openai' as const
@@ -340,6 +360,33 @@ export function SessionPanel({
   // Close-tab confirmation: set while the user decides about an unsent
   // draft. Committed attachments are never touched by the close path.
   const [confirmingClose, setConfirmingClose] = useState(false)
+  // Pending close target: the tab id awaiting confirmation (active or
+  // inactive). performClose reads it so inactive tabs close without
+  // disturbing the live selection, composer, or attachments.
+  const closeTabIdRef = useRef<number | null>(null)
+  // Open session tabs (renderer-local presentation, bounded, order =
+  // strip order) plus per-session unsent drafts. The panel remounts per
+  // workspace, so both reset on project switch; restart reopens the
+  // last active session as a single tab through the normal selection.
+  const [openSessionIds, setOpenSessionIds] = useState<readonly number[]>([])
+  const [tabDrafts, setTabDrafts] = useState<Readonly<Record<number, SessionTabDraft>>>({})
+  // Calm tab-cap notice (status, never an exception): set when + or
+  // history is blocked at MAX_OPEN_SESSION_TABS, cleared on the next
+  // successful open/select/close. Never tied to drafts or attachments.
+  const [tabLimitNotice, setTabLimitNotice] = useState<string | null>(null)
+  // Previous selection for draft stash/restore (updated by the sync
+  // effect below, never rendered).
+  const prevSelectedRef = useRef<number | null>(null)
+  // Latest selected session for async ownership checks: completions
+  // must land in the session that started them, never in whichever tab
+  // happens to be active when the promise resolves. Updated by the
+  // same sync effect, read by every guarded async completion below.
+  const selectedSessionIdRef = useRef<number | null>(null)
+  // Request guards against last-writer-wins races (approval, recovery):
+  // a stale in-flight load for a previous tab must not overwrite the
+  // current tab's card or banner when it resolves late.
+  const approvalRequestRef = useRef(0)
+  const recoveryRequestRef = useRef(0)
   const [revealKey, setRevealKey] = useState(false)
   const [modelDraft, setModelDraft] = useState<string | null>(null)
   const sessionsRequestRef = useRef(0)
@@ -351,6 +398,53 @@ export function SessionPanel({
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRef = useRef(false)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
+  // Floating-composer mode menu (presentation only): which Ask/Work/
+  // Propose-change mode the existing proposal state runs in. The menu
+  // is transient; the mode itself stays in proposal state.
+  const [modeMenuOpen, setModeMenuOpen] = useState(false)
+  const modeButtonRef = useRef<HTMLButtonElement | null>(null)
+  const modeMenuRef = useRef<HTMLDivElement | null>(null)
+
+  /** Composer textarea auto-grow: 52px floor, 240px cap, then scroll. */
+  useEffect(() => {
+    const element = composerRef.current
+    if (element === null) {
+      return
+    }
+    element.style.height = 'auto'
+    element.style.height = `${Math.min(element.scrollHeight, 240)}px`
+  }, [composer])
+
+  // Mode menu dismissal: Escape closes (focus back on the trigger),
+  // outside pointer-down closes. Listeners live only while open.
+  useEffect(() => {
+    if (!modeMenuOpen) {
+      return
+    }
+    function onKeyDown(event: globalThis.KeyboardEvent): void {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setModeMenuOpen(false)
+        modeButtonRef.current?.focus()
+      }
+    }
+    function onPointerDown(event: PointerEvent): void {
+      const target = event.target
+      if (!(target instanceof Node)) {
+        return
+      }
+      if (modeMenuRef.current?.contains(target) === true || modeButtonRef.current?.contains(target) === true) {
+        return
+      }
+      setModeMenuOpen(false)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.removeEventListener('pointerdown', onPointerDown)
+    }
+  }, [modeMenuOpen])
 
   const aiReady = provider.configured && provider.selectedModel !== null
 
@@ -702,6 +796,54 @@ export function SessionPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, selectedSessionId])
 
+  // Open-tab sync (declared after the session-changed effect so the
+  // mode restore below wins over the proposal reset above). Every
+  // selection — tab click, history open, +, recovery handoff — lands
+  // here exactly once per selection identity:
+  // (a) the previous tab's live draft is stashed (switching never
+  //     discards unsent text, staged attachments, or the mode);
+  // (b) the new selection is ensured an open tab when below the cap —
+  //     at the cap the strip is left unchanged with the calm limit
+  //     notice (never evict, never release draft assets);
+  // (c) the new tab's stash is restored into the live composer (fresh
+  //     tabs start empty). Only the active session renders; stashes
+  //     are metadata, never mounted trees.
+  useEffect(() => {
+    const prev = prevSelectedRef.current
+    prevSelectedRef.current = selectedSessionId
+    selectedSessionIdRef.current = selectedSessionId
+    if (selectedSessionId === null) {
+      return
+    }
+    if (prev !== null && prev !== selectedSessionId && openSessionIds.includes(prev)) {
+      const stashed: SessionTabDraft = { composer, attachments, mode: proposal.mode }
+      setTabDrafts((drafts) => stashSessionDraft(drafts, prev, stashed))
+    }
+    if (!openSessionIds.includes(selectedSessionId)) {
+      const next = openSessionTab(openSessionIds, selectedSessionId, prev)
+      if (next.result === 'limit_reached') {
+        // Defensive net only: handleSelect (+ already-guarded history)
+        // and handleNew (already-guarded +) reject at-cap opens before
+        // dispatching, so this fires solely for system-driven
+        // selections. Leave every tab, draft, and attachment untouched.
+        setTabLimitNotice(TAB_LIMIT_NOTICE)
+      } else {
+        setOpenSessionIds(next.openIds)
+        setTabLimitNotice(null)
+      }
+    }
+    if (prev === null || prev === selectedSessionId) {
+      return
+    }
+    const incoming = tabDrafts[selectedSessionId] ?? emptySessionTabDraft(proposal.mode)
+    setComposer(incoming.composer)
+    setAttachments(incoming.attachments)
+    if (incoming.mode !== proposal.mode) {
+      proposalDispatch({ type: 'mode-changed', workspaceId, mode: incoming.mode })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId, selectedSessionId])
+
   // Managed project runtimes are workspace-scoped and live outside any
   // single session: load explicitly on mount and reflect main-pushed
   // updates with no polling and no timers.
@@ -805,15 +947,25 @@ export function SessionPanel({
     // (createCodingSession → session-created → chrome mirror): works
     // with no AI provider connected, switches to the new session with
     // an empty conversation, and never duplicates on rapid clicks.
+    // The live draft is NOT cleared here: the selection effect stashes
+    // it under the previous session and restores an empty draft for
+    // the fresh tab, so + never discards unsent work.
+    // Tab-cap guard BEFORE any backend work: at 12 open tabs no
+    // database session is created, selection and drafts are untouched,
+    // and the calm limit notice is shown instead.
     if (state.loadingSessions || creatingRef.current) {
+      return
+    }
+    if (openSessionIds.length >= MAX_OPEN_SESSION_TABS) {
+      setTabLimitNotice(TAB_LIMIT_NOTICE)
       return
     }
     creatingRef.current = true
     setCreatingSession(true)
     try {
       const session = await createCodingSession(workspaceId)
+      setTabLimitNotice(null)
       dispatch({ type: 'session-created', session })
-      setComposer('')
       composerRef.current?.focus()
     } catch (error: unknown) {
       dispatch({
@@ -832,26 +984,53 @@ export function SessionPanel({
     if (sessionId === state.selectedSessionId) {
       return
     }
+    // History behavior at the cap: already-open tabs always activate
+    // (even at 12); unopened entries are rejected with the calm notice
+    // and the active session, tabs, and drafts stay exactly as they
+    // were. Never creates a duplicate tab or a backend session here.
+    if (!openSessionIds.includes(sessionId) && openSessionIds.length >= MAX_OPEN_SESSION_TABS) {
+      setTabLimitNotice(TAB_LIMIT_NOTICE)
+      return
+    }
+    setTabLimitNotice(null)
     dispatch({ type: 'session-selected', workspaceId, sessionId })
   }
 
   /**
    * Closes the visible session tab. CLOSE ≠ DELETE: persisted history,
    * database messages, and committed attachments are never touched —
-   * only the tab/workspace presentation changes. With a single active
-   * presentation (no multi-tab state in this architecture), closing
-   * selects the most recent remaining session, or creates a fresh
-   * local New session when none remains. An unsent draft (composer
-   * text or staged draft attachments) requires explicit confirmation
-   * first; confirming releases uncommitted draft assets through the
-   * existing narrow removeDraft API (bounded: at most 10).
+   * only the tab/workspace presentation changes. Closing the active
+   * tab selects the tab to the left (else the first remaining tab),
+   * or creates a fresh local New session when none remains. An
+   * unsent draft (composer text or staged draft attachments) requires
+   * explicit confirmation first; confirming releases uncommitted
+   * draft assets through the existing narrow removeDraft API
+   * (bounded: at most 10).
    */
   function handleCloseRequest(): void {
-    if (state.selectedSessionId === null || creatingRef.current) {
+    requestCloseTab(state.selectedSessionId)
+  }
+
+  /** Live composer draft snapshot for stash/close decisions. */
+  function liveDraft(): SessionTabDraft {
+    return { composer, attachments, mode: proposal.mode }
+  }
+
+  /**
+   * Guarded close for any open tab (active or inactive). Inactive
+   * tabs guard on their stashed draft, so the live selection,
+   * composer, and attachments are never disturbed by the check.
+   */
+  function requestCloseTab(sessionId: number | null): void {
+    if (sessionId === null || creatingRef.current) {
       return
     }
-    setConfirmingClose(false)
-    if (isComposerEmpty(composer) && attachments.length === 0) {
+    const draft =
+      sessionId === state.selectedSessionId
+        ? liveDraft()
+        : (tabDrafts[sessionId] ?? emptySessionTabDraft(proposal.mode))
+    closeTabIdRef.current = sessionId
+    if (!isSessionTabDirty(draft)) {
       void performClose()
       return
     }
@@ -859,31 +1038,42 @@ export function SessionPanel({
   }
 
   function handleCloseCancel(): void {
+    closeTabIdRef.current = null
     setConfirmingClose(false)
   }
 
   async function performClose(): Promise<void> {
-    const closingId = state.selectedSessionId
+    const closingId = closeTabIdRef.current ?? state.selectedSessionId
     if (closingId === null || creatingRef.current) {
       return
     }
+    closeTabIdRef.current = null
     setConfirmingClose(false)
+    const isActive = closingId === state.selectedSessionId
+    const draft = isActive ? liveDraft() : (tabDrafts[closingId] ?? emptySessionTabDraft(proposal.mode))
     // Release uncommitted draft assets only (best effort, bounded);
     // committed attachments live server-side and are never removed.
-    const drafts = attachments
-    if (drafts.length > 0) {
-      setAttachments([])
-      await Promise.allSettled(drafts.map((draft) => removeChatAttachmentDraft(draft.id)))
+    if (draft.attachments.length > 0) {
+      if (isActive) {
+        setAttachments([])
+      }
+      await Promise.allSettled(draft.attachments.map((entry) => removeChatAttachmentDraft(entry.id)))
     }
-    setComposer('')
-    const fallback = state.sessions.find((entry) => entry.id !== closingId) ?? null
-    if (fallback !== null) {
-      dispatch({ type: 'session-selected', workspaceId, sessionId: fallback.id })
+    setTabDrafts((drafts) => discardSessionDraft(drafts, closingId))
+    const { openIds, nextActiveId } = closeSessionTab(openSessionIds, closingId, state.selectedSessionId)
+    setOpenSessionIds(openIds)
+    // A freed slot clears a stale cap notice so + can proceed calmly.
+    setTabLimitNotice(null)
+    if (!isActive) {
+      return
+    }
+    if (nextActiveId !== null) {
+      dispatch({ type: 'session-selected', workspaceId, sessionId: nextActiveId })
       return
     }
     // No remaining session in this workspace: open a fresh local New
     // session through the same guarded single-flight creation. The
-    // closed session stays in persisted history (nothing is deleted).
+    // closed session stays in persisted history (history is preserved).
     await handleNew()
   }
 
@@ -935,6 +1125,10 @@ export function SessionPanel({
     if ((isComposerEmpty(content) && attachments.length === 0) || composerByteLength(content) > COMPOSER_MAX_BYTES) {
       return
     }
+    // Ownership snapshot: the clear step must remove exactly these
+    // attachments from the session that sent them, even if the user
+    // switched tabs while the send was in flight.
+    const sentAttachmentIds = attachments.map((entry) => entry.id)
     if (proposal.mode === 'propose') {
       await handleProposeSend(sessionId, content)
       return
@@ -952,7 +1146,7 @@ export function SessionPanel({
       // Clear only the sent text: keystrokes typed during the send are
       // newer composer state and must be preserved. The reducer drops
       // the result entirely if the selection moved on meanwhile.
-      clearSentComposer(content)
+      clearSentComposer(content, sessionId, sentAttachmentIds)
       if (generateAfterSend) {
         await runGeneration(sessionId)
       }
@@ -989,12 +1183,13 @@ export function SessionPanel({
       return
     }
     const kind = eligibility.kind
+    const sentAttachmentIds = attachments.map((entry) => entry.id)
     dispatch({ type: 'send-started', workspaceId, sessionId })
     try {
       const result = await sendSessionUserMessage(messageSendPayload(sessionId, content))
       stickToBottomRef.current = true
       dispatch({ type: 'send-succeeded', workspaceId, session: result.session, message: result.message })
-      clearSentComposer(content)
+      clearSentComposer(content, sessionId, sentAttachmentIds)
     } catch (error: unknown) {
       dispatch({
         type: 'send-failed',
@@ -1096,6 +1291,52 @@ export function SessionPanel({
     }
   }
 
+  /** Mode-menu option labels (presentation; state stays in proposal). */
+  const MODE_OPTIONS: readonly { readonly mode: ProposalMode; readonly label: string }[] = [
+    { mode: 'ask', label: 'Ask' },
+    { mode: 'work', label: 'Work' },
+    { mode: 'propose', label: 'Propose change' }
+  ]
+
+  /** Menu selection: same state change as the old tabs, then back to typing. */
+  function selectProposalMode(mode: ProposalMode): void {
+    setModeMenuOpen(false)
+    handleProposalMode(mode)
+    composerRef.current?.focus()
+  }
+
+  /** Arrow-key navigation between menu items (Tab/Enter stay native). */
+  function handleModeMenuKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {
+      return
+    }
+    const menu = modeMenuRef.current
+    if (menu === null) {
+      return
+    }
+    event.preventDefault()
+    const items = Array.from(menu.querySelectorAll<HTMLButtonElement>('button[role="menuitemradio"]'))
+    if (items.length === 0) {
+      return
+    }
+    const active = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null
+    const at = active === null ? -1 : items.indexOf(active)
+    const next = event.key === 'ArrowDown' ? (at + 1) % items.length : (at - 1 + items.length) % items.length
+    items[next]?.focus()
+  }
+
+  /** Empty composer body click focuses the textarea (controls keep focus). */
+  function handleComposerBodyClick(event: ReactMouseEvent<HTMLDivElement>): void {
+    const target = event.target
+    if (!(target instanceof HTMLElement)) {
+      return
+    }
+    if (target.closest('button, textarea, a, input, [role="menu"], img') !== null) {
+      return
+    }
+    composerRef.current?.focus()
+  }
+
   /** Loads pending continuity for run-details display. Explicit and bounded. */
   async function loadSessionLooplink(sessionId: number): Promise<void> {
     looplinkDispatch({ type: 'continuity-loading', workspaceId, sessionId })
@@ -1113,11 +1354,21 @@ export function SessionPanel({
   }
   /** Loads the pending Worker approval for a session. Explicit and bounded. */
   async function loadPendingApproval(sessionId: number): Promise<void> {
+    const requestId = approvalRequestRef.current + 1
+    approvalRequestRef.current = requestId
     try {
       const found = await getPendingWorkerApproval({ workspaceId, sessionId })
+      // Ownership: a load started by tab A must not overwrite tab B's
+      // card when A resolves after the user switched tabs.
+      if (approvalRequestRef.current !== requestId || selectedSessionIdRef.current !== sessionId) {
+        return
+      }
       setPendingApproval(found)
       setApprovalError(null)
     } catch (error: unknown) {
+      if (approvalRequestRef.current !== requestId || selectedSessionIdRef.current !== sessionId) {
+        return
+      }
       setApprovalError(error instanceof Error && error.message !== '' ? error.message : 'We couldn’t load the pending approval.')
     }
   }
@@ -1225,7 +1476,11 @@ export function SessionPanel({
         void loadRecentRuntimes()
       }
     } catch (error: unknown) {
-      setApprovalError(error instanceof Error && error.message !== '' ? error.message : 'We couldn’t resolve this approval.')
+      // The decision belonged to the originating tab; its failure must
+      // not surface on another tab the user switched to meanwhile.
+      if (selectedSessionIdRef.current === sessionId) {
+        setApprovalError(error instanceof Error && error.message !== '' ? error.message : 'We couldn’t resolve this approval.')
+      }
     } finally {
       setApprovalActing(false)
     }
@@ -1235,8 +1490,14 @@ export function SessionPanel({
     if (!('kind' in outcome)) {
       return
     }
+    // Approval cards stay attached to the originating session: run and
+    // message updates are session-scoped by the reducers, but the
+    // card itself must not leak into another tab's view.
+    const stillCurrent = selectedSessionIdRef.current === sessionId
     if (outcome.kind === 'completed') {
-      setPendingApproval(null)
+      if (stillCurrent) {
+        setPendingApproval(null)
+      }
       stickToBottomRef.current = true
       workDispatch({ type: 'run-succeeded', workspaceId, sessionId, run: outcome.result.run })
       dispatch({ type: 'work-completed', workspaceId, session: outcome.result.session, message: outcome.result.message })
@@ -1245,12 +1506,16 @@ export function SessionPanel({
       return
     }
     if (outcome.kind === 'waiting_for_approval') {
-      setPendingApproval(outcome.approval)
+      if (stillCurrent) {
+        setPendingApproval(outcome.approval)
+      }
       void loadLatestWorkRun(sessionId)
       return
     }
     // Recovery handoffs from a pre-tool failure surface as safe copy.
-    setPendingApproval(null)
+    if (stillCurrent) {
+      setPendingApproval(null)
+    }
     workDispatch({
       type: 'run-failed',
       workspaceId,
@@ -1262,10 +1527,19 @@ export function SessionPanel({
   }
   /** Loads the recovery event for a target session. Explicit and bounded. */
   async function loadRecoveryForSelected(sessionId: number): Promise<void> {
+    const requestId = recoveryRequestRef.current + 1
+    recoveryRequestRef.current = requestId
     try {
       const found = await getRecoveryForTarget({ workspaceId, sessionId })
+      // Ownership: the banner belongs to the session that requested it.
+      if (recoveryRequestRef.current !== requestId || selectedSessionIdRef.current !== sessionId) {
+        return
+      }
       recoveryDispatch({ type: 'event-loaded', workspaceId, event: found })
     } catch (error: unknown) {
+      if (recoveryRequestRef.current !== requestId || selectedSessionIdRef.current !== sessionId) {
+        return
+      }
       recoveryDispatch({
         type: 'event-failed',
         workspaceId,
@@ -1281,9 +1555,15 @@ export function SessionPanel({
     const sessionId = state.selectedSessionId
     try {
       const dismissed = await dismissRecovery({ workspaceId, sessionId })
+      if (selectedSessionIdRef.current !== sessionId) {
+        return
+      }
       recoveryDispatch({ type: 'event-loaded', workspaceId, event: dismissed })
       void loadSessionLooplink(sessionId)
     } catch {
+      if (selectedSessionIdRef.current !== sessionId) {
+        return
+      }
       recoveryDispatch({ type: 'event-failed', workspaceId, message: 'We couldn’t dismiss this recovery.' })
     }
   }
@@ -1354,12 +1634,13 @@ export function SessionPanel({
     if (work.preparing) {
       return
     }
+    const sentAttachmentIds = attachments.map((entry) => entry.id)
     dispatch({ type: 'send-started', workspaceId, sessionId })
     try {
       const result = await sendSessionUserMessage(messageSendPayload(sessionId, content))
       stickToBottomRef.current = true
       dispatch({ type: 'send-succeeded', workspaceId, session: result.session, message: result.message })
-      clearSentComposer(content)
+      clearSentComposer(content, sessionId, sentAttachmentIds)
     } catch (error: unknown) {
       dispatch({
         type: 'send-failed',
@@ -1498,31 +1779,67 @@ export function SessionPanel({
     }
   }
 
-  /** Clears sent composer text, staged attachments, and context drafts. */
-  function clearSentComposer(content: string): void {
+  /** Clears exactly what a send consumed, in the session that sent it. */
+  function clearSentComposer(content: string, originSessionId: number, sentAttachmentIds: readonly string[]): void {
+    if (selectedSessionIdRef.current !== originSessionId) {
+      // The user switched tabs mid-send: the origin tab stashed the
+      // sent text and attachments when it was left, so clear exactly
+      // those from its stash. The newly active tab stays untouched.
+      setTabDrafts((drafts) => {
+        const prev = drafts[originSessionId]
+        if (prev === undefined) {
+          return drafts
+        }
+        return stashSessionDraft(drafts, originSessionId, {
+          ...prev,
+          composer: prev.composer === content ? '' : prev.composer,
+          attachments: prev.attachments.filter((entry) => !sentAttachmentIds.includes(entry.id))
+        })
+      })
+      return
+    }
     setComposer((current) => (current === content ? '' : current))
-    setAttachments([])
+    // Filter (not wipe): only the consumed attachment IDs leave, so a
+    // draft staged alongside the send is never discarded with it.
+    setAttachments((current) => current.filter((entry) => !sentAttachmentIds.includes(entry.id)))
     contextDraftsDispatch({ type: 'drafts-cleared', workspaceId })
+    composerRef.current?.focus()
   }
 
-  function handleAttach(): void {
+  async function handleAttach(): Promise<void> {
     if (state.sending || attachBusy || proposal.preparing || work.preparing) {
       return
     }
+    const originSessionId = state.selectedSessionId
     setAttachBusy(true)
     setAttachError(null)
-    chooseChatAttachments(workspaceId).then(
-      (picked) => {
-        setAttachBusy(false)
-        if (picked.length > 0) {
-          setAttachments((current) => [...current, ...picked])
-        }
-      },
-      (error: unknown) => {
-        setAttachBusy(false)
-        setAttachError(error instanceof Error && error.message !== '' ? error.message : 'We couldn’t attach those files.')
+    try {
+      const picked = await chooseChatAttachments(workspaceId)
+      if (picked.length === 0) {
+        return
       }
-    )
+      if (originSessionId !== null && selectedSessionIdRef.current === originSessionId) {
+        setAttachments((current) => [...current, ...picked])
+        composerRef.current?.focus()
+        return
+      }
+      // The picker resolved after a tab switch: the files stay owned
+      // by the originating session's stashed draft, never the newly
+      // active tab. (Null origin means no owning session; drop calmly.)
+      if (originSessionId !== null) {
+        setTabDrafts((drafts) => {
+          const prev = drafts[originSessionId] ?? emptySessionTabDraft(proposal.mode)
+          return stashSessionDraft(drafts, originSessionId, {
+            ...prev,
+            attachments: [...prev.attachments, ...picked]
+          })
+        })
+      }
+    } catch (error: unknown) {
+      setAttachError(error instanceof Error && error.message !== '' ? error.message : 'We couldn’t attach those files.')
+    } finally {
+      setAttachBusy(false)
+    }
   }
 
   /**
@@ -1692,7 +2009,6 @@ export function SessionPanel({
   const overLimit = composerByteLength(composer) > COMPOSER_MAX_BYTES
   const eligibility = proposalEligibility(contextDrafts)
   const proposeMode = proposal.mode === 'propose'
-  const workMode = proposal.mode === 'work'
   // loadingMessages gates sending: a latest page in flight must settle
   // first, otherwise its replace-on-arrive could drop a just-appended
   // message. Older-page loads only prepend, so they never clobber.
@@ -1718,6 +2034,30 @@ export function SessionPanel({
   const selectedModel = provider.selectedModel
   const selectedModelMissing =
     selectedModel !== null && !provider.models.some((entry) => entry.id === selectedModel)
+  // Empty-conversation watermark: the official wordmark shows only
+  // while the ACTIVE session truly has no conversation content yet.
+  // Draft text alone never hides it; any message, send, generation,
+  // proposal, work run, continuity, recovery, approval, or runtime
+  // content does.
+  const conversationEmpty =
+    state.messages.length === 0 &&
+    !state.loadingMessages &&
+    state.messagesError === null &&
+    !state.sending &&
+    !state.generating &&
+    state.generationError === null &&
+    !proposal.preparing &&
+    proposal.error === null &&
+    proposal.result === null &&
+    proposal.changeSet === null &&
+    !work.preparing &&
+    work.error === null &&
+    work.run === null &&
+    looplink.looplink === null &&
+    recovery.event === null &&
+    pendingApproval === null &&
+    runtime.active === null &&
+    runtime.history.length === 0
 
   // Mirror session chrome state to the shell tab strip. The reducer
   // above stays canonical; HomePage only displays the snapshot and
@@ -1732,6 +2072,7 @@ export function SessionPanel({
         title: selectedSession?.title ?? 'New session',
         sessions: state.sessions.map((entry) => ({ id: entry.id, title: entry.title })),
         selectedSessionId: state.selectedSessionId,
+        openSessionIds,
         sessionsLoading: state.loadingSessions,
         looplinkActing: looplink.acting,
         sendBusy: state.sending,
@@ -1741,7 +2082,8 @@ export function SessionPanel({
         newSession: () => void handleNew(),
         selectSession: (sessionId: number) => handleSelect(sessionId),
         continueLooplink: () => void handleContinueWithLooplink(),
-        closeSession: () => handleCloseRequest()
+        closeSession: () => handleCloseRequest(),
+        closeSessionTab: (sessionId: number) => requestCloseTab(sessionId)
       }
     )
   }, [
@@ -1749,6 +2091,7 @@ export function SessionPanel({
     selectedSession?.title,
     state.sessions,
     state.selectedSessionId,
+    openSessionIds,
     state.loadingSessions,
     state.sending,
     creatingSession,
@@ -1768,6 +2111,11 @@ export function SessionPanel({
       <p className="session__notice" role="status">
         {aiReady ? `OpenAI · ${provider.selectedModel ?? ''}` : 'Local session — AI provider not connected yet.'}
       </p>
+      {tabLimitNotice !== null && (
+        <p className="session__notice session__notice--limit" role="status">
+          {tabLimitNotice}
+        </p>
+      )}
       {confirmingClose && (
         <div className="session__confirm" role="alertdialog" aria-label="Close this session?">
           <p className="session__confirm-title">Close this session?</p>
@@ -1844,6 +2192,15 @@ export function SessionPanel({
             </p>
           )}
           <div className="session__messages" ref={messagesScrollRef} aria-label="Messages" aria-live="off">
+            {conversationEmpty && (
+              <img
+                className="session__watermark"
+                src={STARK_WORDMARK_URL}
+                alt=""
+                aria-hidden="true"
+                draggable={false}
+              />
+            )}
             {state.hasMore && (
               <button
                 className="explorer__secondary"
@@ -2360,7 +2717,7 @@ export function SessionPanel({
               )}
             </div>
           )}
-          <div className={`session__composer session__composer--${proposal.mode}`}>
+          <div className={`session__composer session__composer--${proposal.mode}`} onClick={handleComposerBodyClick}>
             {(contextDrafts.length > 0 || contextDraftError !== null) && (
               <div className="session__context-chips" aria-label="Attached context summary">
                 <button
@@ -2456,34 +2813,92 @@ export function SessionPanel({
                 This message is too large.
               </p>
             )}
-            <div className="session__composer-row" role="group" aria-label="Composer mode">
-              <button
-                className="explorer__secondary session__mode session__mode--ask"
-                type="button"
-                onClick={() => handleProposalMode('ask')}
-                aria-pressed={proposal.mode === 'ask'}
-                disabled={proposal.preparing || work.preparing}
-              >
-                Ask
-              </button>
-              <button
-                className="explorer__secondary session__mode session__mode--work"
-                type="button"
-                onClick={() => handleProposalMode('work')}
-                aria-pressed={proposal.mode === 'work'}
-                disabled={proposal.preparing || work.preparing}
-              >
-                Work
-              </button>
-              <button
-                className="explorer__secondary session__mode session__mode--propose"
-                type="button"
-                onClick={() => handleProposalMode('propose')}
-                aria-pressed={proposal.mode === 'propose'}
-                disabled={proposal.preparing || work.preparing}
-              >
-                Propose change
-              </button>
+            <textarea
+              ref={composerRef}
+              className="session__input"
+              value={composer}
+              onChange={(event) => setComposer(event.target.value)}
+              onKeyDown={handleComposerKeyDown}
+              placeholder="Message STARK…"
+              title="Enter to send, Shift+Enter for a new line"
+              aria-label="Message composer"
+              rows={1}
+              disabled={state.sending || proposal.preparing || work.preparing}
+            />
+            <div className="session__rail">
+              <div className="session__rail-group">
+                <button
+                  className="session__attach session__iconbtn"
+                  type="button"
+                  onClick={() => void handleAttach()}
+                  disabled={state.sending || attachBusy || proposal.preparing || work.preparing}
+                  aria-label="Attach files"
+                  title="Attach files"
+                >
+                  <StarkIcon name="plus" size={16} />
+                </button>
+                <div className="session__moderail" role="group" aria-label="Composer mode">
+                  <button
+                    ref={modeButtonRef}
+                    className={`session__modepill session__modepill--${proposal.mode}`}
+                    type="button"
+                    onClick={() => setModeMenuOpen((open) => !open)}
+                    disabled={proposal.preparing || work.preparing}
+                    aria-haspopup="menu"
+                    aria-expanded={modeMenuOpen}
+                    aria-label="Choose message mode"
+                    title="Choose message mode"
+                  >
+                    <span className="session__modepill-label">
+                      {MODE_OPTIONS.find((option) => option.mode === proposal.mode)?.label ?? 'Ask'}
+                    </span>
+                    <StarkIcon name="chevron-down" size={12} />
+                  </button>
+                  {modeMenuOpen && (
+                    <div
+                      ref={modeMenuRef}
+                      className="session__modemenu"
+                      role="menu"
+                      aria-label="Choose message mode"
+                      onKeyDown={handleModeMenuKeyDown}
+                    >
+                      {MODE_OPTIONS.map((option) => (
+                        <button
+                          key={option.mode}
+                          className={`session__modemenu-item session__modemenu-item--${option.mode}${
+                            proposal.mode === option.mode ? ' session__modemenu-item--checked' : ''
+                          }`}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={proposal.mode === option.mode}
+                          onClick={() => selectProposalMode(option.mode)}
+                        >
+                          <span className="session__modemenu-dot" aria-hidden="true" />
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="session__rail-group">
+                <VoiceInputButton
+                  key={`voice-${String(state.selectedSessionId ?? 'none')}`}
+                  disabled={state.sending || attachBusy || proposal.preparing || work.preparing}
+                  sessionKey={String(state.selectedSessionId ?? 'none')}
+                  onTranscribed={handleVoiceTranscribed}
+                />
+                <button
+                  className="explorer__primary session__send session__send--fab"
+                  type="button"
+                  onClick={() => void handleSend()}
+                  disabled={sendDisabled}
+                  aria-label="Send message"
+                  title="Send message"
+                >
+                  <StarkIcon name="arrow-up" size={18} />
+                </button>
+              </div>
             </div>
             {proposeMode && !eligibility.eligible && (
               <p className="session__hint" role="status">
@@ -2542,52 +2957,6 @@ export function SessionPanel({
                 </button>
               </div>
             )}
-            <textarea
-              ref={composerRef}
-              className="session__input"
-              value={composer}
-              onChange={(event) => setComposer(event.target.value)}
-              onKeyDown={handleComposerKeyDown}
-              placeholder="Message STARK… (Enter to send, Shift+Enter for a new line)"
-              aria-label="Message composer"
-              rows={3}
-              disabled={state.sending || proposal.preparing || work.preparing}
-            />
-            <div className="session__composer-row">
-              <p className="session__hint">
-                {proposeMode
-                  ? 'Propose change creates pending transactions — one file, or a grouped change set. A human must review and accept each file.'
-                  : workMode
-                    ? `Work runs a bounded Brain orchestration with at most one Worker step. Heart: ${heart.config === null ? 'not configured' : heart.config.workerMode === 'fixed' ? 'Fixed' : 'Auto-Swap'}`
-                    : aiReady
-                      ? 'Stored locally. STARK will reply.'
-                      : 'Stored locally. No AI reply yet.'}
-              </p>
-              <button
-                className="explorer__secondary session__attach"
-                type="button"
-                onClick={handleAttach}
-                disabled={state.sending || attachBusy || proposal.preparing || work.preparing}
-                aria-label="Attach files"
-                title="Attach files"
-              >
-                <StarkIcon name="paperclip" size={15} />
-              </button>
-              <VoiceInputButton
-                key={`voice-${String(state.selectedSessionId ?? 'none')}`}
-                disabled={state.sending || attachBusy || proposal.preparing || work.preparing}
-                sessionKey={String(state.selectedSessionId ?? 'none')}
-                onTranscribed={handleVoiceTranscribed}
-              />
-              <button
-                className="explorer__primary session__send"
-                type="button"
-                onClick={() => void handleSend()}
-                disabled={sendDisabled}
-              >
-                {state.sending ? 'Sending…' : proposal.preparing || work.preparing ? 'Preparing…' : 'Send'}
-              </button>
-            </div>
           </div>
         </>
       )}

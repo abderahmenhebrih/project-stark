@@ -293,21 +293,21 @@ export function VoiceInputButton({ disabled, sessionKey, onTranscribed }: VoiceI
 
   if (phase === 'recording') {
     return (
-      <span className="session__voice" role="status" aria-label={`Recording voice input, ${formatVoiceElapsed(elapsedMs)} elapsed`}>
+      <span className="session__voice session__voice--recording" role="status" aria-label={`Recording voice input, ${formatVoiceElapsed(elapsedMs)} elapsed`}>
         <button
-          className="explorer__secondary session__attach"
+          className="session__iconbtn session__iconbtn--recording"
           type="button"
           onClick={() => finishRecording(false)}
           aria-label="Stop recording"
           title="Stop recording"
         >
-          <StarkIcon name="mic" size={15} />
+          <StarkIcon name="mic" size={16} />
         </button>
         <span className="session__voice-elapsed" aria-hidden="true">
           {formatVoiceElapsed(elapsedMs)}
         </span>
         <button
-          className="explorer__secondary session__attach"
+          className="session__iconbtn session__iconbtn--cancel"
           type="button"
           onClick={() => finishRecording(true)}
           aria-label="Cancel recording"
@@ -322,14 +322,14 @@ export function VoiceInputButton({ disabled, sessionKey, onTranscribed }: VoiceI
   return (
     <span className="session__voice">
       <button
-        className="explorer__secondary session__attach"
+        className="session__iconbtn"
         type="button"
         onClick={startRecording}
         disabled={disabled || phase === 'transcribing'}
         aria-label="Start voice input"
         title="Start voice input"
       >
-        <StarkIcon name="mic" size={15} />
+        <StarkIcon name="mic" size={16} />
       </button>
       {phase === 'transcribing' && (
         <span className="session__hint" role="status">

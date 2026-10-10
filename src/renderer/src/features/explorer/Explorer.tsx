@@ -378,7 +378,18 @@ export function Explorer({
   // must not resurrect an editor for it.
   const previewPathRef = useRef<string | null>(null)
   const docSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const workspaceTriggeredRef = useRef(false)
+  // Extension document sync (unmount safety): a debounced push for
+  // a closed file must never fire after teardown.
+  useEffect(
+    () => () => {
+      if (docSyncTimerRef.current !== null) {
+        clearTimeout(docSyncTimerRef.current)
+        docSyncTimerRef.current = null
+      }
+    },
+    []
+  )
+  const workspaceTriggeredRef = useRef<number | null>(null)
   // Latest format handler for Command Palette requests (the palette
   // lives at the app root; the open file lives here).
   const formatRequestRef = useRef<() => void>(() => {})
@@ -528,12 +539,14 @@ export function Explorer({
 
   // Workspace trigger (once per workspace): main lists the root and
   // considers workspaceContains candidates; untrusted ones surface
-  // as trust requests instead of auto-running.
+  // as trust requests instead of auto-running. Tracked by workspace
+  // id (not a plain boolean) so every workspace gets exactly one
+  // evaluation — a sticky flag would silently skip the second project.
   useEffect(() => {
-    if (workspaceTriggeredRef.current) {
+    if (workspaceTriggeredRef.current === workspaceId) {
       return
     }
-    workspaceTriggeredRef.current = true
+    workspaceTriggeredRef.current = workspaceId
     fireExtensionTrigger({ kind: 'workspace' }).then(
       (outcome) => {
         for (const id of outcome.needsTrust) {
@@ -893,6 +906,11 @@ export function Explorer({
       clearTimeout(docSyncTimerRef.current)
     }
     docSyncTimerRef.current = setTimeout(() => {
+      // Stale push guard: the user may have switched files during the
+      // debounce — the host must only ever see the currently open doc.
+      if (openDocUriRef.current !== uri) {
+        return
+      }
       openDocVersionRef.current += 1
       pushExtensionDocumentEvent({ kind: 'changed', uri, text: value, version: openDocVersionRef.current }).then(
         () => refreshFileDiagnostics(uri),
@@ -1046,6 +1064,15 @@ export function Explorer({
           expectedRevision: result.revision,
           proposedContent: result.afterText
         })
+        // Foreground guard: formatting resolved after the user moved
+        // to another file — the transaction stays valid and reviewable
+        // from history, but auto-opening review for a background file
+        // would yank the pane out from under the current file.
+        if (previewPathRef.current !== relativePath) {
+          setFormatNotice(`Formatted ${relativePath}. Reopen it to review the change.`)
+          void refreshHistory()
+          return
+        }
         changesDispatch({ type: 'review-opened', transaction })
         secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
         void refreshHistory()
@@ -1616,7 +1643,7 @@ export function Explorer({
         <div
           className="session-frame"
           style={
-            secondaryUi.splitPct !== null
+            secondaryOpen && secondaryUi.splitPct !== null
               ? { flexGrow: 0, flexBasis: `${secondaryUi.splitPct}%` }
               : undefined
           }
@@ -1649,7 +1676,7 @@ export function Explorer({
             onClosePane={handleCloseSecondaryPane}
             terminalOpen={terminalOpen}
             style={
-              secondaryUi.splitPct !== null
+              secondaryOpen && secondaryUi.splitPct !== null
                 ? { flexGrow: 0, flexBasis: `${100 - secondaryUi.splitPct}%` }
                 : undefined
             }

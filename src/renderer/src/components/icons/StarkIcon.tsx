@@ -15,6 +15,7 @@ export type StarkIconName =
   | 'close'
   | 'chevron-down'
   | 'chevron-right'
+  | 'arrow-up'
   | 'send'
   | 'refresh'
   | 'mic'
@@ -113,6 +114,12 @@ const PATHS: Record<StarkIconName, ReactElement> = {
   'chevron-right': (
     <>
       <path d="M6.5 4.5l3.5 3.5-3.5 3.5" />
+    </>
+  ),
+  'arrow-up': (
+    <>
+      <line x1="8" y1="13" x2="8" y2="3.5" />
+      <path d="M4.5 7L8 3.5 11.5 7" />
     </>
   ),
   send: (

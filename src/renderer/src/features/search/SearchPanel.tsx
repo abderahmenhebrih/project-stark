@@ -31,6 +31,21 @@ interface CachedSearch {
 }
 
 const liveSearchCache = new Map<number, CachedSearch>()
+/** Hard bound: one entry per workspace, oldest evicted past the cap. */
+const LIVE_SEARCH_CACHE_MAX = 20
+
+/** Stores one workspace entry with oldest-first eviction past the cap. */
+function cacheLiveSearch(workspaceId: number, entry: CachedSearch): void {
+  liveSearchCache.delete(workspaceId)
+  liveSearchCache.set(workspaceId, entry)
+  while (liveSearchCache.size > LIVE_SEARCH_CACHE_MAX) {
+    const oldest = liveSearchCache.keys().next()
+    if (oldest.done === true) {
+      break
+    }
+    liveSearchCache.delete(oldest.value)
+  }
+}
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error && error.message !== '' ? error.message : 'We couldn’t search this project.'
@@ -137,7 +152,7 @@ export function SearchPanel({ workspaceId, onSelectResult, onAttachResult }: Sea
 
   useEffect(() => {
     if (state.submitted && !state.loading && state.error === null) {
-      liveSearchCache.set(workspaceId, {
+      cacheLiveSearch(workspaceId, {
         input,
         matches: state.matches,
         filesMatched: state.filesMatched,

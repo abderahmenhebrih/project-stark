@@ -333,6 +333,18 @@ export function ExtensionOverlays(): ReactElement | null {
   const [prompts, setPrompts] = useState<readonly ExtensionPrompt[]>([])
   const [trustRequests, setTrustRequests] = useState<readonly TrustRequest[]>([])
   const [toasts, setToasts] = useState<readonly Toast[]>([])
+  // Owned toast timers: cleared on unmount so a late dismissal never
+  // sets state on an unmounted tree.
+  const toastTimersRef = useRef<readonly ReturnType<typeof setTimeout>[]>([])
+  useEffect(
+    () => () => {
+      for (const timer of toastTimersRef.current) {
+        clearTimeout(timer)
+      }
+      toastTimersRef.current = []
+    },
+    []
+  )
 
   const refreshPrompts = useCallback((): void => {
     listExtensionPrompts().then(
@@ -400,9 +412,10 @@ export function ExtensionOverlays(): ReactElement | null {
         }
         const id = toastId++
         setToasts((current) => [...current, { id, severity, message: message.slice(0, 512) }].slice(-MAX_TOASTS))
-        setTimeout(() => {
+        const timer = setTimeout(() => {
           setToasts((current) => current.filter((toast) => toast.id !== id))
         }, TOAST_DISMISS_MS)
+        toastTimersRef.current = [...toastTimersRef.current, timer]
       }
     })
     return unsubscribe

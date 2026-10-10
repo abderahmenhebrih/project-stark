@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { loadMonaco } from '../editor/editor-setup'
-import { STARK_EDITOR_THEME_NAME, registerStarkTheme } from '../editor/editor-theme'
+import { STARK_EDITOR_THEME_NAME, registerStarkTheme, starkEditorConstructionOptions } from '../editor/editor-theme'
 import './git.css'
 
 interface GitDiffViewerProps {
@@ -45,6 +45,7 @@ export function GitDiffViewer({ relativePath, target, patch }: GitDiffViewerProp
             model: created,
             readOnly: true,
             theme: STARK_EDITOR_THEME_NAME,
+            ...starkEditorConstructionOptions(),
             fontFamily: "'JetBrains Mono','Cascadia Code','Fira Code',Consolas,monospace",
             fontSize: 13,
             lineNumbers: 'on',

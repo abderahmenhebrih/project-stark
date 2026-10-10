@@ -66,8 +66,27 @@ export function ensureMonacoEnvironment(): void {
  * first editor mount only) after the worker environment is
  * configured. The deep `editor.api` entry carries the complete
  * typed surface; the package root re-exports only a subset.
+ *
+ * Language grammars are NOT part of `editor.api`: without the
+ * side-effect imports below, no Monarch tokenizer is ever
+ * registered and every model renders unhighlighted (all default
+ * foreground). The basic-languages contribution registers all
+ * bundled grammars with lazy per-language loaders; the JSON
+ * language registers through its own feature contribution (it has
+ * no basic-languages definition — this also powers the
+ * extension-contributed JSON-schema diagnostics). Tokenization
+ * starts on first use with no LSP and no language server. A
+ * grammar-load failure degrades to unhighlighted text, never to a
+ * missing editor — but the build artifact test pins their presence.
  */
 export async function loadMonaco(): Promise<Monaco> {
   ensureMonacoEnvironment()
-  return import('monaco-editor/editor/editor.api')
+  const monaco = await import('monaco-editor/editor/editor.api')
+  try {
+    await import('monaco-editor/basic-languages/monaco.contribution')
+    await import('monaco-editor/language/json/monaco.contribution')
+  } catch {
+    // Grammars stay unregistered; the editor still mounts.
+  }
+  return monaco
 }

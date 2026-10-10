@@ -93,6 +93,7 @@
 }
 
 .session__messages {
+  position: relative;
   flex: 1;
   min-height: 0;
   min-width: 0;
@@ -101,6 +102,29 @@
   flex-direction: column;
   gap: var(--stark-space-sm);
   padding: var(--stark-space-md);
+}
+
+/* Empty-conversation watermark: the official STARK wordmark rendered
+   as an embossed background mark behind the message area only (never
+   the editor pane, never above the composer). Decorative, inert, and
+   faint enough to stay out of the composer's way. */
+.session__watermark {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: min(100% - 64px, 560px);
+  max-height: 38%;
+  object-fit: contain;
+  opacity: 0.05;
+  filter: grayscale(1);
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+}
+
+.session__messages > *:not(.session__watermark) {
+  position: relative;
+  z-index: 1;
 }
 
 .session__list {
@@ -246,56 +270,60 @@
   color: var(--stark-text-dim);
 }
 
-/* Composer dock: one substantial rounded surface, centered measure. */
+/* Composer dock: one floating rounded surface, generous centered measure. */
 .session__composer {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: var(--stark-space-xs);
   min-width: 0;
-  width: min(800px, calc(100% - 16px));
+  width: min(980px, calc(100% - 32px));
   margin: 0 auto var(--stark-space-sm);
-  padding: var(--stark-space-sm);
+  padding: 14px 14px 10px;
   border: 1px solid var(--stark-border);
-  border-radius: 12px;
-  background: var(--stark-elevated);
+  border-radius: 26px;
+  background: var(--stark-surface);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
 }
 
 @media (min-width: 1700px) {
   .session__composer {
-    width: min(900px, calc(100% - 16px));
+    width: min(1020px, calc(100% - 32px));
   }
 }
 
 .session__composer:focus-within {
   border-color: var(--stark-lime);
-  box-shadow: 0 0 0 1px var(--stark-lime-dim);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--stark-lime-dim);
 }
 
 .session__composer--work:focus-within {
   border-color: var(--stark-magenta);
-  box-shadow: 0 0 0 1px var(--stark-magenta-dim);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--stark-magenta-dim);
 }
 
 .session__composer--propose:focus-within {
   border-color: var(--stark-text-dim);
-  box-shadow: none;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
 }
 
+/* Composer text area: the visual center. Auto-grows via inline height
+   (52px floor, 240px cap set in SessionPanel), then scrolls. */
 .session__input {
   width: 100%;
-  min-height: 80px;
-  max-height: 200px;
-  padding: 2px;
+  min-height: 52px;
+  max-height: 240px;
+  padding: 4px 6px;
+  overflow-y: auto;
   font: inherit;
   font-family: var(--stark-font-sans);
-  font-size: 16px;
-  line-height: 1.5;
+  font-size: 15px;
+  line-height: 1.55;
   color: var(--stark-text);
   background: transparent;
   border: none;
   border-radius: 0;
-  resize: vertical;
+  resize: none;
 }
 
 .session__input:focus-visible {
@@ -307,7 +335,8 @@
   font-size: 13px;
 }
 
-/* Mode selector: compact segmented controls integrated in the dock. */
+/* Mode selector: compact segmented controls integrated in the dock.
+   Retained for non-composer surfaces reusing the dock vocabulary. */
 .session__composer .session__mode {
   min-height: 26px;
   padding: 3px 10px;
@@ -332,6 +361,186 @@
   border-color: var(--stark-text-dim);
 }
 
+/* Floating-composer bottom rail: one clean row, controls at the edges. */
+.session__rail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--stark-space-xs);
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.session__rail-group {
+  display: flex;
+  align-items: center;
+  gap: var(--stark-space-xs);
+  min-width: 0;
+}
+
+/* Circular icon controls (+ attach, microphone): quiet resting surface. */
+.session__iconbtn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  color: var(--stark-text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.session__iconbtn:hover:not(:disabled) {
+  color: var(--stark-text);
+  background: var(--stark-elevated);
+}
+
+.session__iconbtn:disabled {
+  color: var(--stark-text-dim);
+  opacity: 0.45;
+  cursor: default;
+}
+
+.session__iconbtn:focus-visible {
+  outline: 2px solid var(--stark-lime);
+  outline-offset: 2px;
+}
+
+/* Mode pill: one compact control replacing the permanent tab row. */
+.session__moderail {
+  position: relative;
+  flex: 0 1 auto;
+  display: flex;
+  min-width: 0;
+}
+
+.session__modepill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 168px;
+  min-height: 34px;
+  padding: 4px 6px 4px 12px;
+  font-family: var(--stark-font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--stark-text-dim);
+  background: var(--stark-elevated);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-pill);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.session__modepill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session__modepill--ask {
+  color: var(--stark-lime);
+  border-color: var(--stark-lime);
+  background: var(--stark-lime-dim);
+}
+
+.session__modepill--work {
+  color: var(--stark-magenta);
+  border-color: var(--stark-magenta);
+  background: var(--stark-magenta-dim);
+}
+
+.session__modepill--propose {
+  color: var(--stark-text);
+  border-color: var(--stark-text-dim);
+}
+
+.session__modepill:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.session__modepill:focus-visible {
+  outline: 2px solid var(--stark-lime);
+  outline-offset: 2px;
+}
+
+/* Mode menu: small transient list opening above the pill. */
+.session__modemenu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 168px;
+  padding: 6px;
+  background: var(--stark-elevated);
+  border: 1px solid var(--stark-border);
+  border-radius: 14px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+
+.session__modemenu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 12px 4px 8px;
+  font-family: var(--stark-font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--stark-text-dim);
+  background: transparent;
+  border: none;
+  border-radius: 9px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.session__modemenu-item:hover {
+  color: var(--stark-text);
+  background: var(--stark-bg);
+}
+
+.session__modemenu-item:focus-visible {
+  outline: 2px solid var(--stark-lime);
+  outline-offset: -2px;
+}
+
+.session__modemenu-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.session__modemenu-item--checked .session__modemenu-dot {
+  background: currentColor;
+}
+
+.session__modemenu-item--ask.session__modemenu-item--checked {
+  color: var(--stark-lime);
+}
+
+.session__modemenu-item--work.session__modemenu-item--checked {
+  color: var(--stark-magenta);
+}
+
+.session__modemenu-item--propose.session__modemenu-item--checked {
+  color: var(--stark-text);
+}
+
 .session__send {
   min-height: 34px;
   padding: 8px 18px;
@@ -346,6 +555,24 @@
   color: var(--stark-text-dim);
   border-color: var(--stark-border);
   opacity: 1;
+}
+
+/* Circular send control: lime when armed, muted when idle. */
+.session__send--fab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.session__send--fab:focus-visible {
+  outline: 2px solid var(--stark-lime);
+  outline-offset: 2px;
 }
 
 .session__composer-row {
@@ -483,11 +710,13 @@
   min-width: 34px;
 }
 
-/* Voice input control (Step 4): inline with the attach/send buttons. */
+/* Voice input control: compact icon in the composer rail. Recording
+   reads magenta with a restrained pulse; logic untouched. */
 .session__voice {
   display: inline-flex;
   align-items: center;
-  gap: var(--stark-space-sm);
+  gap: var(--stark-space-xs);
+  min-width: 0;
 }
 
 .session__voice-elapsed {
@@ -495,6 +724,48 @@
   color: var(--stark-text-dim);
   font-variant-numeric: tabular-nums;
   min-width: 34px;
+}
+
+.session__voice--recording .session__voice-elapsed {
+  color: var(--stark-magenta);
+}
+
+.session__iconbtn--recording {
+  color: var(--stark-magenta);
+  border-color: var(--stark-magenta);
+  background: var(--stark-magenta-dim);
+  animation: session-voice-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes session-voice-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 46, 166, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(255, 46, 166, 0);
+  }
+}
+
+/* Narrow widths: rail stays one row, pill truncates, previews wrap. */
+@media (max-width: 700px) {
+  .session__composer {
+    width: calc(100% - 16px);
+    border-radius: 22px;
+    padding: 12px 12px 8px;
+  }
+
+  .session__rail {
+    flex-wrap: nowrap;
+  }
+
+  .session__modepill {
+    max-width: 120px;
+  }
+
+  .session__voice-elapsed {
+    min-width: 0;
+  }
 }
 
 /* Generated-image gallery (Step 5): the existing attachment cards

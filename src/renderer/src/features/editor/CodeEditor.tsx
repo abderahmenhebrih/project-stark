@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactElement } from 'react'
 import type { editor } from 'monaco-editor/editor/editor.api'
 import type { EditorFocus } from './editor-focus'
 import type { EditorEol } from './editor-document'
-import { STARK_EDITOR_THEME_NAME, registerStarkTheme } from './editor-theme'
+import { STARK_EDITOR_THEME_NAME, registerStarkTheme, starkEditorConstructionOptions } from './editor-theme'
 import { loadMonaco, type Monaco } from './editor-setup'
 import './editor.css'
 
@@ -178,11 +178,11 @@ export function CodeEditor({
             model,
             readOnly: mountProps.readOnly,
             theme: STARK_EDITOR_THEME_NAME,
+            ...starkEditorConstructionOptions(),
             fontFamily: "'JetBrains Mono','Cascadia Code','Fira Code',Consolas,monospace",
             fontSize: 13,
             lineNumbers: 'on',
             minimap: { enabled: false },
-            matchBrackets: 'always',
             automaticLayout: true,
             scrollBeyondLastLine: false,
             renderLineHighlight: 'all',

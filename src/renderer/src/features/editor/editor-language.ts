@@ -44,6 +44,36 @@ const BASENAME_LANGUAGES: Readonly<Record<string, string>> = {
   dockerfile: 'dockerfile'
 }
 
+/**
+ * Monaco-bundled language ids: the grammars registered by
+ * `monaco-editor/basic-languages/monaco.contribution` (which
+ * `loadMonaco` imports), plus `json` which registers through its own
+ * language-feature contribution (`monaco-editor/language/json/
+ * monaco.contribution` — there is no basic-languages JSON
+ * definition). Extension-contributed overrides win only for ids in
+ * this set: an unknown id would create a model Monaco cannot
+ * tokenize, silently rendering the file unhighlighted. Kept in sync
+ * with the installed Monaco package by editor-language.test.ts
+ * (strict both-directions check), so this is a guard set — not a
+ * second mapping system.
+ */
+export const KNOWN_MONACO_LANGUAGE_IDS: ReadonlySet<string> = new Set([
+  'abap', 'apex', 'azcli', 'bat', 'bicep', 'cameligo', 'clojure',
+  'coffee', 'cpp', 'csharp', 'csp', 'css', 'cypher', 'dart',
+  'dockerfile', 'ecl', 'elixir', 'flow9', 'fsharp', 'freemarker2',
+  'go', 'graphql', 'handlebars', 'hcl', 'html', 'ini', 'java',
+  'javascript', 'julia', 'kotlin', 'less', 'lexon', 'lua', 'liquid',
+  'm3', 'markdown', 'mdx', 'mips', 'msdax', 'mysql', 'objective-c',
+  'pascal', 'pascaligo', 'perl', 'pgsql', 'php', 'pla', 'postiats',
+  'powerquery', 'powershell', 'protobuf', 'pug', 'python', 'qsharp',
+  'r', 'razor', 'redis', 'redshift', 'restructuredtext', 'ruby',
+  'rust', 'sb', 'scala', 'scheme', 'scss', 'shell', 'solidity',
+  'sophia', 'sparql', 'sql', 'st', 'swift', 'systemverilog', 'tcl',
+  'twig', 'typescript', 'typespec', 'vb', 'wgsl', 'xml', 'yaml',
+  // Registered by the JSON language-feature contribution (see above).
+  'json'
+])
+
 /** Monaco language id for a workspace-relative path, or 'plaintext'. */
 export function detectEditorLanguage(relativePath: string): string {
   return detectEditorLanguageWithOverrides(relativePath, null)
@@ -73,8 +103,15 @@ export function detectEditorLanguageWithOverrides(
   const extension = basename.slice(dot + 1)
   if (overrides !== null) {
     const override = overrides[extension]
-    if (typeof override === 'string' && override !== '' && /^[A-Za-z0-9_-]+$/.test(override)) {
-      return override
+    // Overrides win only for ids Monaco actually bundles: anything
+    // else would build an untokenizable model (all-default
+    // foreground) for a known file type. Unknown ids fall through to
+    // the built-in mapping below.
+    if (typeof override === 'string' && override !== '') {
+      const candidate = override.toLowerCase()
+      if (KNOWN_MONACO_LANGUAGE_IDS.has(candidate)) {
+        return candidate
+      }
     }
   }
   return EXTENSION_LANGUAGES[extension] ?? 'plaintext'

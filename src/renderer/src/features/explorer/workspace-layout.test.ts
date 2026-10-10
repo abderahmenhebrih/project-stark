@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
@@ -168,5 +168,155 @@ describe('stage 31 workbench layout', () => {
     assert.ok(workspace.includes('workspace__recent-list'), 'welcome surface must keep its recent list')
     const drawer = readRenderer('layouts/WorkspaceToolsDrawer.tsx')
     assert.ok(!drawer.includes('<WorkspaceSection'), 'drawer must use the compact title, not a project card')
+  })
+})
+
+describe('secondary close returns the session to full width', () => {
+  it('session and secondary split styles apply only while the secondary pane is open', () => {
+    const source = readRenderer('features/explorer/Explorer.tsx')
+    // Both inline split styles (session flexBasis + secondary complement)
+    // must be gated on secondaryOpen — never on the stored ratio alone.
+    let from = 0
+    let gated = 0
+    while (true) {
+      const at = source.indexOf('splitPct !== null', from)
+      if (at < 0) {
+        break
+      }
+      gated += 1
+      assert.ok(
+        source.slice(Math.max(0, at - 40), at).includes('secondaryOpen &&'),
+        'every split style must be gated on secondaryOpen so closing clears it'
+      )
+      from = at + 1
+    }
+    assert.equal(gated, 2, 'exactly the session and secondary split styles must exist')
+    assert.ok(source.includes('secondaryOpen && secondaryUi.splitPct !== null'), 'gate must read secondaryOpen first')
+  })
+
+  it('session falls back to full-width single-pane CSS when closed', () => {
+    const source = readRenderer('features/explorer/Explorer.tsx')
+    assert.ok(source.includes('className="session-frame"'), 'session frame must exist')
+    // Ungated fallback: style resolves to undefined with no width/basis.
+    const frameAt = source.indexOf('className="session-frame"')
+    const frameSlice = source.slice(frameAt, frameAt + 600)
+    assert.ok(frameSlice.includes(': undefined'), 'closed session must drop inline sizing entirely')
+    assert.ok(!frameSlice.includes('width:'), 'closed session must not pin any width')
+    const css = readRenderer('features/explorer/Explorer.css')
+    const onlyChild = css.match(/\.workspace__session > \.session-frame:only-child\s*\{[^}]*\}/)
+    assert.ok(onlyChild !== null, 'only-child single-pane rule must exist')
+    assert.ok(onlyChild[0].includes('flex: 1 1 100%'), 'lone session must flex to the full row')
+    assert.ok(!onlyChild[0].includes('max-width'), 'lone session must carry no width cap')
+  })
+
+  it('secondary pane unmounts on close and reserves zero layout width', () => {
+    const source = readRenderer('features/explorer/Explorer.tsx')
+    const paneAt = source.indexOf('<WorkspaceSecondaryPane')
+    assert.ok(paneAt >= 0, 'secondary pane must exist')
+    const guardStart = source.lastIndexOf('{secondaryOpen && (', paneAt)
+    assert.ok(guardStart >= 0 && guardStart < paneAt, 'secondary pane must render only when open (unmount, never hide)')
+    const pane = readRenderer('features/workspace/WorkspaceSecondaryPane.tsx')
+    assert.ok(!pane.includes('visibility'), 'pane must not hide via visibility')
+    assert.ok(!pane.includes('opacity'), 'pane must not hide via opacity')
+    assert.ok(!pane.includes('display: none') && !pane.includes("display: 'none'"), 'pane must not hide via display')
+  })
+
+  it('splitter unmounts with the secondary pane: no gap, no strip, no leak', () => {
+    const source = readRenderer('features/explorer/Explorer.tsx')
+    const resizeAt = source.indexOf('workspace__resize')
+    assert.ok(resizeAt >= 0, 'divider must exist')
+    const guardStart = source.lastIndexOf('{secondaryOpen && (', resizeAt)
+    assert.ok(guardStart >= 0 && guardStart < resizeAt, 'divider must unmount with the secondary pane')
+    assert.ok(!source.includes("window.addEventListener('pointermove'"), 'drag must use element handlers, no window listeners')
+    assert.ok(!source.includes("window.addEventListener('pointerup'"), 'drag end must use element handlers, no window listeners')
+    assert.ok(source.includes('draggingRef.current = false'), 'drag state must reset on release')
+    assert.ok(!source.includes('setInterval'), 'split must use no timers')
+  })
+
+  it('stored split ratio survives close and restores on reopen', () => {
+    const source = readRenderer('features/explorer/Explorer.tsx')
+    // Close path clears content (preview/editor/review/context) but must
+    // never wipe the stored ratio.
+    const closeAt = source.indexOf('function handleCloseSecondaryPane')
+    assert.ok(closeAt >= 0, 'close handler must exist')
+    const resizeAt = source.indexOf('function handleResizeStart', closeAt)
+    const closeBody = source.slice(closeAt, resizeAt)
+    assert.ok(!closeBody.includes('set-split'), 'closing must preserve the stored split ratio')
+    assert.ok(!closeBody.includes('splitPct'), 'closing must not touch split state at all')
+    assert.ok(closeBody.includes('confirmDiscardUnsavedDraft'), 'unsaved guard must stay on the close path')
+    // Reopen paths only switch tabs; the reducer spread keeps splitPct.
+    assert.ok(source.includes("return state.tab === action.tab ? state : { ...state, tab: action.tab }"), 'open-tab must preserve the stored ratio')
+    // The only ratio reset is the workspace-change reset (new workspace).
+    const resets = source.split("secondaryUiDispatch({ type: 'reset' })").length - 1
+    assert.equal(resets, 1, 'split preference resets only on workspace change')
+    const resetAt = source.indexOf("secondaryUiDispatch({ type: 'reset' })")
+    assert.ok(source.slice(Math.max(0, resetAt - 300), resetAt).includes('workspaceId'), 'reset must be scoped to workspace change')
+  })
+
+  it('secondaryOpen still derives from open content, and drag math is untouched', () => {
+    const source = readRenderer('features/explorer/Explorer.tsx')
+    assert.ok(
+      source.includes('const secondaryOpen = hasReviewTab || hasFile || secondaryUi.contextPinned || terminalOpen'),
+      'open state must derive from content so clearing content closes the pane'
+    )
+    assert.ok(source.includes('((event.clientX - rect.left) / rect.width) * 100'), 'drag percentage math must be unchanged')
+    assert.ok(source.includes('clampSplitPct(pct, rect.width)'), 'drag clamping must be unchanged')
+    assert.ok(source.includes('100 - secondaryUi.splitPct'), 'secondary complement width must be unchanged')
+  })
+
+  it('window resize and narrow breakpoint behavior are unchanged', () => {
+    const source = readRenderer('features/explorer/Explorer.tsx')
+    assert.ok(source.includes("window.addEventListener('resize'"), 'window resize must preserve the ratio')
+    assert.ok(source.includes("window.removeEventListener('resize'"), 'window listener must be removed on cleanup')
+    const css = readRenderer('features/explorer/Explorer.css')
+    assert.ok(css.includes('@media (max-width: 1099px)'), 'narrow breakpoint must remain')
+    assert.ok(css.includes('.workspace[data-canvas-view="session"] .workspace__resize'), 'handle must hide in narrow session view')
+    assert.ok(css.includes('min-width: 320px'), 'session minimum must be unchanged')
+    assert.ok(css.includes('min-width: 420px'), 'secondary minimum must be unchanged')
+  })
+
+  it('split fix adds no schema, IPC, or editor-semantics changes', () => {
+    const source = readRenderer('features/explorer/Explorer.tsx')
+    assert.ok(!source.includes('ipcRenderer') && !source.includes('ipcMain'), 'fix must add no IPC surface')
+    const frameAt = source.indexOf('className="session-frame"')
+    const frameSlice = source.slice(frameAt, frameAt + 600)
+    assert.ok(!frameSlice.includes('stark-api') && !frameSlice.includes('migration'), 'split styles must stay presentational')
+    const migrations = join(process.cwd(), 'src', 'main', 'database', 'migrations')
+    const files = readdirSync(migrations).map((name) => name.toLowerCase())
+    assert.ok(files.includes('019-message-attachments.ts'), 'schema v19 must remain')
+    assert.ok(!files.some((name) => name.startsWith('020-')), 'no schema migration may be added')
+  })
+
+  it('terminal claims pane space instead of sizing to content', () => {
+    // Context on top, terminal below — but the terminal must read as a
+    // real working area in both pre-start and running states, never a
+    // content-sized preview box while Context takes the whole pane.
+    const css = readRenderer('features/explorer/Explorer.css')
+    const stack = css.match(/\.workspace__terminal\s*\{[^}]*\}/)
+    assert.ok(stack !== null, 'terminal stack CSS must exist')
+    assert.ok(stack[0].includes('flex: 1 1 0'), 'terminal must grow into free pane space')
+    assert.ok(stack[0].includes('min-height: 220px'), 'terminal must keep a usable floor')
+    assert.ok(stack[0].includes('max-height: 65%'), 'terminal must leave room for the body above')
+    const body = css.match(/\.workspace__pane-body\s*\{[^}]*\}/)
+    assert.ok(body !== null, 'pane body CSS must exist')
+    assert.ok(body[0].includes('flex: 1 1 0'), 'context body must share pane space, not absorb it all')
+    assert.ok(body[0].includes('min-height: 140px'), 'context body must stay readable when compact')
+    const secondary = css.match(/\.workspace__secondary\s*\{[^}]*\}/)
+    assert.ok(secondary !== null && secondary[0].includes('overflow: hidden'), 'pane must clip instead of overflowing')
+    assert.ok(!secondary[0].includes('overflow-x'), 'pane must add no horizontal overflow behavior')
+  })
+
+  it('terminal panel stretches to its stack in every state', () => {
+    const css = readRenderer('features/terminal/TerminalPanel.css')
+    const panel = css.match(/\.terminal\s*\{[^}]*\}/)
+    assert.ok(panel !== null, 'terminal panel CSS must exist')
+    assert.ok(panel[0].includes('flex: 1 1 auto'), 'panel must fill the stack before and after start')
+    const viewport = css.match(/\.terminal__viewport\s*\{[^}]*\}/)
+    assert.ok(viewport !== null, 'terminal viewport CSS must exist')
+    assert.ok(viewport[0].includes('flex: 1 1 auto'), 'viewport must grow with the stack when running')
+    assert.ok(viewport[0].includes('min-height: 120px'), 'viewport must keep a floor when running')
+    assert.ok(!viewport[0].includes('height: 200px'), 'viewport must not pin a fixed preview height')
+    const tab = readRenderer('features/sessions/ContextTab.tsx')
+    assert.ok(tab.includes('ContextTab'), 'context surface must be untouched')
   })
 })

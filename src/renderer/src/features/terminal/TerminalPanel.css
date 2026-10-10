@@ -1,11 +1,12 @@
 .terminal {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
   border-top: 1px solid var(--stark-border);
   background: transparent;
+  overflow: hidden;
 }
 
 .terminal__bar {
@@ -93,9 +94,8 @@
 }
 
 .terminal__viewport {
-  flex: 0 0 auto;
-  height: 200px;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 120px;
   min-width: 0;
   overflow: hidden;
   padding: 0 var(--stark-space-md) var(--stark-space-md);

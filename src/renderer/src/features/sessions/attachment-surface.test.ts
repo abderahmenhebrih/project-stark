@@ -6,7 +6,7 @@ import { describe, it } from 'node:test'
 /**
  * Chat attachment surface (Step 1: local files + images, inert).
  *
- * Static guarantees for the renderer shell: composer paperclip +
+ * Static guarantees for the renderer shell: composer + attach action +
  * draft strip with per-item removal, message rendering with image
  * thumbnails and file cards, attachment-aware send gating, and no
  * filesystem/voice/generation authority. Runs against repository
@@ -23,17 +23,18 @@ function readRenderer(relative: string): string {
 }
 
 describe('chat attachment composer surface', () => {
-  it('composer offers a paperclip attach action without redesign', () => {
+  it('composer offers a compact + attach action invoking the picker', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     assert.ok(panel.includes('handleAttach'), 'composer must wire the attach action')
-    assert.ok(panel.includes('name="paperclip"'), 'attach action must use the paperclip glyph')
+    assert.ok(panel.includes('chooseChatAttachments'), '+ must invoke the existing attachment picker')
+    assert.ok(panel.includes('name="plus"'), 'attach action must use the compact plus glyph')
     assert.ok(panel.includes('aria-label="Attach files"'), 'attach action must be labelled')
     assert.ok(panel.includes('title="Attach files"'), 'attach action must tooltip')
     assert.ok(panel.includes('<textarea'), 'composer must stay a plain textarea')
     assert.ok(panel.includes('Message composer'), 'composer label must stay')
     assert.ok(panel.includes('session__send'), 'Send must stay')
     const icons = readRenderer('components/icons/StarkIcon.tsx')
-    assert.ok(icons.includes('paperclip'), 'icon set must include the paperclip glyph')
+    assert.ok(icons.includes("'plus'"), 'icon set must include the plus glyph')
   })
 
   it('draft attachments render with thumbnails and per-item removal', () => {
@@ -50,11 +51,15 @@ describe('chat attachment composer surface', () => {
     }
   })
 
-  it('send allows attachments-only messages and clears drafts on success', () => {
+  it('send allows attachments-only messages and clears sent drafts on success', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     assert.ok(panel.includes('attachments.length === 0'), 'send gating must account for staged attachments')
     assert.ok(panel.includes('attachments: attachmentIds') || panel.includes('attachments: attachmentIds,'), 'send must carry attachment IDs')
-    assert.ok(panel.includes('setAttachments([])'), 'successful sends must clear staged attachments')
+    // Ownership-preserving clear: exactly the consumed IDs leave (same
+    // tab filters live state; a tab switched away mid-send clears its
+    // own stash). A blind wipe would discard another tab's drafts.
+    assert.ok(panel.includes('sentAttachmentIds'), 'send must snapshot exactly what it consumed')
+    assert.ok(panel.includes('!sentAttachmentIds.includes(entry.id)'), 'clear must remove only the consumed IDs')
     assert.ok(panel.includes('messageSendPayload'), 'all send modes must share one payload builder')
   })
 

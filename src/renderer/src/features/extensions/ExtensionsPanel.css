@@ -371,6 +371,7 @@
 .extensions__secondary {
   min-height: 30px;
   padding: 4px 12px;
+  font-family: var(--stark-font-sans);
   font-size: 12px;
   font-weight: 600;
   color: var(--stark-text);
@@ -379,6 +380,7 @@
   border-radius: var(--stark-radius-sm);
   cursor: pointer;
   touch-action: manipulation;
+  white-space: nowrap;
 }
 
 .extensions__secondary:hover {
@@ -386,6 +388,114 @@
 }
 
 .extensions__secondary:focus-visible {
+  outline: 2px solid var(--stark-accent);
+  outline-offset: 2px;
+}
+
+.extensions__secondary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Installed primary management action (Enable/Disable): same dark
+ * control language, subtle lime hover confined to the installed
+ * card so Marketplace styling is untouched. */
+.extensions__installed-actions .extensions__secondary:hover {
+  background: var(--stark-lime-dim);
+  border-color: var(--stark-lime);
+}
+
+/* Installed destructive action (Uninstall): restrained — dark
+ * surface, neutral border at rest, destructive red text/border on
+ * hover. Never a bright native button. */
+.extensions__uninstall {
+  min-height: 30px;
+  padding: 4px 12px;
+  font-family: var(--stark-font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--stark-text);
+  background: var(--stark-surface);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  touch-action: manipulation;
+  white-space: nowrap;
+}
+
+.extensions__uninstall:hover:not(:disabled) {
+  color: var(--stark-danger);
+  background: var(--stark-elevated);
+  border-color: var(--stark-danger);
+}
+
+.extensions__uninstall:focus-visible {
+  outline: 2px solid var(--stark-accent);
+  outline-offset: 2px;
+}
+
+.extensions__uninstall:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* STARK checkbox (auto-update + Details config toggles): custom
+ * dark box with lime check. The native input stays in place
+ * (keyboard, focus, and screen-reader semantics unchanged); only
+ * its paint is replaced. */
+.extensions__checkbox {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 1px solid var(--stark-border);
+  border-radius: 4px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.extensions__checkbox:hover {
+  border-color: var(--stark-lime);
+}
+
+.extensions__checkbox:focus-visible {
+  outline: 2px solid var(--stark-accent);
+  outline-offset: 2px;
+}
+
+.extensions__checkbox:checked {
+  background-color: var(--stark-lime);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 8.5l3.5 3.5L13 4.5' fill='none' stroke='%230a0c0a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 12px 12px;
+  border-color: var(--stark-lime);
+}
+
+.extensions__checkbox:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Details config text/number inputs share the dark control paint. */
+.extensions__config-row input[type='text'],
+.extensions__config-row input[type='number'] {
+  min-height: 28px;
+  padding: 3px 8px;
+  font-family: var(--stark-font-sans);
+  font-size: 12px;
+  color: var(--stark-text);
+  background: var(--stark-surface);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+}
+
+.extensions__config-row input[type='text']:focus-visible,
+.extensions__config-row input[type='number']:focus-visible {
   outline: 2px solid var(--stark-accent);
   outline-offset: 2px;
 }

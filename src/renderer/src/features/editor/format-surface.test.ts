@@ -77,4 +77,51 @@ describe('format document surface', () => {
     assert.ok(!explorer.includes('Shift+Alt+F'), 'no keyboard shortcut is added in this pilot')
     assert.ok(explorer.includes('<EditorToolbar'), 'format must reuse the shared editor toolbar')
   })
+
+  it('context menu and palette share one format implementation', () => {
+    const explorer = readRenderer('features/explorer/Explorer.tsx')
+    // Exactly one handler definition; every route references it.
+    assert.equal(
+      explorer.split('function handleFormatRequest(').length - 1,
+      1,
+      'there must be exactly one format handler implementation'
+    )
+    assert.ok(
+      explorer.includes("{ id: 'stark.formatDocument', label: 'Format Document', run: () => handleFormatRequest() }"),
+      'the Monaco right-click entry must call the shared handler'
+    )
+    assert.ok(
+      explorer.includes('formatRequestRef.current = () => {\n      handleFormatRequest()\n    }'),
+      'the palette bus must deliver to the same shared handler'
+    )
+    assert.equal(
+      explorer.split('formatDocumentWithPrettier(').length - 1,
+      1,
+      'exactly one bridge invocation (no duplicate format pipeline)'
+    )
+    const overlays = readRenderer('features/extensions/ExtensionOverlays.tsx')
+    assert.ok(overlays.includes('requestFormatDocument'), 'palette must publish through the format bus, not the formatter')
+    assert.ok(!overlays.includes('formatDocumentWithPrettier'), 'palette must not bypass the shared handler')
+  })
+
+  it('Ctrl+S never formats (review-before-write preserved)', () => {
+    const explorer = readRenderer('features/explorer/Explorer.tsx')
+    const saveRegion = explorer.slice(explorer.indexOf('function handleSaveGesture'))
+    const saveEnd = saveRegion.indexOf('\n  }\n')
+    const saveBody = saveRegion.slice(0, saveEnd)
+    assert.ok(saveBody.includes('handleReviewChange'), 'Ctrl+S must open the review flow')
+    assert.ok(!saveBody.includes('runFormatDocument'), 'Ctrl+S must not invoke formatting')
+    assert.ok(!saveBody.includes('formatDocumentWithPrettier'), 'Ctrl+S must not reach the formatter')
+    assert.ok(explorer.includes('onSaveRequest={handleSaveGesture}'), 'the save gesture must stay wired to review')
+  })
+
+  it('missing providers report safe copy without internals', () => {
+    const explorer = readRenderer('features/explorer/Explorer.tsx')
+    assert.ok(explorer.includes('normalizeFormatterError(error).message'), 'provider absence must surface normalized copy')
+    const errors = readRenderer('lib/format-error.ts')
+    assert.ok(errors.includes('No formatter is available for this file.'), 'unregistered-provider copy must exist')
+    for (const forbidden of ['stack', 'path', 'ENOENT', 'utilityProcess']) {
+      assert.ok(!errors.includes(forbidden), `formatter boundary must not leak ${forbidden}`)
+    }
+  })
 })

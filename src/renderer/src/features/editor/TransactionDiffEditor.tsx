@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import type { editor } from 'monaco-editor/editor/editor.api'
 import type { EditorEol } from './editor-document'
-import { STARK_EDITOR_THEME_NAME, registerStarkTheme } from './editor-theme'
+import { STARK_EDITOR_THEME_NAME, registerStarkTheme, starkEditorConstructionOptions } from './editor-theme'
 import { loadMonaco } from './editor-setup'
 import './editor.css'
 
@@ -73,6 +73,7 @@ export function TransactionDiffEditor({
           const diff = monaco.editor.createDiffEditor(containerRef.current, {
             readOnly: true,
             theme: STARK_EDITOR_THEME_NAME,
+            ...starkEditorConstructionOptions(),
             fontFamily: "'JetBrains Mono','Cascadia Code','Fira Code',Consolas,monospace",
             fontSize: 13,
             lineNumbers: 'on',

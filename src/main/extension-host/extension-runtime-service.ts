@@ -776,7 +776,14 @@ export class ExtensionRuntimeService {
       activationFailed: failure !== undefined,
       failureCode: failure?.code ?? null
     })
-    const commands = (contributes?.commands ?? []).map((entry) => ({ command: entry.command, title: entry.title, category: entry.category }))
+    // NLS title resolution is per-owner and cached per call so one
+    // extension's package.nls.json is read at most once per surface.
+    const nlsCache = new Map<string, Map<string, string> | null>()
+    const commands = (contributes?.commands ?? []).map((entry) => ({
+      command: entry.command,
+      title: this.resolveNlsText(identity, entry.title, nlsCache),
+      category: entry.category
+    }))
     const keybindings = (contributes?.keybindings ?? [])
       .filter((entry) => commands.some((command) => command.command === entry.command))
       .map((entry) => ({ command: entry.command, key: entry.key }))
@@ -836,6 +843,7 @@ export class ExtensionRuntimeService {
     const snapshots = await this.installedManifests()
     const out: { command: string; title: string; category: string | null; extensionId: string }[] = []
     const seen = new Set<string>()
+    const nlsCache = new Map<string, Map<string, string> | null>()
     const sorted = snapshots.sort((a, b) => extensionInstanceId(a.identity).localeCompare(extensionInstanceId(b.identity)))
     for (const snapshot of sorted) {
       if (snapshot.manifest?.contributes == null) {
@@ -847,10 +855,64 @@ export class ExtensionRuntimeService {
           continue
         }
         seen.add(command.command)
-        out.push({ command: command.command, title: command.title, category: command.category, extensionId: extensionInstanceId(snapshot.identity) })
+        out.push({
+          command: command.command,
+          title: this.resolveNlsText(snapshot.identity, command.title, nlsCache),
+          category: command.category,
+          extensionId: extensionInstanceId(snapshot.identity)
+        })
       }
     }
     return out
+  }
+
+  /**
+   * Reads one extension's `package.nls.json` string table as data
+   * (bounded, containment-checked, cached per caller map). Flat
+   * string values only (≤256 entries); anything else resolves to an
+   * empty table so titles fall back to their inner keys.
+   */
+  private readNlsStrings(identity: ValidatedInstallIdentity, cache: Map<string, Map<string, string> | null>): Map<string, string> | null {
+    const owner = extensionInstanceId(identity)
+    const cached = cache.get(owner)
+    if (cached !== undefined) {
+      return cached
+    }
+    let table: Map<string, string> | null = null
+    const bytes = this.readContributionBytes(identity, 'package.nls.json', 64 * 1024)
+    if (bytes !== null) {
+      try {
+        const parsed: unknown = JSON.parse(bytes.toString('utf8'))
+        if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+          const next = new Map<string, string>()
+          for (const [key, value] of Object.entries(parsed as Record<string, unknown>).slice(0, 256)) {
+            if (key !== '' && key.length <= 256 && typeof value === 'string' && value !== '' && value.length <= 512) {
+              next.set(key, value)
+            }
+          }
+          table = next
+        }
+      } catch {
+        table = null
+      }
+    }
+    cache.set(owner, table)
+    return table
+  }
+
+  /**
+   * Resolves VS Code `%nls.key%` title placeholders through the
+   * owning extension's string table (generic, never per-extension).
+   * Unknown keys fall back to the inner key text so the palette never
+   * renders raw `%...%` placeholders; plain titles pass through
+   * untouched. Pure string mapping, bounded.
+   */
+  private resolveNlsText(identity: ValidatedInstallIdentity, raw: string, cache: Map<string, Map<string, string> | null>): string {
+    if (!raw.includes('%')) {
+      return raw
+    }
+    const table = this.readNlsStrings(identity, cache)
+    return raw.replace(/%([^%]{1,256})%/g, (_match, key: string) => table?.get(key) ?? key).slice(0, 512)
   }
 
   /** Stored config values for one extension (bounded, renderer-safe). */

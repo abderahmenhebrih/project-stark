@@ -858,7 +858,7 @@ export function StarkSettingsSurface(props: StarkSettingsSurfaceProps): ReactEle
                   </button>
                 </div>
                 {usage.draft.limits.map((entry, index) => (
-                  <div key={index}>
+                  <div key={entry.key}>
                     <div className="session__settings-row">
                       <select
                         className="session__select"

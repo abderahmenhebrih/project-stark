@@ -27,8 +27,36 @@ export interface StarkEditorTheme {
   // Mutable containers on purpose: this shape must satisfy Monaco's
   // IStandaloneThemeData so registration typechecks directly.
   readonly rules: StarkTokenRule[]
+  readonly encodedTokensColors?: string[]
   readonly colors: Record<string, string>
 }
+
+/**
+ * Semantic token types styled by stark-obsidian. Monaco resolves
+ * semantic tokens through the same theme trie as lexical tokens
+ * (`getTokenStyleMetadata` matches `type.modifiers` against `rules`),
+ * so these entries improve coloring when a semantic provider (LSP or
+ * extension) is present and are harmless when it is absent — lexical
+ * Monarch coloring always works on its own.
+ */
+export const STARK_SEMANTIC_TOKEN_TYPES: readonly string[] = [
+  'class',
+  'interface',
+  'enum',
+  'struct',
+  'type',
+  'typeParameter',
+  'function',
+  'method',
+  'property',
+  'parameter',
+  'variable',
+  'namespace',
+  'decorator',
+  'annotation',
+  'macro',
+  'constant'
+]
 
 /** Theme data: near-black background, lime reserved for caret/accents. */
 export function starkEditorTheme(): StarkEditorTheme {
@@ -36,13 +64,123 @@ export function starkEditorTheme(): StarkEditorTheme {
     base: 'vs-dark',
     inherit: true,
     rules: [
+      // Comments: muted gray-green, de-emphasized but legible.
       { token: 'comment', foreground: '5f6f62', fontStyle: 'italic' },
-      { token: 'keyword', foreground: 'c8ff00' },
+      { token: 'comment.doc', foreground: '5f6f62', fontStyle: 'italic' },
+      { token: 'comment.content', foreground: '5f6f62' },
+      // Keywords: readable STARK magenta-family pink (never lime:
+      // lime stays UI/action branding for caret and selections).
+      { token: 'keyword', foreground: 'ff7ab8' },
+      { token: 'keyword.json', foreground: 'ff7ab8' },
+      { token: 'keyword.flow', foreground: 'ff7ab8' },
+      { token: 'keyword.other', foreground: 'ff7ab8' },
+      // Strings: soft readable green.
       { token: 'string', foreground: '9ce8a0' },
+      // JSON keys read as properties (muted blue-gray) so
+      // package.json keys/values/booleans never collapse to white.
+      { token: 'string.key.json', foreground: '9db8c7' },
+      { token: 'string.value.json', foreground: '9ce8a0' },
+      { token: 'string.escape', foreground: 'e3c878' },
+      { token: 'string.invalid', foreground: 'f87171' },
+      // Markdown links/targets: cyan + underline, distinct from
+      // plain strings and body text.
+      { token: 'string.link', foreground: '7cc7ff', fontStyle: 'underline' },
+      { token: 'string.target', foreground: '7cc7ff', fontStyle: 'underline' },
+      // Numbers/constants: warm amber accent.
       { token: 'number', foreground: 'fbbf24' },
-      { token: 'type', foreground: '7dd3a8' },
+      { token: 'number.float', foreground: 'fbbf24' },
+      { token: 'number.hex', foreground: 'fbbf24' },
+      { token: 'number.octal', foreground: 'fbbf24' },
+      { token: 'number.binary', foreground: 'fbbf24' },
+      { token: 'constant', foreground: 'fbbf24' },
+      // Types/classes/interfaces: clear cyan-blue. These entries
+      // serve both Monarch lexical types (`type`, `type.identifier`)
+      // and semantic token types (`class`, `interface`, `enum`, …).
+      { token: 'type', foreground: '7cc7ff' },
+      { token: 'type.identifier', foreground: '7cc7ff' },
+      { token: 'class', foreground: '7cc7ff' },
+      { token: 'interface', foreground: '7cc7ff' },
+      { token: 'enum', foreground: '7cc7ff' },
+      { token: 'struct', foreground: '7cc7ff' },
+      { token: 'typeParameter', foreground: '7cc7ff' },
+      { token: 'namespace', foreground: '7cc7ff' },
+      // Functions/calls: warm sand, distinct from amber numbers.
+      // Covers Monarch `function` scopes and semantic
+      // `function`/`method`/`macro` tokens.
+      { token: 'function', foreground: 'e3c878' },
+      { token: 'method', foreground: 'e3c878' },
+      { token: 'macro', foreground: 'e3c878' },
+      // Properties/attributes: muted blue-gray, subtle contrast
+      // against the default variable foreground. Covers Monarch
+      // `property`/`key` and semantic `property`.
+      { token: 'property', foreground: '9db8c7' },
+      { token: 'key', foreground: '9db8c7' },
+      // Variables/identifiers: soft off-white default.
       { token: 'identifier', foreground: 'e9f1ea' },
-      { token: 'delimiter', foreground: '93a196' }
+      { token: 'variable', foreground: 'e9f1ea' },
+      // Parameters read lavender-italic: distinct from plain
+      // variables without adding another neon hue.
+      { token: 'parameter', foreground: 'd6c9f5', fontStyle: 'italic' },
+      { token: 'variable.parameter', foreground: 'd6c9f5', fontStyle: 'italic' },
+      // Builtins (`__dirname`, predefined constants): soft lavender,
+      // distinct from plain identifiers where Monaco reports them.
+      { token: 'variable.predefined', foreground: 'c4b5fd' },
+      // Decorators/annotations: soft lavender, never lime.
+      { token: 'decorator', foreground: 'c4b5fd' },
+      { token: 'annotation', foreground: 'c4b5fd' },
+      // Operators: light neutral, distinct from muted delimiters.
+      { token: 'operator', foreground: 'cbd5e1' },
+      // Delimiters/brackets: dimmed structural gray.
+      { token: 'delimiter', foreground: '93a196' },
+      { token: 'delimiter.bracket', foreground: '93a196' },
+      { token: 'delimiter.parenthesis', foreground: '93a196' },
+      { token: 'delimiter.angle', foreground: '93a196' },
+      { token: 'delimiter.html', foreground: '93a196' },
+      { token: 'delimiter.xml', foreground: '93a196' },
+      // Regex: soft orange, distinct from strings/numbers.
+      { token: 'regexp', foreground: 'e8a07a' },
+      { token: 'regexp.escape', foreground: 'e8a07a' },
+      { token: 'regexp.escape.control', foreground: 'e8a07a' },
+      { token: 'regexp.invalid', foreground: 'f87171' },
+      // Tags: soft red-pink family, distinct from keyword pink.
+      { token: 'tag', foreground: 'fb7185' },
+      { token: 'metatag', foreground: 'fb7185' },
+      { token: 'metatag.html', foreground: 'fb7185' },
+      { token: 'metatag.xml', foreground: 'fb7185' },
+      { token: 'metatag.content.html', foreground: '7cc7ff' },
+      { token: 'meta.tag', foreground: '9db8c7' },
+      { token: 'meta.separator', foreground: '93a196' },
+      { token: 'meta.scss', foreground: '9db8c7' },
+      // Attributes: cyan names, green values, amber numbers/units —
+      // selectors/properties/values stay visibly distinct in CSS.
+      { token: 'attribute.name', foreground: '7cc7ff' },
+      { token: 'attribute.name.html', foreground: '7cc7ff' },
+      { token: 'attribute.value', foreground: '9ce8a0' },
+      { token: 'attribute.value.html', foreground: '9ce8a0' },
+      { token: 'attribute.value.xml', foreground: '9ce8a0' },
+      { token: 'attribute.value.number', foreground: 'fbbf24' },
+      { token: 'attribute.value.number.css', foreground: 'fbbf24' },
+      { token: 'attribute.value.unit', foreground: 'fbbf24' },
+      { token: 'attribute.value.unit.css', foreground: 'fbbf24' },
+      { token: 'attribute.value.hex', foreground: 'e9f1ea' },
+      { token: 'attribute.value.hex.css', foreground: 'e9f1ea' },
+      // Markdown emphasis: body hue, style carries the meaning.
+      { token: 'emphasis', foreground: 'e9f1ea', fontStyle: 'italic' },
+      { token: 'strong', foreground: 'e9f1ea', fontStyle: 'bold' },
+      // Invalid: diagnostic red, never hidden by syntax colors.
+      { token: 'invalid', foreground: 'f87171' }
+    ],
+    // Seeds Monaco's semantic color map with the same restrained
+    // palette so encoded semantic tokens resolve to STARK hues.
+    encodedTokensColors: [
+      '#FF7AB8',
+      '#9CE8A0',
+      '#FBBF24',
+      '#7CC7FF',
+      '#E3C878',
+      '#9DB8C7',
+      '#C4B5FD',
+      '#F87171'
     ],
     colors: {
       'editor.background': '#0A0C0A',
@@ -64,8 +202,75 @@ export function starkEditorTheme(): StarkEditorTheme {
       'editorGutter.background': '#0A0C0A',
       'editor.lineHighlightBorder': '#00000000',
       'editorIndentGuide.background1': '#232B25',
-      'editorWhitespace.foreground': '#232B25'
+      'editorIndentGuide.activeBackground1': '#3A4A3E',
+      'editorWhitespace.foreground': '#232B25',
+      // Restrained bracket-pair cycle (muted steel/sand/cyan —
+      // never neon rainbow, never STARK lime).
+      'editorBracketHighlight.foreground1': '#8EA8C3',
+      'editorBracketHighlight.foreground2': '#E3C878',
+      'editorBracketHighlight.foreground3': '#7CC7FF',
+      'editorBracketHighlight.foreground4': '#9DB8C7',
+      'editorBracketHighlight.foreground5': '#C4B5FD',
+      'editorBracketHighlight.foreground6': '#93A196',
+      'editorBracketHighlight.unexpectedBracket.foreground': '#F87171',
+      // Matching bracket: subtle translucent lime wash, no heavy outline.
+      'editorBracketMatch.background': '#C8FF0022',
+      'editorBracketMatch.border': '#C8FF0055',
+      // Bracket-pair guides track the same muted cycle.
+      'editorBracketPairGuide.background1': '#8EA8C340',
+      'editorBracketPairGuide.background2': '#E3C87840',
+      'editorBracketPairGuide.background3': '#7CC7FF40',
+      'editorBracketPairGuide.background4': '#9DB8C740',
+      'editorBracketPairGuide.background5': '#C4B5FD40',
+      'editorBracketPairGuide.background6': '#93A19640',
+      'editorBracketPairGuide.activeBackground1': '#8EA8C366',
+      'editorBracketPairGuide.activeBackground2': '#E3C87866',
+      'editorBracketPairGuide.activeBackground3': '#7CC7FF66',
+      'editorBracketPairGuide.activeBackground4': '#9DB8C766',
+      'editorBracketPairGuide.activeBackground5': '#C4B5FD66',
+      'editorBracketPairGuide.activeBackground6': '#93A19666',
+      // Diagnostics stay visible above syntax colors.
+      'editorError.foreground': '#F87171',
+      'editorWarning.foreground': '#FBBF24',
+      'editorInfo.foreground': '#7CC7FF',
+      'editorHint.foreground': '#93A196'
     }
+  }
+}
+
+/**
+ * Shared Monaco construction options for every STARK editor surface
+ * (main editor, transaction diff, Git patch viewer). Uses only option
+ * names that exist in Monaco 0.57: bracket-pair colorization, bracket
+ * guides, semantic highlighting, and always-on bracket matching.
+ * Lexical Monarch coloring works with zero extensions; semantic
+ * providers (LSP/extensions) only improve it when present.
+ */
+export interface StarkMonacoConstructionOptions {
+  readonly bracketPairColorization: { readonly enabled: boolean }
+  readonly guides: {
+    readonly bracketPairs: boolean | 'active'
+    readonly bracketPairsHorizontal: boolean | 'active'
+    readonly highlightActiveBracketPair: boolean
+    readonly highlightActiveIndentation: boolean
+    readonly indentation: boolean
+  }
+  readonly matchBrackets: 'always' | 'near' | 'never'
+  readonly 'semanticHighlighting.enabled': boolean | 'configuredByTheme'
+}
+
+export function starkEditorConstructionOptions(): StarkMonacoConstructionOptions {
+  return {
+    bracketPairColorization: { enabled: true },
+    guides: {
+      bracketPairs: true,
+      bracketPairsHorizontal: 'active',
+      highlightActiveBracketPair: true,
+      highlightActiveIndentation: true,
+      indentation: true
+    },
+    matchBrackets: 'always',
+    'semanticHighlighting.enabled': true
   }
 }
 

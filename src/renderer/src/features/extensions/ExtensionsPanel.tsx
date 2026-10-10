@@ -1088,6 +1088,7 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
                         {configKey}
                         {typeof value === 'boolean' ? (
                           <input
+                            className="extensions__checkbox"
                             type="checkbox"
                             checked={value}
                             onChange={(event) => handleConfigChange(key, configKey, event.target.checked)}
@@ -1316,8 +1317,10 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
             </button>
             <label className="extensions__config-row">
               <input
+                className="extensions__checkbox"
                 type="checkbox"
                 checked={autoUpdate}
+                aria-label="Automatically update extensions"
                 onChange={(event) => {
                   const enabled = event.target.checked
                   setExtensionAutoUpdate(enabled).then(
@@ -1378,7 +1381,7 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
                   }
                 }}
               >
-                <option value="">STARK default</option>
+                <option value="">STARK Obsidian (default)</option>
                 {themeChoices.map((choice) => (
                   <option key={`${choice.extensionId}#${choice.themeId}`} value={`${choice.extensionId}#${choice.themeId}`}>
                     {choice.label} ({choice.displayName})

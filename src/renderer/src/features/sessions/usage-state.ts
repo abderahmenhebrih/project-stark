@@ -45,11 +45,23 @@ export function usageRouteLabel(routeKey: UsageThresholdRouteKey): string {
 
 /** One editable limit row (text inputs; empty means unset). */
 export interface UsageLimitDraft {
+  /** Renderer-local row identity: stable across edits/removals so React
+   * keeps each row's inputs and focus with the right entry. Never
+   * persisted — the save path maps explicit fields only. */
+  readonly key: string
   readonly providerId: string
   readonly model: string
   readonly maxCalls: string
   readonly maxTokens: string
   readonly switchAt: string
+}
+
+/** Mints renderer-local row keys (sibling-unique, stable per draft). */
+let nextUsageLimitKey = 1
+function mintUsageLimitKey(): string {
+  const key = `usage-limit-${nextUsageLimitKey}`
+  nextUsageLimitKey += 1
+  return key
 }
 
 /** One editable alternate (empty model means none configured). */
@@ -98,6 +110,7 @@ export function usageDraftFromConfig(config: UsageConfig): UsageDraft {
   return {
     thresholdRoutingEnabled: config.heartThresholdRoutingEnabled,
     limits: config.limits.map((entry) => ({
+      key: mintUsageLimitKey(),
       providerId: entry.providerId,
       model: entry.model,
       maxCalls: entry.maxCalls24h === null ? '' : String(entry.maxCalls24h),
@@ -216,7 +229,7 @@ export function usagePanelReducer(state: UsagePanelState, action: UsagePanelActi
         ...state,
         draft: {
           ...state.draft,
-          limits: [...state.draft.limits, { providerId: 'openai', model: '', maxCalls: '', maxTokens: '', switchAt: '90' }]
+          limits: [...state.draft.limits, { key: mintUsageLimitKey(), providerId: 'openai', model: '', maxCalls: '', maxTokens: '', switchAt: '90' }]
         },
         notice: null
       }

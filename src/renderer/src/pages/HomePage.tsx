@@ -18,6 +18,7 @@ import {
 } from '../features/sessions/session-context-state'
 import { SystemStatus } from '../features/system-status/SystemStatus'
 import { WorkspaceSection } from '../features/workspace/WorkspaceSection'
+import { chooseWorkspaceWithGuards } from '../features/workspace/workspace-switch'
 import './HomePage.css'
 
 function accountInitialFor(displayName: string): string {
@@ -47,6 +48,8 @@ function sameChromeSnapshot(
     prev.looplinkActing === next.looplinkActing &&
     prev.sendBusy === next.sendBusy &&
     prev.creatingSession === next.creatingSession &&
+    prev.openSessionIds.length === next.openSessionIds.length &&
+    prev.openSessionIds.every((id, index) => id === next.openSessionIds[index]) &&
     prev.sessions.length === next.sessions.length &&
     prev.sessions.every(
       (entry, index) =>
@@ -143,11 +146,18 @@ export function HomePage(): ReactElement {
   const handleCloseSession = useCallback(() => {
     sessionActionsRef.current?.closeSession()
   }, [])
+  const handleCloseSessionTab = useCallback((sessionId: number) => {
+    sessionActionsRef.current?.closeSessionTab(sessionId)
+  }, [])
   const handleContinueLooplink = useCallback(() => {
     sessionActionsRef.current?.continueLooplink()
   }, [])
   const handleSwitchWorkspace = useCallback(() => {
-    void workspace.chooseWorkspace()
+    // Guarded switch (same flow as the drawer and welcome surface):
+    // dirty editor drafts and a running terminal confirm first, so the
+    // chrome project button can neither strand a PTY nor silently drop
+    // unsent work. A declined confirmation keeps the workspace.
+    void chooseWorkspaceWithGuards(workspace)
   }, [workspace])
 
   // A new workspace resets shell + review state; panels remount per
@@ -201,6 +211,7 @@ export function HomePage(): ReactElement {
         sessionTitle={chromeSession?.title ?? 'New session'}
         sessions={chromeSession?.sessions ?? []}
         selectedSessionId={chromeSession?.selectedSessionId ?? null}
+        openSessionIds={chromeSession?.openSessionIds ?? []}
         sessionsLoading={chromeSession?.sessionsLoading ?? false}
         creatingSession={chromeSession?.creatingSession ?? false}
         looplinkActing={chromeSession?.looplinkActing ?? false}
@@ -212,7 +223,9 @@ export function HomePage(): ReactElement {
         }
         onNewSession={handleNewSession}
         onSelectSession={handleSelectSession}
+        onSelectSessionTab={handleSelectSession}
         onCloseSession={handleCloseSession}
+        onCloseSessionTab={handleCloseSessionTab}
         onContinueLooplink={handleContinueLooplink}
         onSwitchWorkspace={handleSwitchWorkspace}
       />

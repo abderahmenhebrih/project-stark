@@ -222,23 +222,25 @@ describe('stage 31 frontend shell', () => {
     assert.ok(pane.includes('workspace__terminal'), 'terminal must stack in the secondary region')
     const css = readRenderer('features/explorer/Explorer.css')
     const stack = css.match(/\.workspace__terminal\s*\{[^}]*\}/)
-    assert.ok(stack !== null && stack[0].includes('min-height: 120px'), 'stack must stay bounded')
+    assert.ok(stack !== null && stack[0].includes('min-height: 220px'), 'stack must keep a usable floor')
   })
 
   it('composer contains its modes, input, context state, and send', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     assert.ok(panel.includes('session__composer--'), 'composer must know the active mode')
-    for (const feature of ['Composer mode', 'Message composer', 'Ask', 'Work', 'Propose change', 'Send']) {
+    for (const feature of ['Composer mode', 'Message composer', 'Ask', 'Work', 'Propose change', 'Choose message mode', 'Send message']) {
       assert.ok(panel.includes(feature), `composer must contain ${feature}`)
     }
     const css = readRenderer('features/sessions/session.css')
     const composer = css.match(/\.session__composer\s*\{[^}]*\}/)
     assert.ok(composer !== null, 'composer dock CSS must exist')
-    assert.ok(composer[0].includes('border-radius: 12px'), 'composer must be one rounded surface')
+    assert.ok(composer[0].includes('border-radius: 26px'), 'composer must be one floating rounded surface')
     assert.ok(composer[0].includes('border: 1px solid var(--stark-border)'), 'resting composer must be quiet neutral')
     assert.ok(css.includes('.session__composer--work:focus-within'), 'focused Work must read magenta')
     const send = css.match(/\.session__send\s*\{[^}]*\}/)
     assert.ok(send !== null && send[0].includes('background: var(--stark-lime)'), 'Send must use authoritative lime')
+    const fab = css.match(/\.session__send--fab\s*\{[^}]*\}/)
+    assert.ok(fab !== null && fab[0].includes('border-radius: 50%'), 'Send must be a circular control')
   })
 
   it('pending approval docks above the composer with exact actions', () => {
@@ -266,9 +268,9 @@ describe('stage 31 frontend shell', () => {
     assert.ok(chrome.includes('stopPropagation'), 'close must not trigger tab selection underneath')
     assert.ok(chrome.includes('onCloseSession'), 'close must invoke the existing presentation-close action')
     assert.ok(!chrome.includes('Delete session') && !chrome.includes('aria-label="Delete'), 'close must never read as delete')
-    const tabs = chrome.match(/role="tab"/g) ?? []
-    assert.equal(tabs.length, 1, 'only the active session renders as a tab; no fake multi-tab system')
-    assert.ok(chrome.includes('app-chrome__newtab'), 'New Session + must sit beside the tab')
+    assert.ok(chrome.includes('openSessionIds.map((sessionId)'), 'strip must render every open tab, not one fixed tab')
+    assert.ok(chrome.includes('aria-selected={active}'), 'exactly one tab must read selected at a time')
+    assert.ok(chrome.includes('app-chrome__newtab'), 'New Session + must sit beside the strip')
     assert.ok(chrome.includes('onNewSession'), '+ must invoke the existing new-session action')
     assert.ok(chrome.includes('app-chrome__history-item'), 'history must live in the tab overflow')
     assert.ok(chrome.includes('onSelectSession'), 'history must switch via the existing select action')
@@ -281,9 +283,13 @@ describe('stage 31 frontend shell', () => {
     assert.ok(tab !== null, 'tab CSS must exist')
     assert.ok(tab[0].includes('border-radius: 10px'), 'tab must read as a desktop pill')
     assert.ok(tab[0].includes('min-height: 44px'), 'tab must scale with the 60px chrome (44–48px)')
-    assert.ok(tab[0].includes('min-width: 180px') || css.includes('min-width: 180px'), 'tab must not collapse')
-    assert.ok(css.includes('max-width: 420px'), 'long titles must not consume the toolbar')
-    assert.ok(tab[0].includes('background: var(--stark-elevated)'), 'tab resting surface must stay neutral')
+    assert.ok(tab[0].includes('min-width: 130px'), 'tabs must shrink to a compact minimum before the strip scrolls')
+    assert.ok(tab[0].includes('max-width: 320px'), 'long titles must not consume the toolbar')
+    assert.ok(css.includes('.app-chrome__tab--active'), 'active tab must carry its own surface')
+    const activeTab = css.match(/\.app-chrome__tab--active\s*\{[^}]*\}/)
+    assert.ok(activeTab !== null && activeTab[0].includes('background: var(--stark-elevated)'), 'active tab must read elevated')
+    const strip = css.match(/\.app-chrome__tabs\s*\{[^}]*\}/)
+    assert.ok(strip !== null && strip[0].includes('overflow-x: auto'), 'the strip must scroll instead of pushing chrome controls offscreen')
     const dot = css.match(/\.app-chrome__tab-dot\s*\{[^}]*\}/)
     assert.ok(dot !== null && dot[0].includes('background: var(--stark-magenta)'), 'tab identity must read magenta')
     const home = readRenderer('pages/HomePage.tsx')

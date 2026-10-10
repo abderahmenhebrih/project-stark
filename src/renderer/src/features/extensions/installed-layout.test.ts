@@ -124,6 +124,61 @@ describe('installed extension layout', () => {
     assert.ok(iconFn.includes('setFailedUrl(iconUrl)'), 'errors must pin the failing URL')
   })
 
+  it('Enable/Disable use the STARK secondary control', () => {
+    const source = readRenderer('features/extensions/ExtensionsPanel.tsx')
+    const stateAction = source.slice(source.indexOf('function renderStateAction('), source.indexOf('function handleRun('))
+    assert.ok(stateAction.includes('className="extensions__secondary"'), 'Enable/Disable must use the STARK button class')
+    assert.ok(!stateAction.includes('className="extensions__uninstall"'), 'primary action must not wear destructive paint')
+    const css = readRenderer('features/extensions/ExtensionsPanel.css')
+    const secondary = css.match(/\.extensions__secondary\s*\{[^}]*\}/)
+    assert.ok(secondary !== null, 'STARK secondary rule must exist')
+    assert.ok(secondary[0].includes('var(--stark-border)'), 'secondary must use the STARK border token')
+    assert.ok(secondary[0].includes('var(--stark-radius-sm)'), 'secondary must use the STARK radius token')
+  })
+
+  it('Uninstall uses a restrained STARK destructive style, never native', () => {
+    const source = readRenderer('features/extensions/ExtensionsPanel.tsx')
+    assert.ok(source.includes('className="extensions__uninstall"'), 'Uninstall must use the destructive class')
+    const css = readRenderer('features/extensions/ExtensionsPanel.css')
+    const uninstall = css.match(/\.extensions__uninstall\s*\{[^}]*\}/)
+    assert.ok(uninstall !== null, 'destructive rule must exist (unstyled buttons render browser-native)')
+    for (const token of ['var(--stark-text)', 'var(--stark-border)', 'var(--stark-radius-sm)']) {
+      assert.ok(uninstall[0].includes(token), `destructive base must use ${token}`)
+    }
+    const hover = css.match(/\.extensions__uninstall:hover[^{]*\{[^}]*\}/)
+    assert.ok(hover !== null && hover[0].includes('var(--stark-danger)'), 'hover must turn destructive red')
+    assert.ok(!hover[0].includes('#fff') && !hover[0].includes('white'), 'hover must never be bright native white')
+  })
+
+  it('overflow and checkbox controls use STARK styling', () => {
+    const source = readRenderer('features/extensions/ExtensionsPanel.tsx')
+    assert.ok(source.includes('className="extensions__menu-toggle"'), 'overflow must use the styled toggle')
+    assert.ok(source.includes('className="extensions__menu-item"'), 'menu actions must use the styled item')
+    assert.ok(source.includes('className="extensions__checkbox"'), 'checkboxes must use the STARK control class')
+    const css = readRenderer('features/extensions/ExtensionsPanel.css')
+    const toggle = css.match(/\.extensions__menu-toggle\s*\{[^}]*\}/)
+    assert.ok(toggle !== null && toggle[0].includes('background'), 'overflow toggle must paint explicitly')
+    const checkbox = css.match(/\.extensions__checkbox\s*\{[^}]*\}/)
+    assert.ok(checkbox !== null, 'STARK checkbox rule must exist')
+    assert.ok(checkbox[0].includes('appearance: none'), 'checkbox must replace native paint')
+    const checked = css.match(/\.extensions__checkbox:checked\s*\{[^}]*\}/)
+    assert.ok(checked !== null && checked[0].includes('var(--stark-lime)'), 'checked state must use STARK lime')
+  })
+
+  it('installed buttons share one height/radius language at 392px', () => {
+    const css = readRenderer('features/extensions/ExtensionsPanel.css')
+    for (const rule of ['.extensions__secondary', '.extensions__uninstall']) {
+      const match = css.match(new RegExp(`${rule.replace(/\./g, '\\.')}\\s*\\{[^}]*\\}`))
+      assert.ok(match !== null, `${rule} must exist`)
+      assert.ok(match[0].includes('min-height: 30px'), `${rule} must share the 30px control height`)
+      assert.ok(match[0].includes('border-radius: var(--stark-radius-sm)'), `${rule} must share the STARK radius`)
+      assert.ok(match[0].includes(':focus-visible') || css.includes(`${rule}:focus-visible`), `${rule} must expose focus styling`)
+    }
+    const row = css.match(/\.extensions__installed-row\s*\{[^}]*\}/)
+    assert.ok(row !== null && row[0].includes('overflow: hidden'), 'card must clip instead of overflowing')
+    assert.ok(row[0].includes('max-width: 100%'), 'card must stay within 392px')
+  })
+
   it('stays 392px-safe: column card, wrapping actions, ellipsized names, bounded menu', () => {
     const css = readRenderer('features/extensions/ExtensionsPanel.css')
     const row = css.match(/\.extensions__installed-row\s*\{[^}]*\}/)
@@ -143,5 +198,22 @@ describe('installed extension layout', () => {
     assert.ok(source.includes('activeIds.includes('), 'Loaded must derive from host-active ids')
     assert.ok(source.includes('Enabled · Not loaded'), 'enabled-but-idle must say Not loaded')
     assert.ok(source.includes('Disabled'), 'disabled state must render')
+  })
+
+  it('Loaded reflects the live host active set on both sides of IPC', () => {
+    // Renderer half: activeIds feeds purely from listActiveExtensions.
+    const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
+    assert.ok(panel.includes('listActiveExtensions'), 'renderer must load the live active set')
+    assert.ok(panel.includes('refreshActive()'), 'active set must refresh on view and state changes')
+    // Main half: the active set is recorded only on a successful
+    // host activation reply, and details read it live.
+    const activation = readRenderer('../../main/extension-host/extension-activation-service.ts')
+    assert.ok(activation.includes('this.active.set(id,'), 'active must record on host-confirmed activation')
+    assert.ok(activation.includes('EXTENSION_ACTIVATED'), 'activation must settle on the host reply')
+    const runtime = readRenderer('../../main/extension-host/extension-runtime-service.ts')
+    assert.ok(
+      runtime.includes('active: this.activationService.listActive().includes(id)'),
+      'details must read the live active set, never a cached flag'
+    )
   })
 })
