@@ -51,6 +51,7 @@
     "src/renderer/src/features/terminal/terminal-guard.ts",
     "src/renderer/src/features/terminal/terminal-dimensions.ts",
     "src/renderer/src/features/terminal/terminal-state.test.ts",
+    "src/renderer/src/features/terminal/terminal-activity.test.ts",
     "src/renderer/src/features/git/git-state.ts",
     "src/renderer/src/features/git/git-state.test.ts",
     "src/renderer/src/features/git/git-content-safety.test.ts",

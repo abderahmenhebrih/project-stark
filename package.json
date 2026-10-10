@@ -5,8 +5,8 @@
   "main": "./out/main/index.js",
   "type": "module",
   "scripts": {
-    "dev": "node scripts/copy-extension-host-bootstrap.cjs && electron-vite dev",
-    "build": "electron-vite build && node scripts/copy-extension-host-bootstrap.cjs",
+    "dev": "node scripts/copy-extension-host-bootstrap.cjs && node scripts/copy-terminal-host-bootstrap.cjs && electron-vite dev",
+    "build": "electron-vite build && node scripts/copy-extension-host-bootstrap.cjs && node scripts/copy-terminal-host-bootstrap.cjs",
     "start": "electron ./out/main/index.js",
     "dist": "npm run build && electron-builder --publish=never",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",

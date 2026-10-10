@@ -1,372 +1,194 @@
-import { useEffect, useReducer, useRef, type ReactElement } from 'react'
-import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
-import '@xterm/xterm/css/xterm.css'
-import { getTerminalApi } from '../../lib/terminal-api'
-import { registerTerminalKillHandler, setTerminalActive } from './terminal-guard'
-import { clampTerminalDimensions, initialTerminalState, terminalPanelReducer } from './terminal-state'
-import { DEFAULT_TERMINAL_COLS, DEFAULT_TERMINAL_ROWS, TERMINAL_SCROLLBACK_LINES } from './terminal-dimensions'
+import { Fragment, useRef, type ReactElement } from 'react'
+import type { Terminal } from '@xterm/xterm'
+import { StarkIcon } from '../../components/icons/StarkIcon'
+import { TerminalInstanceView } from './TerminalInstanceView'
+import type { HumanTerminalEntry } from './terminal-state'
 import './TerminalPanel.css'
 
 interface TerminalPanelProps {
-  readonly workspaceId: number
-}
-
-function toDisplayError(error: unknown): string {
-  return error instanceof Error && error.message !== '' ? error.message : 'We couldn’t start the terminal.'
+  readonly sessions: readonly HumanTerminalEntry[]
+  readonly activeId: string | null
+  readonly visibleIds: readonly string[]
+  readonly splitRatio: number | null
+  readonly starting: boolean
+  readonly onNew: () => void
+  readonly onSplitPane: (sessionId: string) => void
+  readonly onClearPane: (sessionId: string) => void
+  readonly onClosePane: (sessionId: string) => void
+  readonly onSplitRatioChange: (ratio: number) => void
+  readonly onRegisterInstance: (sessionId: string, term: Terminal) => void
+  readonly onUnregisterInstance: (sessionId: string) => void
 }
 
 /**
- * Human-controlled terminal panel (Stage 11).
+ * Multi-terminal viewport root (human terminals only).
  *
- * Collapsed by default; only an explicit Start creates a PTY through
- * the narrow terminal bridge. xterm renders locally-bundled output
- * only (no innerHTML), input flows as keystrokes via terminal.write,
- * and Clear affects display only. No auto-spawn, no persistence, no
- * agent access.
+ * Exactly one TerminalInstanceView per live session, keyed by session
+ * id in stable creation order — selection changes only toggle CSS
+ * visibility, never remount. That is what preserves PTY processes,
+ * buffers, scrollback, and command state across switches: unmounting
+ * would dispose the xterm and lose everything. Split panes are
+ * independent: input routes by construction, killing one never
+ * touches the other. Presentational only: session lifecycle lives in
+ * the Explorer-owned reducer.
  */
-export function TerminalPanel({ workspaceId }: TerminalPanelProps): ReactElement {
-  const [state, dispatch] = useReducer(terminalPanelReducer, initialTerminalState())
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  const terminalRef = useRef<Terminal | null>(null)
-  const fitRef = useRef<FitAddon | null>(null)
-  const sessionRef = useRef<string | null>(null)
-  const statusRef = useRef(state.status)
-  const workspaceRef = useRef(workspaceId)
-  const resizeFrame = useRef<number | null>(null)
-  const lastDims = useRef<{ cols: number; rows: number } | null>(null)
+export function TerminalPanel({
+  sessions,
+  activeId,
+  visibleIds,
+  splitRatio,
+  starting,
+  onNew,
+  onSplitPane,
+  onClearPane,
+  onClosePane,
+  onSplitRatioChange,
+  onRegisterInstance,
+  onUnregisterInstance
+}: TerminalPanelProps): ReactElement {
+  const splitRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<{ readonly pointerId: number } | null>(null)
 
-  useEffect(() => {
-    statusRef.current = state.status
-  }, [state.status])
+  const visibleCount = visibleIds.filter((id) => sessions.some((entry) => entry.id === id)).length
+  const split = visibleCount === 2
+  const ratio = splitRatio ?? 0.5
 
-  useEffect(() => {
-    workspaceRef.current = workspaceId
-  }, [workspaceId])
-
-  // Publish running state for the workspace-switch guard.
-  useEffect(() => {
-    setTerminalActive(state.status === 'running')
-    return () => {
-      setTerminalActive(false)
+  function handleDividerPointerDown(event: React.PointerEvent): void {
+    if (event.button !== 0 || !split) {
+      return
     }
-  }, [state.status])
+    dragRef.current = { pointerId: event.pointerId }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
 
-  // Register bounded kill for confirmed workspace switches.
-  useEffect(() => {
-    registerTerminalKillHandler(async () => {
-      const sessionId = sessionRef.current
-      if (sessionId === null) {
-        return
-      }
-      const api = getTerminalApi()
-      if (api === undefined) {
-        return
-      }
-      try {
-        await api.kill({ sessionId })
-      } catch {
-        // Best effort; the switch proceeds and the panel resets.
-      } finally {
-        sessionRef.current = null
-      }
-    })
-    return () => {
-      registerTerminalKillHandler(null)
+  function handleDividerPointerMove(event: React.PointerEvent): void {
+    const drag = dragRef.current
+    const container = splitRef.current
+    if (drag === null || drag.pointerId !== event.pointerId || container === null) {
+      return
     }
-  }, [])
+    const rect = container.getBoundingClientRect()
+    if (rect.width <= 0) {
+      return
+    }
+    onSplitRatioChange((event.clientX - rect.left) / rect.width)
+  }
 
-  // Reset on workspace change: never carry a session across projects.
-  useEffect(() => {
-    dispatch({ type: 'workspace-changed' })
-    sessionRef.current = null
-    lastDims.current = null
+  function handleDividerPointerEnd(event: React.PointerEvent): void {
+    const drag = dragRef.current
+    if (drag === null || drag.pointerId !== event.pointerId) {
+      return
+    }
+    dragRef.current = null
     try {
-      terminalRef.current?.dispose()
+      event.currentTarget.releasePointerCapture(event.pointerId)
     } catch {
-      // Best effort during reset.
-    } finally {
-      terminalRef.current = null
-      fitRef.current = null
-    }
-  }, [workspaceId])
-
-  // Fixed data/exit subscriptions: only the current session writes.
-  useEffect(() => {
-    const api = getTerminalApi()
-    if (api === undefined) {
-      return
-    }
-    const offData = api.onData((event) => {
-      if (sessionRef.current === null || event.sessionId !== sessionRef.current) {
-        return
-      }
-      if (statusRef.current !== 'running' && statusRef.current !== 'exited') {
-        return
-      }
-      try {
-        terminalRef.current?.write(event.data)
-      } catch {
-        // Best effort streaming.
-      }
-    })
-    const offExit = api.onExit((event) => {
-      if (sessionRef.current === null || event.sessionId !== sessionRef.current) {
-        return
-      }
-      dispatch({ type: 'exit-received', exit: event })
-      try {
-        terminalRef.current?.write('\r\n[Terminal exited]\r\n')
-      } catch {
-        // Best effort.
-      }
-    })
-    return () => {
-      offData()
-      offExit()
-    }
-  }, [])
-
-  // Resize observation: fit locally, then send bounded dims (rAF debounce).
-  useEffect(() => {
-    const container = containerRef.current
-    if (container === null || typeof ResizeObserver === 'undefined') {
-      return
-    }
-    const observer = new ResizeObserver(() => {
-      if (resizeFrame.current !== null) {
-        cancelAnimationFrame(resizeFrame.current)
-      }
-      resizeFrame.current = requestAnimationFrame(() => {
-        resizeFrame.current = null
-        const term = terminalRef.current
-        const fit = fitRef.current
-        const sessionId = sessionRef.current
-        if (term === null || fit === null || sessionId === null || statusRef.current !== 'running') {
-          return
-        }
-        try {
-          fit.fit()
-        } catch {
-          return
-        }
-        const proposed = fit.proposeDimensions()
-        if (proposed === undefined || proposed.cols <= 0 || proposed.rows <= 0) {
-          return
-        }
-        const dims = clampTerminalDimensions(proposed.cols, proposed.rows)
-        const last = lastDims.current
-        if (last !== null && last.cols === dims.cols && last.rows === dims.rows) {
-          return
-        }
-        lastDims.current = dims
-        const api = getTerminalApi()
-        if (api === undefined) {
-          return
-        }
-        api.resize({ sessionId, cols: dims.cols, rows: dims.rows }).catch(() => {
-          // Resize failures are non-fatal; the shell keeps running.
-        })
-      })
-    })
-    observer.observe(container)
-    return () => {
-      observer.disconnect()
-      if (resizeFrame.current !== null) {
-        cancelAnimationFrame(resizeFrame.current)
-        resizeFrame.current = null
-      }
-    }
-  }, [state.status])
-
-  function ensureTerminal(): Terminal | null {
-    if (terminalRef.current !== null) {
-      return terminalRef.current
-    }
-    const container = containerRef.current
-    if (container === null) {
-      return null
-    }
-    try {
-      const term = new Terminal({
-        allowTransparency: false,
-        convertEol: false,
-        cursorBlink: true,
-        fontFamily: "'JetBrains Mono','Cascadia Code','Fira Code',Consolas,monospace",
-        fontSize: 13,
-        scrollback: TERMINAL_SCROLLBACK_LINES,
-        theme: {
-          background: '#0a0c0a',
-          foreground: '#e9f1ea',
-          cursor: '#c8ff00',
-          selectionBackground: 'rgba(200, 255, 0, 0.25)'
-        }
-      })
-      const fit = new FitAddon()
-      term.loadAddon(fit)
-      term.open(container)
-      terminalRef.current = term
-      fitRef.current = fit
-      term.onData((data) => {
-        const sessionId = sessionRef.current
-        if (sessionId === null || statusRef.current !== 'running') {
-          return
-        }
-        const api = getTerminalApi()
-        if (api === undefined) {
-          return
-        }
-        api.write({ sessionId, data }).catch(() => {
-          // Write failures surface via exit/error paths; keep typing alive.
-        })
-      })
-      return term
-    } catch {
-      return null
+      // Best effort; the drag is over either way.
     }
   }
 
-  async function handleStart(): Promise<void> {
-    if (state.status === 'starting' || state.status === 'running') {
-      return
-    }
-    const api = getTerminalApi()
-    if (api === undefined) {
-      dispatch({ type: 'start-failed', message: 'We couldn’t start the terminal.' })
-      return
-    }
-    dispatch({ type: 'start-requested' })
-    try {
-      const term = ensureTerminal()
-      let cols = DEFAULT_TERMINAL_COLS
-      let rows = DEFAULT_TERMINAL_ROWS
-      const fit = fitRef.current
-      if (term !== null && fit !== null) {
-        try {
-          fit.fit()
-          const proposed = fit.proposeDimensions()
-          if (proposed !== undefined && proposed.cols > 0 && proposed.rows > 0) {
-            const dims = clampTerminalDimensions(proposed.cols, proposed.rows)
-            cols = dims.cols
-            rows = dims.rows
-          }
-        } catch {
-          // Fall back to defaults when layout is not ready.
-        }
-      }
-      lastDims.current = { cols, rows }
-      const session = await api.create({ workspaceId, cols, rows })
-      sessionRef.current = session.id
-      dispatch({ type: 'start-succeeded', session })
-      try {
-        term?.clear()
-        term?.focus()
-      } catch {
-        // Best effort.
-      }
-    } catch (error) {
-      sessionRef.current = null
-      dispatch({ type: 'start-failed', message: toDisplayError(error) })
-    }
+  if (sessions.length === 0) {
+    return (
+      <section className="terminal terminal--empty" aria-label="Terminal">
+        <p className="terminal__empty-title">Terminal</p>
+        <p className="terminal__empty-copy">{starting ? 'Starting terminal…' : 'No terminals running.'}</p>
+        {!starting && (
+          <button className="explorer__primary" type="button" onClick={onNew}>
+            New terminal
+          </button>
+        )}
+      </section>
+    )
   }
-
-  function handleClear(): void {
-    try {
-      terminalRef.current?.clear()
-    } catch {
-      // Best effort display-only clear.
-    }
-  }
-
-  function handleKill(): void {
-    const sessionId = sessionRef.current
-    if (sessionId === null) {
-      dispatch({ type: 'closed' })
-      return
-    }
-    const api = getTerminalApi()
-    if (api === undefined) {
-      return
-    }
-    dispatch({ type: 'kill-requested' })
-    api.kill({ sessionId }).catch(() => {
-      // Kill failures keep the exited UI; the exit event (or guard)
-      // resolves the session. Never throw from an explicit control.
-    })
-  }
-
-  function handleDismiss(): void {
-    const sessionId = sessionRef.current
-    const api = getTerminalApi()
-    if (sessionId !== null && (state.status === 'running' || state.status === 'starting')) {
-      api?.kill({ sessionId }).catch(() => {
-        // Best effort; dismissal is authoritative.
-      })
-    }
-    sessionRef.current = null
-    try {
-      terminalRef.current?.dispose()
-    } catch {
-      // Best effort.
-    } finally {
-      terminalRef.current = null
-      fitRef.current = null
-    }
-    dispatch({ type: 'closed' })
-  }
-
-  const running = state.status === 'running'
-  const starting = state.status === 'starting'
-  const exited = state.status === 'exited'
-  const shellLabel = state.session?.shell ?? ''
 
   return (
     <section className="terminal" aria-label="Terminal">
-      <div className="terminal__bar" role="toolbar" aria-label="Terminal controls">
-        <div className="terminal__identity">
-          <span className="terminal__title">Terminal</span>
-          {running && shellLabel !== '' && <span className="terminal__shell">{shellLabel}</span>}
-          {starting && <span className="terminal__status">Starting…</span>}
-          {exited && <span className="terminal__status">Terminal exited</span>}
-        </div>
-        <div className="terminal__actions">
-          {state.status === 'closed' ? (
-            <button className="terminal__primary" type="button" onClick={() => void handleStart()}>
-              Start
-            </button>
-          ) : (
-            <>
-              <button className="terminal__secondary" type="button" onClick={handleClear}>
-                Clear
-              </button>
-              {running || starting ? (
-                <button className="terminal__secondary" type="button" onClick={handleKill}>
-                  Kill
-                </button>
-              ) : (
-                <>
-                  <button className="terminal__primary" type="button" onClick={() => void handleStart()}>
-                    Start
+      <div ref={splitRef} className={split ? 'terminal-split' : 'terminal-single'}>
+        {sessions.map((entry) => {
+          // Stable key in creation order: toggling visibility below
+          // only flips CSS, so React never remounts (and never
+          // disposes) the xterm on selection changes.
+          const active = entry.id === activeId
+          const visibleIndex = visibleIds.indexOf(entry.id)
+          const isVisible = visibleIndex !== -1
+          const paneStyle = !isVisible
+            ? { display: 'none' }
+            : split
+              ? {
+                  flexGrow: 0,
+                  flexShrink: 0,
+                  flexBasis: `${(visibleIndex === 0 ? ratio : 1 - ratio) * 100}%`
+                }
+              : undefined
+          return (
+            <Fragment key={entry.id}>
+              <div
+                className={active ? 'terminal-pane terminal-pane--active' : 'terminal-pane'}
+                style={paneStyle}
+                aria-label={active ? `${entry.title} (active terminal)` : entry.title}
+              >
+                <div className="terminal-pane__header">
+                  <StarkIcon name="terminal" size={14} />
+                  <span className="terminal-pane__title">{entry.title}</span>
+                  {entry.status !== 'running' && <span className="terminal-pane__meta">{entry.status}</span>}
+                  <span className="terminal-pane__spacer" aria-hidden="true" />
+                  <button
+                    className="terminal-pane__iconbtn"
+                    type="button"
+                    onClick={() => onSplitPane(entry.id)}
+                    disabled={entry.status !== 'running'}
+                    aria-label={`Split ${entry.title}`}
+                    title={entry.status === 'running' ? `Split ${entry.title}` : 'Start state cannot split'}
+                  >
+                    Split
                   </button>
-                  <button className="terminal__secondary" type="button" onClick={handleDismiss}>
-                    Close
+                  <button
+                    className="terminal-pane__iconbtn"
+                    type="button"
+                    onClick={() => onClearPane(entry.id)}
+                    aria-label={`Clear ${entry.title}`}
+                    title={`Clear ${entry.title}`}
+                  >
+                    Clear
                   </button>
-                </>
+                  <button
+                    className="terminal-pane__iconbtn"
+                    type="button"
+                    onClick={() => onClosePane(entry.id)}
+                    aria-label={`Close ${entry.title}`}
+                    title={`Close ${entry.title}`}
+                  >
+                    <StarkIcon name="close" size={12} />
+                  </button>
+                </div>
+                <TerminalInstanceView
+                  sessionId={entry.id}
+                  running={entry.status === 'running'}
+                  visible={isVisible}
+                  onRegister={onRegisterInstance}
+                  onUnregister={onUnregisterInstance}
+                />
+              </div>
+              {split && visibleIndex === 0 && (
+                <div
+                  className="terminal-split__divider"
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Resize split terminals"
+                  aria-valuenow={Math.round(ratio * 100)}
+                  aria-valuemin={20}
+                  aria-valuemax={80}
+                  tabIndex={0}
+                  onPointerDown={handleDividerPointerDown}
+                  onPointerMove={handleDividerPointerMove}
+                  onPointerUp={handleDividerPointerEnd}
+                  onPointerCancel={handleDividerPointerEnd}
+                />
               )}
-            </>
-          )}
-        </div>
+            </Fragment>
+          )
+        })}
       </div>
-      {state.error !== null && (
-        <p className="terminal__error" role="alert">
-          {state.error}
-        </p>
-      )}
-      {state.status !== 'closed' && (
-        <div className="terminal__viewport">
-          <div ref={containerRef} className="terminal__xterm" role="application" aria-label="Terminal" />
-        </div>
-      )}
     </section>
   )
 }

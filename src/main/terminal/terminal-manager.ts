@@ -6,10 +6,14 @@ import type {
 } from '../../shared/terminal/types'
 import {
   InvalidTerminalRequestError,
+  TerminalCloseFailedError,
+  TerminalLimitError,
   TerminalNotFoundError,
-  TerminalOwnershipError
+  TerminalOwnershipError,
+  TerminalUnavailableError
 } from './errors'
 import {
+  MAX_HUMAN_TERMINALS,
   MAX_TERMINAL_COLS,
   MAX_TERMINAL_INPUT_BYTES,
   MAX_TERMINAL_OUTPUT_CHUNK_BYTES,
@@ -18,7 +22,8 @@ import {
   MIN_TERMINAL_COLS,
   MIN_TERMINAL_ROWS
 } from './limits'
-import { splitOutputForIpc, type PtyFactory, type PtyHandle } from './pty-adapter'
+import type { TerminalHostClient } from './terminal-host-client'
+import { splitOutputForIpc } from './pty-adapter'
 
 /** Main → owner-renderer event sink (wired to WebContents.send by IPC). */
 export interface TerminalEventSink {
@@ -29,7 +34,6 @@ export interface TerminalEventSink {
 interface ManagedSession {
   readonly session: TerminalSession
   readonly ownerWebContentsId: number
-  readonly pty: PtyHandle
   running: boolean
   exitDelivered: boolean
 }
@@ -63,24 +67,43 @@ function inputByteLength(data: string): number {
 }
 
 /**
- * Session lifecycle + ownership (Stage 11).
+ * Human-terminal lifecycle + ownership broker (multi-terminal).
  *
- * One active terminal per owning WebContents: requesting Start while
- * one already runs returns the existing active session (no hidden
- * accumulation). Every operation verifies ownership — a renderer that
- * learns another session ID cannot write/resize/kill it. PTY output
- * streams only to the owning WebContents in bounded chunks; main keeps
- * no unbounded history buffer. Exit is delivered once, then the
- * session is removed.
+ * This class owns NO node-pty handles: every PTY lives in the
+ * dedicated Terminal Host process behind TerminalHostClient, so a
+ * blocking native ConPTY operation (notably kill on Windows, measured
+ * at ~2–5s on Electron main) can never stall Electron's main event
+ * loop. Main stays a narrow broker: shell policy, workspace cwd,
+ * environment, opaque ids, per-owner caps, and ownership checks all
+ * remain here; the host only executes validated commands for ids
+ * main minted.
+ *
+ * Each owning WebContents may hold up to MAX_HUMAN_TERMINALS live
+ * terminals with stable opaque IDs. Every creation spawns a new,
+ * independent PTY — never reusing, evicting, or touching a running
+ * one. Every operation verifies ownership. PTY output streams only
+ * to the owning WebContents in bounded chunks; main keeps no
+ * unbounded history buffer. Exit is delivered once per session,
+ * then that session is removed.
  */
 export class TerminalManager {
   private readonly sessions = new Map<string, ManagedSession>()
-  private readonly ownerIndex = new Map<number, string>()
+  private readonly ownerIndex = new Map<number, Set<string>>()
 
   constructor(
-    private readonly ptyFactory: PtyFactory,
+    private readonly host: TerminalHostClient,
     private readonly sink: TerminalEventSink
-  ) {}
+  ) {
+    this.host.onEvent((event) => {
+      if (event.kind === 'data') {
+        this.handleHostData(event.sessionId, event.data)
+      } else if (event.kind === 'exit') {
+        this.handleHostExit(event.sessionId, event.exitCode, event.signal)
+      } else {
+        this.handleHostDown()
+      }
+    })
+  }
 
   /** Active session count (for diagnostics/tests; not exposed to UI). */
   get size(): number {
@@ -88,10 +111,12 @@ export class TerminalManager {
   }
 
   /**
-   * Creates (or returns the existing) terminal for the owning renderer.
-   * Spawning itself is injected, so tests never touch the native binary.
+   * Spawns one new independent terminal for the owning renderer.
+   * Always creates (never returns an existing session); past the
+   * per-owner cap it throws before spawning — no eviction, never
+   * silently killing a running terminal.
    */
-  createSession(input: {
+  async createSession(input: {
     ownerWebContentsId: number
     workspaceId: number
     cwd: string
@@ -100,79 +125,46 @@ export class TerminalManager {
     shellLabel: string
     cols: number
     rows: number
-  }): TerminalSession {
-    if (!isValidDimensions(input.cols, input.rows)) {
-      throw new InvalidTerminalRequestError('terminal dimensions are invalid')
-    }
-    const existingId = this.ownerIndex.get(input.ownerWebContentsId)
-    if (existingId !== undefined) {
-      const existing = this.sessions.get(existingId)
-      if (existing !== undefined && existing.running) {
-        return existing.session
-      }
-      // Stale index entry: fall through and replace it.
-      this.sessions.delete(existingId)
-      this.ownerIndex.delete(input.ownerWebContentsId)
-    }
-    const id = randomUUID()
-    const pty = this.ptyFactory.spawn(input.shellFile, input.shellArgs, {
-      cwd: input.cwd,
-      cols: input.cols,
-      rows: input.rows,
-      env: {}
-    })
-    const session: TerminalSession = {
-      id,
-      workspaceId: input.workspaceId,
-      shell: input.shellLabel,
-      running: true
-    }
-    const managed: ManagedSession = {
-      session,
-      ownerWebContentsId: input.ownerWebContentsId,
-      pty,
-      running: true,
-      exitDelivered: false
-    }
-    this.sessions.set(id, managed)
-    this.ownerIndex.set(input.ownerWebContentsId, id)
-    pty.onData((data) => {
-      this.handlePtyData(id, data)
-    })
-    pty.onExit(({ exitCode, signal }) => {
-      this.handlePtyExit(id, exitCode, signal)
-    })
-    return session
+  }): Promise<TerminalSession> {
+    return this.spawnSession({ ...input, env: {} })
   }
 
   /**
-   * Attaches the real environment-bearing spawn for production use:
-   * the manager core above spawns with an empty env so unit tests stay
-   * hermetic; production passes env through this seam. Kept minimal by
-   * design — no extra ceremony beyond the boundary.
+   * Production creation with the real environment-bearing spawn. The
+   * manager core above spawns with an empty env so unit tests stay
+   * hermetic; production passes env through this seam.
    */
-  createSessionWithEnv(
+  async createSessionWithEnv(
     input: Parameters<TerminalManager['createSession']>[0] & { env: Record<string, string> }
-  ): TerminalSession {
+  ): Promise<TerminalSession> {
+    return this.spawnSession(input)
+  }
+
+  private async spawnSession(
+    input: Parameters<TerminalManager['createSession']>[0] & { env: Record<string, string> }
+  ): Promise<TerminalSession> {
     if (!isValidDimensions(input.cols, input.rows)) {
       throw new InvalidTerminalRequestError('terminal dimensions are invalid')
     }
-    const existingId = this.ownerIndex.get(input.ownerWebContentsId)
-    if (existingId !== undefined) {
-      const existing = this.sessions.get(existingId)
-      if (existing !== undefined && existing.running) {
-        return existing.session
-      }
-      this.sessions.delete(existingId)
-      this.ownerIndex.delete(input.ownerWebContentsId)
+    this.pruneOwnerIndex(input.ownerWebContentsId)
+    if (this.liveCountForOwner(input.ownerWebContentsId) >= MAX_HUMAN_TERMINALS) {
+      throw new TerminalLimitError()
     }
     const id = randomUUID()
-    const pty = this.ptyFactory.spawn(input.shellFile, input.shellArgs, {
-      cwd: input.cwd,
-      cols: input.cols,
-      rows: input.rows,
-      env: input.env
-    })
+    try {
+      await this.host.create({
+        sessionId: id,
+        workspaceId: input.workspaceId,
+        cwd: input.cwd,
+        shellFile: input.shellFile,
+        shellArgs: input.shellArgs,
+        cols: input.cols,
+        rows: input.rows,
+        env: input.env
+      })
+    } catch {
+      throw new TerminalUnavailableError()
+    }
     const session: TerminalSession = {
       id,
       workspaceId: input.workspaceId,
@@ -182,18 +174,16 @@ export class TerminalManager {
     const managed: ManagedSession = {
       session,
       ownerWebContentsId: input.ownerWebContentsId,
-      pty,
       running: true,
       exitDelivered: false
     }
     this.sessions.set(id, managed)
-    this.ownerIndex.set(input.ownerWebContentsId, id)
-    pty.onData((data) => {
-      this.handlePtyData(id, data)
-    })
-    pty.onExit(({ exitCode, signal }) => {
-      this.handlePtyExit(id, exitCode, signal)
-    })
+    let owned = this.ownerIndex.get(input.ownerWebContentsId)
+    if (owned === undefined) {
+      owned = new Set<string>()
+      this.ownerIndex.set(input.ownerWebContentsId, owned)
+    }
+    owned.add(id)
     return session
   }
 
@@ -211,7 +201,7 @@ export class TerminalManager {
     if (!managed.running) {
       throw new TerminalNotFoundError()
     }
-    managed.pty.write(data)
+    this.host.write(sessionId, data)
   }
 
   resizeSession(ownerWebContentsId: number, sessionId: unknown, cols: unknown, rows: unknown): void {
@@ -225,10 +215,18 @@ export class TerminalManager {
     if (!managed.running) {
       throw new TerminalNotFoundError()
     }
-    managed.pty.resize(cols as number, rows as number)
+    this.host.resize(sessionId, cols as number, rows as number)
   }
 
-  killSession(ownerWebContentsId: number, sessionId: unknown): void {
+  /**
+   * Two-phase close contract: validates ownership, asks the host to
+   * terminate exactly this PTY, and maps the host outcome —
+   * `initiated` marks closing and returns promptly (exit finalizes
+   * later), `gone` removes and reports NotFound (renderer finalizes),
+   * `failed` throws a close error (renderer restores the terminal).
+   * Never waits for the shell exit itself.
+   */
+  async killSession(ownerWebContentsId: number, sessionId: unknown): Promise<void> {
     if (!isValidSessionId(sessionId)) {
       throw new InvalidTerminalRequestError('terminal session is invalid')
     }
@@ -237,60 +235,101 @@ export class TerminalManager {
       this.removeSession(managed.session.id)
       throw new TerminalNotFoundError()
     }
-    try {
-      managed.pty.kill()
-    } finally {
-      // Exit callback performs authoritative removal; this marks the
-      // intent so post-exit writes are rejected even if exit is slow.
-      managed.running = false
+    const outcome = await this.host.kill(sessionId)
+    if (outcome === 'gone') {
+      this.removeSession(managed.session.id)
+      throw new TerminalNotFoundError()
     }
+    if (outcome !== 'initiated') {
+      throw new TerminalCloseFailedError()
+    }
+    // Exit callback performs authoritative removal; this marks the
+    // intent so post-exit writes are rejected even if exit is slow.
+    managed.running = false
   }
 
   /** Bounded cleanup when an owning renderer is destroyed: no orphans. */
   handleWebContentsDestroyed(ownerWebContentsId: number): void {
-    const sessionId = this.ownerIndex.get(ownerWebContentsId)
-    if (sessionId === undefined) {
+    const owned = this.ownerIndex.get(ownerWebContentsId)
+    if (owned === undefined) {
       return
     }
-    const managed = this.sessions.get(sessionId)
-    if (managed === undefined) {
-      this.ownerIndex.delete(ownerWebContentsId)
-      return
-    }
-    try {
-      if (managed.running) {
-        managed.pty.kill()
+    for (const sessionId of [...owned]) {
+      if (!this.sessions.has(sessionId)) {
+        continue
       }
-    } catch {
-      // Best effort during teardown; removal below is authoritative.
-    } finally {
-      this.removeSession(sessionId)
-    }
-  }
-
-  /** Bounded shutdown of every session (app quit path). */
-  shutdownAll(): void {
-    for (const [sessionId, managed] of [...this.sessions.entries()]) {
+      // Fire-and-forget exact kills; local bookkeeping drops now
+      // while the host processes termination. App-quit shutdown
+      // follows with a bounded host stop as the backstop.
       try {
-        if (managed.running) {
-          managed.pty.kill()
-        }
+        void this.host.kill(sessionId).catch(() => {})
       } catch {
-        // Best effort; removal is authoritative and bounded.
+        // Best effort during teardown.
       } finally {
         this.removeSession(sessionId)
       }
     }
   }
 
-  /** Session for an owner, if one is actively running. */
+  /** Bounded shutdown of every session (app quit path). */
+  async shutdownAll(): Promise<void> {
+    try {
+      await this.host.shutdown()
+    } catch {
+      // Best effort; removal below is authoritative and bounded.
+    } finally {
+      this.sessions.clear()
+      this.ownerIndex.clear()
+    }
+  }
+
+  /** A running session for an owner, if any (insertion order). */
   findActiveForOwner(ownerWebContentsId: number): TerminalSession | undefined {
-    const sessionId = this.ownerIndex.get(ownerWebContentsId)
-    if (sessionId === undefined) {
+    const owned = this.ownerIndex.get(ownerWebContentsId)
+    if (owned === undefined) {
       return undefined
     }
-    const managed = this.sessions.get(sessionId)
-    return managed !== undefined && managed.running ? managed.session : undefined
+    for (const sessionId of owned) {
+      const managed = this.sessions.get(sessionId)
+      if (managed !== undefined && managed.running) {
+        return managed.session
+      }
+    }
+    return undefined
+  }
+
+  /** Live session count for an owner (cap accounting). */
+  liveCountForOwner(ownerWebContentsId: number): number {
+    const owned = this.ownerIndex.get(ownerWebContentsId)
+    if (owned === undefined) {
+      return 0
+    }
+    let count = 0
+    for (const sessionId of owned) {
+      if (this.sessions.get(sessionId)?.running === true) {
+        count += 1
+      }
+    }
+    return count
+  }
+
+  /**
+   * Drops index entries for sessions that no longer exist, so a dead
+   * session never blocks (or inflates) cap accounting.
+   */
+  private pruneOwnerIndex(ownerWebContentsId: number): void {
+    const owned = this.ownerIndex.get(ownerWebContentsId)
+    if (owned === undefined) {
+      return
+    }
+    for (const sessionId of [...owned]) {
+      if (!this.sessions.has(sessionId)) {
+        owned.delete(sessionId)
+      }
+    }
+    if (owned.size === 0) {
+      this.ownerIndex.delete(ownerWebContentsId)
+    }
   }
 
   private requireOwnedSession(ownerWebContentsId: number, sessionId: string): ManagedSession {
@@ -304,7 +343,7 @@ export class TerminalManager {
     return managed
   }
 
-  private handlePtyData(sessionId: string, data: string): void {
+  private handleHostData(sessionId: string, data: string): void {
     const managed = this.sessions.get(sessionId)
     if (managed === undefined || !managed.running) {
       return
@@ -315,7 +354,7 @@ export class TerminalManager {
     }
   }
 
-  private handlePtyExit(sessionId: string, exitCode: number | null, signal: number | null): void {
+  private handleHostExit(sessionId: string, exitCode: number | null, signal: number | null): void {
     const managed = this.sessions.get(sessionId)
     if (managed === undefined || managed.exitDelivered) {
       return
@@ -329,10 +368,36 @@ export class TerminalManager {
     }
   }
 
+  /**
+   * Host process died: every tracked PTY died with it. Each owner
+   * gets one honest exit per session (exitCode unknown); nothing
+   * restarts — the next explicit New Terminal starts a fresh host.
+   */
+  private handleHostDown(): void {
+    for (const [sessionId, managed] of [...this.sessions.entries()]) {
+      if (managed.exitDelivered) {
+        continue
+      }
+      managed.exitDelivered = true
+      managed.running = false
+      try {
+        this.sink.sendExit(managed.ownerWebContentsId, { sessionId, exitCode: null, signal: null })
+      } catch {
+        // Best effort streaming.
+      } finally {
+        this.removeSession(sessionId)
+      }
+    }
+  }
+
   private removeSession(sessionId: string): void {
     const managed = this.sessions.get(sessionId)
-    if (managed !== undefined && this.ownerIndex.get(managed.ownerWebContentsId) === sessionId) {
-      this.ownerIndex.delete(managed.ownerWebContentsId)
+    if (managed !== undefined) {
+      const owned = this.ownerIndex.get(managed.ownerWebContentsId)
+      owned?.delete(sessionId)
+      if (owned !== undefined && owned.size === 0) {
+        this.ownerIndex.delete(managed.ownerWebContentsId)
+      }
     }
     this.sessions.delete(sessionId)
   }

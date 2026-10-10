@@ -13,6 +13,7 @@ import { KeyValueRepository } from '../database/repositories/key-value-repositor
 import { WorkspaceRepository } from '../database/repositories/workspace-repository'
 import { WorkspaceService } from '../workspace/workspace-service'
 import { TerminalManager } from '../terminal/terminal-manager'
+import { createFakeTerminalHostClient } from '../terminal/terminal-host-fake'
 import { createIpcBindings } from './index'
 import { buildOpenDialogOptions, createWorkspaceBindings, type WorkspacePicker } from './workspace'
 import type { IpcChannel } from '../../shared/constants'
@@ -84,11 +85,7 @@ describe('workspace IPC bindings', () => {
     const { db, services } = openServices()
     try {
       const terminalManager = new TerminalManager(
-        {
-          spawn: () => {
-            throw new Error('pty spawn must not run in surface tests')
-          }
-        },
+        createFakeTerminalHostClient(),
         { sendData: () => {}, sendExit: () => {} }
       )
       const channels = createIpcBindings({

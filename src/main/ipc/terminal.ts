@@ -113,7 +113,7 @@ export function createTerminalBindings(
             throw toPublicTerminalError('kill', new Error('untrusted sender'))
           }
           const record = (typeof payload === 'object' && payload !== null ? payload : {}) as Record<string, unknown>
-          manager.killSession(event.sender.id, record['sessionId'])
+          await manager.killSession(event.sender.id, record['sessionId'])
         })
     }
   ]

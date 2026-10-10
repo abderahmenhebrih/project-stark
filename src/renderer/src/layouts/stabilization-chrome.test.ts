@@ -30,35 +30,31 @@ function codeOnly(source: string): string {
 describe('stabilization: terminal rail', () => {
   it('rail order is Explorer/Search/Changes/Git/Extensions/Terminal', () => {
     const rail = codeOnly(readRenderer('features/explorer/ActivityRail.tsx'))
-    // The five drawer views render in ACTIVITIES order via map; the
-    // Terminal action button follows them in the same tablist.
-    const kinds = ['explorer', 'search', 'changes', 'git', 'extensions'].map((kind) =>
+    // All six activities render in ACTIVITIES order via one map —
+    // Terminal is a full activity owning its drawer, below Extensions.
+    const kinds = ['explorer', 'search', 'changes', 'git', 'extensions', 'terminal'].map((kind) =>
       rail.indexOf(`kind: '${kind}'`)
     )
     for (const [position, found] of kinds.entries()) {
-      assert.ok((found ?? -1) >= 0, `rail must declare the ${['explorer', 'search', 'changes', 'git', 'extensions'][position]} activity`)
+      assert.ok((found ?? -1) >= 0, `rail must declare the ${['explorer', 'search', 'changes', 'git', 'extensions', 'terminal'][position]} activity`)
     }
     for (let index = 1; index < kinds.length; index += 1) {
-      assert.ok((kinds[index] ?? -1) > (kinds[index - 1] ?? -1), 'rail order must be Explorer/Search/Changes/Git/Extensions first')
+      assert.ok((kinds[index] ?? -1) > (kinds[index - 1] ?? -1), 'rail order must be Explorer/Search/Changes/Git/Extensions/Terminal')
     }
-    assert.ok(!rail.includes("kind: 'terminal'"), 'Terminal must stay an action, not a drawer view')
-    const terminalButton = rail.indexOf('name="terminal"')
-    assert.ok(terminalButton > (kinds[4] ?? -1), 'Terminal must sit below Extensions')
-    assert.ok(rail.includes('>Terminal</span>'), 'Terminal must carry the same visible label pattern')
+    assert.ok(rail.includes("label: 'Terminal'"), 'Terminal must carry the same visible label pattern')
   })
 
-  it('rail Terminal reuses the existing toggle with active state and no new IPC', () => {
+  it('rail Terminal selects the terminal activity with active state and no new IPC', () => {
     const rail = readRenderer('features/explorer/ActivityRail.tsx')
-    assert.ok(rail.includes('onToggleTerminal'), 'rail Terminal must invoke the existing terminal action')
-    assert.ok(rail.includes('terminalOpen'), 'rail Terminal must reflect terminal visibility')
-    assert.ok(rail.includes('aria-pressed'), 'rail Terminal must expose pressed state')
-    assert.ok(rail.includes('name="terminal"'), 'rail must use the existing STARK terminal icon')
+    assert.ok(rail.includes("kind: 'terminal'"), 'rail Terminal must be a real activity')
+    assert.ok(rail.includes('aria-selected'), 'rail Terminal must expose selected state')
+    assert.ok(rail.includes("icon: 'terminal'"), 'rail must use the existing STARK terminal icon')
     for (const file of ['features/explorer/ActivityRail.tsx', 'layouts/WorkspaceToolsDrawer.tsx']) {
       const source = readRenderer(file)
-      assert.ok(!source.includes('.invoke('), `${file} must not add IPC (same manager, same terminal)`)
+      assert.ok(!source.includes('.invoke('), `${file} must not add IPC (same manager, same bridge)`)
     }
     const drawer = readRenderer('layouts/WorkspaceToolsDrawer.tsx')
-    assert.ok(drawer.includes('onToggleTerminal'), 'drawer must forward the existing toggle to the rail')
+    assert.ok(drawer.includes("terminal: 'TERMINAL'"), 'drawer must title the terminal activity')
   })
 
   it('AppChrome carries no terminal affordance', () => {

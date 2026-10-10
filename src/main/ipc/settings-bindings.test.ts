@@ -32,6 +32,7 @@ import { ProviderRegistry } from '../ai/provider-adapter'
 import { CodingSessionService } from '../sessions/coding-session-service'
 import { SessionContextService } from '../session-context/session-context-service'
 import { TerminalManager } from '../terminal/terminal-manager'
+import { createFakeTerminalHostClient } from '../terminal/terminal-host-fake'
 import { TerminalService } from '../terminal/terminal-service'
 import { createIpcBindings } from './index'
 import { createSettingsBindings } from './settings'
@@ -204,11 +205,7 @@ describe('settings IPC bindings', () => {
     const { db, service, profile, workspace, files, fileWrites, search, changes, terminal, git, sessions, sessionContext, aiProviders, aiCompletion, aiCodeProposal, aiMultiProposal, changeSets, aiBrain } = openService()
     try {
       const terminalManager = new TerminalManager(
-        {
-          spawn: () => {
-            throw new Error('pty spawn must not run in surface tests')
-          }
-        },
+        createFakeTerminalHostClient(),
         { sendData: () => {}, sendExit: () => {} }
       )
       const channels = createIpcBindings({

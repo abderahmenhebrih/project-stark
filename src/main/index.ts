@@ -39,7 +39,14 @@ import { installGlobalErrorHandlers } from './startup/global-errors'
 import { performOrderedShutdown, ShutdownGuard } from './startup/shutdown'
 import { parseSmokeConfig, smokeDatabaseFile, writeSmokeMarker } from './startup/smoke-mode'
 import { runStartupRecoveryPasses } from './startup/startup-order'
-import { createNodePtyFactory } from './terminal/node-pty-adapter'
+import { TerminalHostManager, type TerminalHostLauncher } from './terminal/terminal-host-manager'
+import { TerminalProcessClient } from './terminal/terminal-host-client'
+import {
+  devTerminalHostSourceDir,
+  ensureTerminalHostArtifacts,
+  missingTerminalHostArtifacts,
+  terminalHostArtifactsComplete
+} from './terminal/terminal-host-paths'
 import { TerminalManager } from './terminal/terminal-manager'
 import { createAppWindow } from './windows/app-window'
 
@@ -214,7 +221,10 @@ function handleSecondInstanceArgv(argv: readonly string[]): void {
 
 function shutdownTerminals(): void {
   try {
-    terminalManager?.shutdownAll()
+    // Bounded async host shutdown (SHUTDOWN → SHUTDOWN_COMPLETE with
+    // exact-handle fallback); never blocks quit — process teardown
+    // reaps stragglers after the bound.
+    void terminalManager?.shutdownAll()
   } catch {
     // Best effort during quit; shutdown must stay bounded.
   } finally {
@@ -429,7 +439,46 @@ void app.whenReady().then(() => {
       }
     })
   })
-  terminalManager = new TerminalManager(createNodePtyFactory(), createTerminalEventSink())
+  // Human Terminal Host: dedicated utility process owning every
+  // node-pty handle. Blocking native ConPTY operations (notably kill,
+  // measured at seconds on Electron main) execute in the host, never
+  // on main's event loop — main stays a narrow broker. Never
+  // autostarted: the first explicit terminal create starts it
+  // (bounded); unexpected exits mark sessions honestly with no
+  // restart loop. Never mixed with the Extension Host process.
+  if (!terminalHostArtifactsComplete(__dirname)) {
+    if (!app.isPackaged) {
+      try {
+        const copied = ensureTerminalHostArtifacts(__dirname, devTerminalHostSourceDir(app.getAppPath()))
+        if (copied.length > 0 && !app.isPackaged) {
+          console.log(`[STARK] terminal host artifacts restored: ${copied.join(', ')}`)
+        }
+      } catch (error: unknown) {
+        console.error(
+          `[STARK] terminal host artifacts are missing and could not be restored: ${missingTerminalHostArtifacts(__dirname).join(', ')}`
+        )
+        void error
+      }
+    } else {
+      console.error(
+        `[STARK] terminal host artifacts are missing from the package: ${missingTerminalHostArtifacts(__dirname).join(', ')}`
+      )
+    }
+  }
+  const terminalHostLauncher: TerminalHostLauncher = {
+    fork: (modulePath, options) => utilityProcess.fork(modulePath, [], options)
+  }
+  const terminalHostManager = new TerminalHostManager({
+    bootstrapPath: join(__dirname, 'terminal-host-bootstrap.js'),
+    userDataDir: app.getPath('userData'),
+    launcher: terminalHostLauncher,
+    onLog: (message: string) => {
+      if (!app.isPackaged) {
+        console.log(`[STARK] ${message}`)
+      }
+    }
+  })
+  terminalManager = new TerminalManager(new TerminalProcessClient(terminalHostManager), createTerminalEventSink())
   // Extension Host foundation: isolated utility process running
   // STARK-owned bootstrap only. Never autostarted; the renderer may
   // start/stop it explicitly through narrow IPC. No extension code

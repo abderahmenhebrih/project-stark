@@ -10,6 +10,7 @@ import { AiProviderRepository } from '../database/repositories/ai-provider-repos
 import { KeyValueRepository } from '../database/repositories/key-value-repository'
 import { WorkspaceRepository } from '../database/repositories/workspace-repository'
 import { TerminalManager } from '../terminal/terminal-manager'
+import { createFakeTerminalHostClient } from '../terminal/terminal-host-fake'
 import { ExtensionRegistryService } from '../extension-registry/extension-registry-service'
 import { createExtensionsBindings } from './extensions'
 import { createIpcBindings } from './index'
@@ -44,11 +45,7 @@ describe('extensions IPC bindings', () => {
     const { db, services } = openServices()
     try {
       const terminalManager = new TerminalManager(
-        {
-          spawn: () => {
-            throw new Error('pty spawn must not run in surface tests')
-          }
-        },
+        createFakeTerminalHostClient(),
         { sendData: () => {}, sendExit: () => {} }
       )
       const channels = createIpcBindings({

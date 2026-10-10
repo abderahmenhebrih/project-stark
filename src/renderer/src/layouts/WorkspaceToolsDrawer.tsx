@@ -10,10 +10,6 @@ interface WorkspaceToolsDrawerProps {
   readonly onActivityChange: (activity: ActivityKind) => void
   readonly onClose: () => void
   readonly children: ReactNode
-  /** Terminal visibility for the rail item below Extensions. */
-  readonly terminalOpen: boolean
-  /** Existing terminal open/toggle behavior, forwarded to the rail. */
-  readonly onToggleTerminal: () => void
 }
 
 const ACTIVITY_TITLES: Record<ActivityKind, string> = {
@@ -21,7 +17,8 @@ const ACTIVITY_TITLES: Record<ActivityKind, string> = {
   search: 'Search',
   changes: 'Changes',
   git: 'Git',
-  extensions: 'Extensions'
+  extensions: 'Extensions',
+  terminal: 'TERMINAL'
 }
 
 /**
@@ -39,9 +36,7 @@ export function WorkspaceToolsDrawer({
   activity,
   onActivityChange,
   onClose,
-  children,
-  terminalOpen,
-  onToggleTerminal
+  children
 }: WorkspaceToolsDrawerProps): ReactElement | null {
   const drawerRef = useRef<HTMLElement | null>(null)
 
@@ -83,7 +78,7 @@ export function WorkspaceToolsDrawer({
         </button>
       </div>
       <div className="workspace-tools-drawer__body">
-        <ActivityRail activity={activity} onSelect={onActivityChange} terminalOpen={terminalOpen} onToggleTerminal={onToggleTerminal} />
+        <ActivityRail activity={activity} onSelect={onActivityChange} />
         <div className="workspace-tools-drawer__content">{children}</div>
       </div>
     </aside>

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { TerminalDataEvent, TerminalExitEvent } from '../../shared/terminal/types'
 import { MAX_TERMINAL_OUTPUT_CHUNK_BYTES } from './limits'
-import { splitOutputForIpc, type PtyFactory } from './pty-adapter'
+import { splitOutputForIpc } from './pty-adapter'
+import { createFakeTerminalHostClient } from './terminal-host-fake'
 import { TerminalManager } from './terminal-manager'
 
 /**
@@ -46,22 +47,11 @@ describe('terminal output streaming', () => {
     }
   })
 
-  it('routes output only to the owning renderer in bounded chunks', () => {
+  it('routes output only to the owning renderer in bounded chunks', async () => {
     const seen: Array<{ owner: number; event: TerminalDataEvent }> = []
     const exits: TerminalExitEvent[] = []
-    const hooks: { dataCb: ((data: string) => void) | null } = { dataCb: null }
-    const factory: PtyFactory = {
-      spawn: () => ({
-        onData: (cb) => {
-          hooks.dataCb = cb
-        },
-        onExit: () => {},
-        write: () => {},
-        resize: () => {},
-        kill: () => {}
-      })
-    }
-    const manager = new TerminalManager(factory, {
+    const host = createFakeTerminalHostClient()
+    const manager = new TerminalManager(host, {
       sendData: (owner, event) => {
         seen.push({ owner, event })
       },
@@ -69,7 +59,7 @@ describe('terminal output streaming', () => {
         exits.push(event)
       }
     })
-    const session = manager.createSessionWithEnv({
+    const session = await manager.createSessionWithEnv({
       ownerWebContentsId: 501,
       workspaceId: 3,
       cwd: '/tmp',
@@ -81,7 +71,7 @@ describe('terminal output streaming', () => {
       env: {}
     })
     const big = 'y'.repeat(MAX_TERMINAL_OUTPUT_CHUNK_BYTES * 2 + 10)
-    hooks.dataCb?.(big)
+    host.fireData(session.id, big)
     assert.ok(seen.length >= 3)
     for (const entry of seen) {
       assert.equal(entry.owner, 501)
@@ -95,32 +85,16 @@ describe('terminal output streaming', () => {
     assert.equal(exits.length, 0)
   })
 
-  it('holds no unbounded history buffer: late data after exit is dropped', () => {
+  it('holds no unbounded history buffer: late data after exit is dropped', async () => {
     const seen: TerminalDataEvent[] = []
-    const hooks: {
-      dataCb: ((data: string) => void) | null
-      exitCb: ((exit: { exitCode: number | null; signal: number | null }) => void) | null
-    } = { dataCb: null, exitCb: null }
-    const factory: PtyFactory = {
-      spawn: () => ({
-        onData: (cb) => {
-          hooks.dataCb = cb
-        },
-        onExit: (cb) => {
-          hooks.exitCb = cb
-        },
-        write: () => {},
-        resize: () => {},
-        kill: () => {}
-      })
-    }
-    const manager = new TerminalManager(factory, {
+    const host = createFakeTerminalHostClient()
+    const manager = new TerminalManager(host, {
       sendData: (_owner, event) => {
         seen.push(event)
       },
       sendExit: () => {}
     })
-    manager.createSessionWithEnv({
+    const session = await manager.createSessionWithEnv({
       ownerWebContentsId: 502,
       workspaceId: 3,
       cwd: '/tmp',
@@ -131,10 +105,10 @@ describe('terminal output streaming', () => {
       rows: 24,
       env: {}
     })
-    hooks.dataCb?.('before')
-    hooks.exitCb?.({ exitCode: 0, signal: null })
+    host.fireData(session.id, 'before')
+    host.fireExit(session.id, 0, null)
     const countAfterExit = seen.length
-    hooks.dataCb?.('after-exit-late')
+    host.fireData(session.id, 'after-exit-late')
     assert.equal(seen.length, countAfterExit)
   })
 })

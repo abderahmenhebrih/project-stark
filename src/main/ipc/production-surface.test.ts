@@ -25,6 +25,7 @@ import { OrchestrationRepository } from '../database/repositories/orchestration-
 import { WorkspaceRepository } from '../database/repositories/workspace-repository'
 import { CloudAccountRepository } from '../cloud-account/cloud-account-repository'
 import { TerminalManager } from '../terminal/terminal-manager'
+import { createFakeTerminalHostClient } from '../terminal/terminal-host-fake'
 import type { CredentialProtector } from '../ai/credential-protector'
 import type { AiProviderAdapter, ProviderGenerateRequest, ProviderGenerateResult } from '../ai/provider-adapter'
 import { ProviderRegistry } from '../ai/provider-adapter'
@@ -231,11 +232,7 @@ describe('authoritative production IPC surface', () => {
     const installRoot = mkdtempSync(join(tmpdir(), 'stark-ext-surface-'))
     try {
       const terminalManager = new TerminalManager(
-        {
-          spawn: () => {
-            throw new Error('pty spawn must not run in surface tests')
-          }
-        },
+        createFakeTerminalHostClient(),
         { sendData: () => {}, sendExit: () => {} }
       )
       const installServiceForSurface = new ExtensionInstallService(installRoot)

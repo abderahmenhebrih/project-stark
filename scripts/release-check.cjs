@@ -61,7 +61,7 @@ function auditPackageConfig() {
 
 function auditArtifactsAndDocs() {
   process.stdout.write('[release:check] artifact/docs audit ...\n');
-  for (const artifact of ['out/main/index.js', 'out/preload/index.cjs', 'out/renderer/index.html']) {
+  for (const artifact of ['out/main/index.js', 'out/preload/index.cjs', 'out/renderer/index.html', 'out/main/extension-host-bootstrap.js', 'out/main/terminal-host-bootstrap.js', 'out/main/terminal-host.mjs']) {
     const path = join(ROOT, artifact);
     if (!existsSync(path)) fail(`missing build artifact ${artifact} (run build first)`);
     if (statSync(path).size === 0) fail(`empty build artifact ${artifact}`);

@@ -55,6 +55,28 @@ export class TerminalUnavailableError extends TerminalError {
   }
 }
 
+/**
+ * Termination was requested but could not be initiated and the
+ * terminal may still be alive. The renderer restores the terminal so
+ * the user never loses a live session; no paths, PIDs, or stacks.
+ */
+export class TerminalCloseFailedError extends TerminalError {
+  override readonly name = 'TerminalCloseFailedError'
+
+  constructor(options?: { cause?: unknown }) {
+    super('We couldn’t close the terminal.', options)
+  }
+}
+
+/** Too many live human terminals: calm cap copy, never an eviction. */
+export class TerminalLimitError extends TerminalError {
+  override readonly name = 'TerminalLimitError'
+
+  constructor() {
+    super('Too many terminals are open. Close one before creating another.')
+  }
+}
+
 export type TerminalOperation = 'create' | 'write' | 'resize' | 'kill'
 
 /**
@@ -63,6 +85,9 @@ export type TerminalOperation = 'create' | 'write' | 'resize' | 'kill'
  */
 export function toPublicTerminalError(operation: TerminalOperation, error: unknown): Error {
   if (error instanceof TerminalWorkspaceUnavailableError) {
+    return new Error(error.message)
+  }
+  if (error instanceof TerminalLimitError) {
     return new Error(error.message)
   }
   if (error instanceof TerminalNotFoundError || error instanceof TerminalOwnershipError) {
@@ -78,6 +103,9 @@ export function toPublicTerminalError(operation: TerminalOperation, error: unkno
     return new Error('We couldn’t start the terminal.')
   }
   if (error instanceof TerminalUnavailableError) {
+    return new Error(error.message)
+  }
+  if (error instanceof TerminalCloseFailedError) {
     return new Error(error.message)
   }
   if (operation === 'write' || operation === 'resize') {

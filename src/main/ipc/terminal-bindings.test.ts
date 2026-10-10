@@ -14,8 +14,8 @@ import { ChangeTransactionRepository } from '../database/repositories/change-tra
 import { CodingSessionRepository } from '../database/repositories/coding-session-repository'
 import { AiProviderRepository } from '../database/repositories/ai-provider-repository'
 import { TerminalManager } from '../terminal/terminal-manager'
+import { createFakeTerminalHostClient } from '../terminal/terminal-host-fake'
 import { TerminalService } from '../terminal/terminal-service'
-import type { PtyFactory } from '../terminal/pty-adapter'
 import { createIpcBindings } from './index'
 import { createTerminalBindings } from './terminal'
 
@@ -25,12 +25,6 @@ const EXPECTED_TERMINAL_CHANNELS: readonly IpcChannel[] = [
   'stark:terminal:resize',
   'stark:terminal:kill'
 ]
-
-const noopFactory: PtyFactory = {
-  spawn: () => {
-    throw new Error('pty spawn must not run in binding-shape tests')
-  }
-}
 
 const noopSink = {
   sendData: () => {},
@@ -45,7 +39,7 @@ function openTerminalStack(): {
   const db = new DatabaseSync(':memory:')
   runMigrations(db, migrations)
   const workspaces = new WorkspaceRepository(db)
-  return { db, service: new TerminalService(workspaces), manager: new TerminalManager(noopFactory, noopSink) }
+  return { db, service: new TerminalService(workspaces), manager: new TerminalManager(createFakeTerminalHostClient(), noopSink) }
 }
 
 function fakeEvent(senderId: number): never {
@@ -97,15 +91,9 @@ describe('terminal IPC bindings', () => {
     try {
       const workspaceService = new WorkspaceService(workspaces)
       const created = await workspaceService.openDirectory(dir)
-      let spawned = 0
-      const factory: PtyFactory = {
-        spawn: () => {
-          spawned += 1
-          return { onData: () => {}, onExit: () => {}, write: () => {}, resize: () => {}, kill: () => {} }
-        }
-      }
+      const host = createFakeTerminalHostClient()
       const service = new TerminalService(workspaces)
-      const manager = new TerminalManager(factory, noopSink)
+      const manager = new TerminalManager(host, noopSink)
       const bindings = createTerminalBindings(service, manager)
       const create = bindings.find((binding) => binding.channel === 'stark:terminal:create')
       assert.ok(create !== undefined)
@@ -114,7 +102,7 @@ describe('terminal IPC bindings', () => {
         fakeEvent(701)
       )) as { id: string; workspaceId: number }
       assert.equal(session.workspaceId, created.id)
-      assert.equal(spawned, 1)
+      assert.equal(host.created.length, 1)
       await assert.rejects(
         create.invoke({ workspaceId: created.id, cols: 5, rows: 24 }, fakeEvent(701)),
         /couldn’t start the terminal/
@@ -137,20 +125,9 @@ describe('terminal IPC bindings', () => {
     try {
       const workspaceService = new WorkspaceService(workspaces)
       const created = await workspaceService.openDirectory(dir)
-      const written: string[] = []
-      const factory: PtyFactory = {
-        spawn: () => ({
-          onData: () => {},
-          onExit: () => {},
-          write: (data: string) => {
-            written.push(data)
-          },
-          resize: () => {},
-          kill: () => {}
-        })
-      }
+      const host = createFakeTerminalHostClient()
       const service = new TerminalService(workspaces)
-      const manager = new TerminalManager(factory, noopSink)
+      const manager = new TerminalManager(host, noopSink)
       const bindings = createTerminalBindings(service, manager)
       const byChannel = new Map(bindings.map((binding) => [binding.channel, binding]))
       const create = byChannel.get('stark:terminal:create')
@@ -160,7 +137,7 @@ describe('terminal IPC bindings', () => {
         id: string
       }
       await write.invoke({ sessionId: session.id, data: 'hi' }, fakeEvent(801))
-      assert.deepEqual(written, ['hi'])
+      assert.deepEqual(host.sessions.get(session.id)?.written, ['hi'])
       await assert.rejects(write.invoke({ sessionId: session.id, data: 'hi' }, fakeEvent(802)), /no longer available/)
       await assert.rejects(
         write.invoke({ sessionId: 'bad-id', data: 'hi' }, fakeEvent(801)),
@@ -183,7 +160,7 @@ describe('terminal IPC bindings', () => {
         codingSessions: new CodingSessionRepository(db),
         aiProviders: new AiProviderRepository(db)
       })
-      const manager = new TerminalManager(noopFactory, noopSink)
+      const manager = new TerminalManager(createFakeTerminalHostClient(), noopSink)
       const channels = createIpcBindings({
         settingsService: services.settingsService,
         profileService: services.profileService,

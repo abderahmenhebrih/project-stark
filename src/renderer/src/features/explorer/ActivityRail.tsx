@@ -1,15 +1,11 @@
 import type { ReactElement } from 'react'
 import { StarkIcon, type StarkIconName } from '../../components/icons/StarkIcon'
 
-export type ActivityKind = 'explorer' | 'search' | 'changes' | 'git' | 'extensions'
+export type ActivityKind = 'explorer' | 'search' | 'changes' | 'git' | 'extensions' | 'terminal'
 
 interface ActivityRailProps {
   readonly activity: ActivityKind
   readonly onSelect: (activity: ActivityKind) => void
-  /** Terminal visibility (owned by the existing terminal manager in the workspace pane). */
-  readonly terminalOpen: boolean
-  /** Invokes the EXISTING terminal open/toggle behavior — no second terminal implementation. */
-  readonly onToggleTerminal: () => void
 }
 
 const ACTIVITIES: readonly { readonly kind: ActivityKind; readonly label: string; readonly icon: StarkIconName }[] = [
@@ -17,19 +13,19 @@ const ACTIVITIES: readonly { readonly kind: ActivityKind; readonly label: string
   { kind: 'search', label: 'Search', icon: 'search' },
   { kind: 'changes', label: 'Changes', icon: 'changes' },
   { kind: 'git', label: 'Git', icon: 'git' },
-  { kind: 'extensions', label: 'Extensions', icon: 'extensions' }
+  { kind: 'extensions', label: 'Extensions', icon: 'extensions' },
+  { kind: 'terminal', label: 'Terminal', icon: 'terminal' }
 ]
 
 /**
  * Activity selector for the workspace tools drawer. Labels stay
  * visible beside large icons; the selected activity fills the drawer
- * body with a lime indicator, never a neon block. The Terminal item
- * sits directly below Extensions and invokes the existing
- * terminal open/toggle behavior (same manager, same terminal, same
- * workspace pane) — the drawer never becomes a fake terminal
- * sidebar.
+ * body with a lime indicator, never a neon block. Terminal is a full
+ * activity: selecting it fills the drawer with terminal management
+ * (new/split/duplicate, open-terminal list) and reveals the terminal
+ * viewport — the drawer never shows the Explorer tree for it.
  */
-export function ActivityRail({ activity, onSelect, terminalOpen, onToggleTerminal }: ActivityRailProps): ReactElement {
+export function ActivityRail({ activity, onSelect }: ActivityRailProps): ReactElement {
   return (
     <nav className="activity-rail" aria-label="Activity">
       <div className="workbench__tabs" role="tablist" aria-label="Explorer views" aria-orientation="vertical">
@@ -50,19 +46,6 @@ export function ActivityRail({ activity, onSelect, terminalOpen, onToggleTermina
             <span className="explorer__tab-label">{entry.label}</span>
           </button>
         ))}
-        <button
-          className={terminalOpen ? 'explorer__tab explorer__tab--active' : 'explorer__tab'}
-          type="button"
-          aria-pressed={terminalOpen}
-          title="Terminal"
-          aria-label={terminalOpen ? 'Hide terminal' : 'Show terminal'}
-          onClick={onToggleTerminal}
-        >
-          <span className="explorer__tab-icon" aria-hidden="true">
-            <StarkIcon name="terminal" size={20} />
-          </span>
-          <span className="explorer__tab-label">Terminal</span>
-        </button>
       </div>
     </nav>
   )

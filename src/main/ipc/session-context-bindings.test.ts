@@ -12,6 +12,7 @@ import { AiProviderRepository } from '../database/repositories/ai-provider-repos
 import { KeyValueRepository } from '../database/repositories/key-value-repository'
 import { WorkspaceRepository } from '../database/repositories/workspace-repository'
 import { TerminalManager } from '../terminal/terminal-manager'
+import { createFakeTerminalHostClient } from '../terminal/terminal-host-fake'
 import { createIpcBindings } from './index'
 import { createSessionBindings } from './sessions'
 import { createSessionContextBindings } from './session-context'
@@ -62,11 +63,7 @@ describe('session context IPC bindings', () => {
     const { db, services } = openServices()
     try {
       const terminalManager = new TerminalManager(
-        {
-          spawn: () => {
-            throw new Error('pty spawn must not run in surface tests')
-          }
-        },
+        createFakeTerminalHostClient(),
         { sendData: () => {}, sendExit: () => {} }
       )
       const channels = createIpcBindings({

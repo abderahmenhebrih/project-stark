@@ -15,6 +15,7 @@ import { LooplinkRepository } from '../looplink/looplink-repository'
 import { OrchestrationRepository } from '../database/repositories/orchestration-repository'
 import { WorkspaceRepository } from '../database/repositories/workspace-repository'
 import { TerminalManager } from '../terminal/terminal-manager'
+import { createFakeTerminalHostClient } from '../terminal/terminal-host-fake'
 import { createIpcBindings } from './index'
 import { createLooplinkBindings } from './looplink'
 
@@ -57,11 +58,7 @@ describe('looplink IPC bindings', () => {
     const { db, services } = openServices()
     try {
       const terminalManager = new TerminalManager(
-        {
-          spawn: () => {
-            throw new Error('pty spawn must not run in surface tests')
-          }
-        },
+        createFakeTerminalHostClient(),
         { sendData: () => {}, sendExit: () => {} }
       )
       const channels = createIpcBindings({

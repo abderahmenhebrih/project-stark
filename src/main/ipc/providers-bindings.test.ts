@@ -13,6 +13,7 @@ import { CodingSessionRepository } from '../database/repositories/coding-session
 import { KeyValueRepository } from '../database/repositories/key-value-repository'
 import { WorkspaceRepository } from '../database/repositories/workspace-repository'
 import { TerminalManager } from '../terminal/terminal-manager'
+import { createFakeTerminalHostClient } from '../terminal/terminal-host-fake'
 import type { CredentialProtector } from '../ai/credential-protector'
 import { SecureStorageUnavailableError } from '../ai/errors'
 import type { AiProviderAdapter, ProviderGenerateRequest, ProviderGenerateResult } from '../ai/provider-adapter'
@@ -96,11 +97,7 @@ function openServices(): {
 
 function fullSurface(services: ReturnType<typeof createServices>): string[] {
   const terminalManager = new TerminalManager(
-    {
-      spawn: () => {
-        throw new Error('pty spawn must not run in surface tests')
-      }
-    },
+    createFakeTerminalHostClient(),
     { sendData: () => {}, sendExit: () => {} }
   )
   return createIpcBindings({

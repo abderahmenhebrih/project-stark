@@ -58,6 +58,20 @@ import { SearchPanel } from '../search/SearchPanel'
 import { ExtensionsPanel } from '../extensions/ExtensionsPanel'
 import type { SessionContextDraftAction } from '../sessions/session-context-state'
 import { TerminalPanel } from '../terminal/TerminalPanel'
+import { TerminalDrawer } from '../terminal/TerminalDrawer'
+import '../terminal/TerminalDrawer.css'
+import type { Terminal } from '@xterm/xterm'
+import { getTerminalApi } from '../../lib/terminal-api'
+import { registerTerminalKillHandler, setTerminalActive } from '../terminal/terminal-guard'
+import {
+  canCreateTerminal,
+  DEFAULT_TERMINAL_COLS,
+  DEFAULT_TERMINAL_ROWS,
+  initialTerminalSessionsState,
+  TERMINAL_LIMIT_NOTICE,
+  terminalSessionsReducer,
+  visibleTerminalIds
+} from '../terminal/terminal-state'
 import { confirmDiscardUnsavedDraft, setUnsavedDraft } from './editor-guard'
 import { clampSplitPct, splitBounds } from './split-bounds'
 import { subscribeFormatRequests } from '../extensions/format-request-bus'
@@ -338,6 +352,27 @@ export function Explorer({
     workspaceId: id
   }))
   const gitDiffRequestRef = useRef(0)
+  // Human multi-terminal ownership (renderer-local, per workspace).
+  // Sessions live in the reducer; live xterm instances register in
+  // the map below so PTY output routes to the owning viewport only.
+  // Hiding the UI never kills: PTYs die only via exact kill, exit, a
+  // confirmed workspace switch, or window teardown.
+  const [terminals, terminalDispatch] = useReducer(terminalSessionsReducer, workspaceId, (id) => ({
+    ...initialTerminalSessionsState(),
+    workspaceId: id
+  }))
+  const terminalInstancesRef = useRef(new Map<string, Terminal>())
+  const terminalMountRef = useRef(true)
+  const terminalPendingRef = useRef(0)
+  // In-flight kills by exact session id: same-tick double × collapses
+  // to one backend kill (reducer closingIds covers re-renders).
+  const terminalClosingRef = useRef(new Set<string>())
+  useEffect(() => {
+    terminalMountRef.current = true
+    return () => {
+      terminalMountRef.current = false
+    }
+  }, [])
   // Secondary pane tab + explicit context pin + session/secondary split.
   // Renderer-local only; review/file events select their tab, explicit
   // context requests pin and reveal Context. A reducer (not cascading
@@ -435,6 +470,234 @@ export function Explorer({
     }
   })
   useEffect(() => subscribeFormatRequests(() => formatRequestRef.current()), [])
+
+  // ---- Human multi-terminal ownership ----
+  // Instance registry: live xterms keyed by opaque session id. Data
+  // routes here (never by mutable selection); unmount unregisters.
+  const handleTerminalRegister = useCallback((sessionId: string, term: Terminal): void => {
+    terminalInstancesRef.current.set(sessionId, term)
+  }, [])
+  const handleTerminalUnregister = useCallback((sessionId: string): void => {
+    terminalInstancesRef.current.delete(sessionId)
+  }, [])
+
+  // Fixed PTY event subscriptions: output writes only into the owning
+  // viewport instance; exits mark that instance (kept, so output stays
+  // readable) with an inline notice. Unknown sessions are ignored.
+  useEffect(() => {
+    const api = getTerminalApi()
+    if (api === undefined) {
+      return
+    }
+    const offData = api.onData((event) => {
+      const term = terminalInstancesRef.current.get(event.sessionId)
+      if (term === undefined) {
+        return
+      }
+      try {
+        term.write(event.data)
+      } catch {
+        // Best effort streaming.
+      }
+    })
+    const offExit = api.onExit((event) => {
+      terminalDispatch({ type: 'exit-received', exit: event })
+      const term = terminalInstancesRef.current.get(event.sessionId)
+      if (term === undefined) {
+        return
+      }
+      try {
+        term.write('\r\n[Terminal exited]\r\n')
+      } catch {
+        // Best effort.
+      }
+    })
+    return () => {
+      offData()
+      offExit()
+    }
+  }, [])
+
+  // Publish running state for the workspace-switch guard (any live
+  // PTY counts, including background and split-hidden instances).
+  useEffect(() => {
+    setTerminalActive(terminals.sessions.some((entry) => entry.status === 'running'))
+    return () => {
+      setTerminalActive(false)
+    }
+  }, [terminals.sessions])
+
+  // Focus follows selection: the newly active xterm accepts typing
+  // immediately (best effort; never throws into render).
+  useEffect(() => {
+    if (terminals.activeId === null) {
+      return
+    }
+    try {
+      terminalInstancesRef.current.get(terminals.activeId)?.focus()
+    } catch {
+      // Best effort; clicking into the viewport focuses natively.
+    }
+  }, [terminals.activeId])
+
+  // Bounded kill-all for confirmed workspace switches: every owned
+  // PTY dies by exact handle; nothing else is touched. Hiding the UI
+  // never reaches this path — PTYs survive hidden viewports.
+  useEffect(() => {
+    const ids = terminals.sessions.map((entry) => entry.id)
+    registerTerminalKillHandler(async () => {
+      const api = getTerminalApi()
+      if (api === undefined) {
+        return
+      }
+      for (const sessionId of ids) {
+        try {
+          await api.kill({ sessionId })
+        } catch {
+          // Best effort; the switch proceeds and the panel resets.
+        }
+      }
+    })
+    return () => {
+      registerTerminalKillHandler(null)
+    }
+  }, [terminals.sessions])
+
+  function terminalDisplayError(error: unknown): string {
+    return error instanceof Error && error.message !== '' ? error.message : 'We couldn’t start the terminal.'
+  }
+
+  /** Spawns one new independent PTY and activates it (never reuses). */
+  async function spawnTerminal(): Promise<string | null> {
+    const api = getTerminalApi()
+    if (api === undefined) {
+      return null
+    }
+    const key = `terminal-${terminalPendingRef.current + 1}`
+    terminalPendingRef.current += 1
+    terminalDispatch({ type: 'start-requested', key })
+    try {
+      const session = await api.create({ workspaceId, cols: DEFAULT_TERMINAL_COLS, rows: DEFAULT_TERMINAL_ROWS })
+      if (!terminalMountRef.current) {
+        // Unmounted mid-spawn (workspace switch): never strand a PTY.
+        try {
+          await api.kill({ sessionId: session.id })
+        } catch {
+          // Best effort; teardown owns the rest.
+        }
+        return null
+      }
+      terminalDispatch({ type: 'start-succeeded', key, session, title: '' })
+      return session.id
+    } catch (error: unknown) {
+      if (terminalMountRef.current) {
+        terminalDispatch({ type: 'start-failed', key, message: terminalDisplayError(error) })
+      }
+      return null
+    }
+  }
+
+  async function handleNewTerminal(): Promise<void> {
+    if (!canCreateTerminal(terminals)) {
+      terminalDispatch({ type: 'notice-shown', message: TERMINAL_LIMIT_NOTICE })
+      return
+    }
+    await spawnTerminal()
+  }
+
+  /** Split: a second independent PTY (same shell/start cwd by workspace) shown beside the source. */
+  async function handleSplitTerminal(sourceId: string): Promise<void> {
+    const source = terminals.sessions.find((entry) => entry.id === sourceId)
+    if (source === undefined || source.status !== 'running' || terminals.closingIds.includes(sourceId)) {
+      return
+    }
+    if (!canCreateTerminal(terminals)) {
+      terminalDispatch({ type: 'notice-shown', message: TERMINAL_LIMIT_NOTICE })
+      return
+    }
+    const createdId = await spawnTerminal()
+    if (createdId === null) {
+      return
+    }
+    terminalDispatch({ type: 'split-opened', sessionIds: [sourceId, createdId] })
+  }
+
+  /** Duplicate: a fresh PTY seeded from the same workspace shell/cwd (never cloned state). */
+  async function handleDuplicateTerminal(sourceId: string): Promise<void> {
+    const source = terminals.sessions.find((entry) => entry.id === sourceId)
+    if (source === undefined || source.status !== 'running' || terminals.closingIds.includes(sourceId)) {
+      return
+    }
+    if (!canCreateTerminal(terminals)) {
+      terminalDispatch({ type: 'notice-shown', message: TERMINAL_LIMIT_NOTICE })
+      return
+    }
+    await spawnTerminal()
+  }
+
+  function handleSelectTerminal(sessionId: string): void {
+    terminalDispatch({ type: 'session-selected', sessionId })
+  }
+
+  /** Exact-owned kill: only this PTY dies; a live neighbor is selected. */
+  function handleKillTerminal(sessionId: string): void {
+    // Immediate presentation hide in the same tick (the instance
+    // stays mounted hidden until the outcome lands): drawer row,
+    // viewport pane, replacement selection, and split collapse all
+    // resolve now (<100ms perceived) while the exact PTY kill
+    // completes asynchronously in the Terminal Host — never on
+    // Electron main. Single-flight per id.
+    if (terminalClosingRef.current.has(sessionId)) {
+      return
+    }
+    terminalClosingRef.current.add(sessionId)
+    terminalDispatch({ type: 'close-requested', sessionId })
+    const api = getTerminalApi()
+    void (async () => {
+      try {
+        await api?.kill({ sessionId })
+        // Termination initiated (or no bridge at all): finalize and
+        // dispose the retained instance.
+        terminalDispatch({ type: 'close-finalized', sessionId })
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : ''
+        if (message === 'That terminal session is no longer available.') {
+          // Already gone backend-side: finalize removal the same way.
+          terminalDispatch({ type: 'close-finalized', sessionId })
+        } else {
+          // Initiation failed and the terminal may still be alive:
+          // restore the same instance (buffer intact) with calm copy
+          // so the user can retry. Never strands a hidden live PTY.
+          terminalDispatch({ type: 'close-aborted', sessionId, message: 'We couldn’t close the terminal.' })
+        }
+      } finally {
+        terminalClosingRef.current.delete(sessionId)
+      }
+    })()
+  }
+
+  /** Display-only clear of one viewport buffer; the PTY keeps running. */
+  function handleClearTerminal(sessionId: string): void {
+    try {
+      terminalInstancesRef.current.get(sessionId)?.clear()
+    } catch {
+      // Best effort display-only clear.
+    }
+  }
+
+  function handleSplitRatioChange(ratio: number): void {
+    terminalDispatch({ type: 'split-ratio-changed', ratio })
+  }
+
+  function handleTerminalActivitySelect(kind: ActivityKind): void {
+    onActivityChange(kind)
+    // The terminal activity owns its viewport: selecting it reveals
+    // the pane (hidden viewports keep their PTYs either way).
+    if (kind === 'terminal' && !terminalOpen) {
+      onToggleTerminal()
+    }
+  }
+
 
   // Window resize keeps the percentage split (ratio preserved by the
   // flex-basis itself) and re-clamps it when the row becomes too
@@ -1559,7 +1822,7 @@ export function Explorer({
   // Directory chevrons resolve per expanded state via the drawer tree.
   return (
     <div ref={workareaRef} className="workspace" data-canvas-view={canvasView}>
-      <WorkspaceToolsDrawer open={sidebarOpen} activity={activity} onActivityChange={onActivityChange} onClose={onCloseSidebar} terminalOpen={terminalOpen} onToggleTerminal={onToggleTerminal}>
+      <WorkspaceToolsDrawer open={sidebarOpen} activity={activity} onActivityChange={handleTerminalActivitySelect} onClose={onCloseSidebar}>
         <div className="workbench__sidebar-body">
           {activity === 'explorer' ? (
             <>
@@ -1599,6 +1862,27 @@ export function Explorer({
             />
           ) : activity === 'extensions' ? (
             <ExtensionsPanel workspaceId={workspaceId} rootPath={workspaceRootPath} />
+          ) : activity === 'terminal' ? (
+            <TerminalDrawer
+              sessions={terminals.sessions.filter((entry) => !terminals.closingIds.includes(entry.id))}
+              activeId={terminals.activeId}
+              starting={terminals.pending.length > 0}
+              atCap={!canCreateTerminal(terminals)}
+              notice={terminals.notice}
+              onNew={() => void handleNewTerminal()}
+              onSplit={() => {
+                if (terminals.activeId !== null) {
+                  void handleSplitTerminal(terminals.activeId)
+                }
+              }}
+              onDuplicate={() => {
+                if (terminals.activeId !== null) {
+                  void handleDuplicateTerminal(terminals.activeId)
+                }
+              }}
+              onSelect={handleSelectTerminal}
+              onKill={(sessionId) => void handleKillTerminal(sessionId)}
+            />
           ) : (
             <>
               <ChangeSetPanel
@@ -1693,7 +1977,20 @@ export function Explorer({
                     Hide
                   </button>
                 </div>
-                <TerminalPanel key={`terminal:${workspaceId}`} workspaceId={workspaceId} />
+                <TerminalPanel
+                  sessions={terminals.sessions}
+                  activeId={terminals.activeId}
+                  visibleIds={visibleTerminalIds(terminals)}
+                  splitRatio={terminals.splitRatio}
+                  starting={terminals.pending.length > 0}
+                  onNew={() => void handleNewTerminal()}
+                  onSplitPane={(sessionId) => void handleSplitTerminal(sessionId)}
+                  onClearPane={handleClearTerminal}
+                  onClosePane={(sessionId) => void handleKillTerminal(sessionId)}
+                  onSplitRatioChange={handleSplitRatioChange}
+                  onRegisterInstance={handleTerminalRegister}
+                  onUnregisterInstance={handleTerminalUnregister}
+                />
               </div>
             }
           >

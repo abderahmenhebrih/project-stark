@@ -38,7 +38,7 @@ describe('stage 31 session layout', () => {
     assert.ok(chrome.includes('onOpenSearch'), 'workspace search must stay one click away')
     assert.ok(chrome.includes('onOpenSettings'), 'settings must stay one click away')
     const rail = readRenderer('features/explorer/ActivityRail.tsx')
-    assert.ok(rail.includes('onToggleTerminal'), 'terminal visibility must be rail-controlled through the existing behavior')
+    assert.ok(rail.includes("kind: 'terminal'"), 'terminal must be a rail activity owning its drawer')
   })
 
   it('workspace tools live in an overlay drawer, not a permanent column', () => {

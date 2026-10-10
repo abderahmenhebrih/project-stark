@@ -222,7 +222,7 @@ describe('stage 31 frontend shell', () => {
     assert.ok(pane.includes('workspace__terminal'), 'terminal must stack in the secondary region')
     const css = readRenderer('features/explorer/Explorer.css')
     const stack = css.match(/\.workspace__terminal\s*\{[^}]*\}/)
-    assert.ok(stack !== null && stack[0].includes('min-height: 220px'), 'stack must keep a usable floor')
+    assert.ok(stack !== null && stack[0].includes('min-height: 280px'), 'stack must keep a comfortable floor')
   })
 
   it('composer contains its modes, input, context state, and send', () => {

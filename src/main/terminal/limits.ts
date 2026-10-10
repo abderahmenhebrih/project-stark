@@ -22,6 +22,14 @@ export const MAX_TERMINAL_OUTPUT_CHUNK_BYTES = 64 * 1024
 /** Longest accepted opaque session id string. */
 export const MAX_TERMINAL_SESSION_ID_LENGTH = 128
 
+/**
+ * Hard cap on live human terminals per owning renderer. Creation past
+ * the cap fails calmly (no eviction, never silently killing an
+ * existing terminal). Main enforces authoritatively; the renderer
+ * pre-checks to avoid futile spawn attempts.
+ */
+export const MAX_HUMAN_TERMINALS = 8
+
 /** Graceful PTY shutdown wait before scoped forced cleanup (5s). */
 export const TERMINAL_SHUTDOWN_TIMEOUT_MS = 5000
 

@@ -13,6 +13,7 @@ import { KeyValueRepository } from '../database/repositories/key-value-repositor
 import { WorkspaceRepository } from '../database/repositories/workspace-repository'
 import type { IpcChannel } from '../../shared/constants'
 import { TerminalManager } from '../terminal/terminal-manager'
+import { createFakeTerminalHostClient } from '../terminal/terminal-host-fake'
 import { createIpcBindings } from './index'
 import { createChangeTransactionBindings } from './change-transactions'
 
@@ -93,11 +94,7 @@ describe('change-transaction IPC bindings', () => {
     const { db, services } = openServices()
     try {
       const terminalManager = new TerminalManager(
-        {
-          spawn: () => {
-            throw new Error('pty spawn must not run in surface tests')
-          }
-        },
+        createFakeTerminalHostClient(),
         { sendData: () => {}, sendExit: () => {} }
       )
       const channels = createIpcBindings({
