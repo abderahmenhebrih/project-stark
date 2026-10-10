@@ -106,6 +106,7 @@ export const IPC_CHANNELS = {
   extensionsInstall: 'stark:extensions:install',
   extensionsListInstalled: 'stark:extensions:list-installed',
   extensionsUninstall: 'stark:extensions:uninstall',
+  extensionsSetEnabled: 'stark:extensions:set-enabled',
   extensionsHostStatus: 'stark:extensions:host-status',
   extensionsHostStart: 'stark:extensions:host-start',
   extensionsHostStop: 'stark:extensions:host-stop'

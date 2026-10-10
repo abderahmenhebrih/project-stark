@@ -13,13 +13,13 @@ function openService(): { dir: string; service: ExtensionInstallService } {
 }
 
 describe('extension install IPC bindings', () => {
-  it('exposes exactly install, list-installed, and uninstall', () => {
+  it('exposes exactly install, list-installed, uninstall, and set-enabled', () => {
     const { dir, service } = openService()
     try {
       const bindings = createExtensionInstallBindings(service)
       assert.deepEqual(
         bindings.map((binding) => binding.channel).sort(),
-        ['stark:extensions:install', 'stark:extensions:list-installed', 'stark:extensions:uninstall'].sort()
+        ['stark:extensions:install', 'stark:extensions:list-installed', 'stark:extensions:uninstall', 'stark:extensions:set-enabled'].sort()
       )
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -124,6 +124,40 @@ describe('extension install IPC bindings', () => {
           assert.ok(!channel.includes(forbidden), `${channel} must not contain ${forbidden}`)
         }
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('setEnabled validates identity plus a boolean flag with no path authority', async () => {
+    const { dir, service } = openService()
+    try {
+      const bindings = createExtensionInstallBindings(service)
+      const setEnabled = bindings.find((binding) => binding.channel === 'stark:extensions:set-enabled')
+      assert.ok(setEnabled !== undefined)
+      for (const bad of [
+        null,
+        {},
+        { namespace: 'a', name: 'b', version: '1' },
+        { namespace: 'a', name: 'b', version: '1', enabled: 'yes' },
+        { namespace: 'a', name: 'b', version: '1', enabled: 1 },
+        { namespace: 'a', name: 'b', version: '1', enabled: true, extra: 1 },
+        { namespace: '../evil', name: 'b', version: '1', enabled: true },
+        { namespace: 'a', name: 'b', version: '1', enabled: true, path: '/tmp/x' },
+        'x',
+        42
+      ]) {
+        await assert.rejects(setEnabled.invoke(bad), /not valid|Couldn’t update extension state\./)
+      }
+      // Well-formed but not installed: safe state copy, no internals.
+      await assert.rejects(
+        setEnabled.invoke({ namespace: 'nobody', name: 'nothing', version: '1.0.0', enabled: true }),
+        (error: unknown) => {
+          assert.ok(error instanceof Error)
+          assert.equal(error.message, 'Couldn’t update extension state.')
+          return true
+        }
+      )
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

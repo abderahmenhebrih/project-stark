@@ -26,6 +26,9 @@ export const GENERIC_INSTALL_COPY = 'We couldn’t install this extension.'
 /** Safe renderer copy for malformed install references. */
 export const INVALID_INSTALL_REFERENCE_COPY = 'That extension reference is not valid.'
 
+/** Safe renderer copy for failed enable/disable state changes. */
+export const STATE_UPDATE_COPY = 'Couldn’t update extension state.'
+
 export class ExtensionInstallError extends Error {
   override readonly name: string = 'ExtensionInstallError'
   readonly code: ExtensionInstallErrorCode
@@ -66,4 +69,16 @@ export function toPublicExtensionInstallError(error: unknown): Error {
     return new Error(GENERIC_INSTALL_COPY)
   }
   return new Error(GENERIC_INSTALL_COPY)
+}
+
+/**
+ * Maps any enable/disable state-change failure to renderer-safe copy.
+ * Identity problems name the bound; every storage failure surfaces
+ * one calm message. The machine-readable code stays main-side.
+ */
+export function toPublicExtensionStateError(error: unknown): Error {
+  if (error instanceof InvalidExtensionInstallRequestError) {
+    return new Error(INVALID_INSTALL_REFERENCE_COPY)
+  }
+  return new Error(STATE_UPDATE_COPY)
 }

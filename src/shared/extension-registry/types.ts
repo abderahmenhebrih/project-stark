@@ -53,6 +53,27 @@ export interface InstalledExtensionEntry {
   readonly displayName: string
   readonly version: string
   readonly status: ExtensionInstallStatus
+  /**
+   * Management state: true means "approved for activation". This does
+   * NOT mean extension code is running — third-party activation is not
+   * implemented yet. Installs default to true; pre-state-file installs
+   * read back as true.
+   */
+  readonly enabled: boolean
+  /**
+   * Stored icon for the installed row: a main-persisted `data:` URL
+   * captured at install time, or null (generic glyph fallback). Never
+   * requires a catalog search.
+   */
+  readonly iconUrl: string | null
+}
+
+/** Narrow enable/disable request: normalized identity plus the desired flag. */
+export interface ExtensionSetEnabledRequest {
+  readonly namespace: string
+  readonly name: string
+  readonly version: string
+  readonly enabled: boolean
 }
 
 /** Uninstall outcome: removed locally, or refused while installing. */
@@ -73,4 +94,5 @@ export interface ExtensionsApi {
   install: (identity: ExtensionInstallIdentity) => Promise<InstalledExtensionEntry>
   listInstalled: () => Promise<readonly InstalledExtensionEntry[]>
   uninstall: (identity: ExtensionInstallIdentity) => Promise<UninstalledExtensionEntry>
+  setEnabled: (request: ExtensionSetEnabledRequest) => Promise<InstalledExtensionEntry>
 }

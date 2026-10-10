@@ -434,7 +434,9 @@ void app.whenReady().then(() => {
     workspaceSearchService: services.workspaceSearchService,
     extensionRegistryService: services.extensionRegistryService,
     extensionInstallService: new ExtensionInstallService(
-      join(app.getPath('userData'), EXTENSION_INSTALL_DIR_NAME)
+      join(app.getPath('userData'), EXTENSION_INSTALL_DIR_NAME),
+      undefined,
+      services.extensionIconService
     ),
     extensionHostManager,
     attachmentService: services.chatAttachmentService,

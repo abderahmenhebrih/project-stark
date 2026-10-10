@@ -119,6 +119,7 @@ import type {
   ExtensionInstallIdentity,
   ExtensionSearchRequest,
   ExtensionSearchResult,
+  ExtensionSetEnabledRequest,
   ExtensionsApi,
   InstalledExtensionEntry,
   UninstalledExtensionEntry
@@ -392,7 +393,9 @@ function createExtensionsApi(): ExtensionsApi {
     listInstalled: (): Promise<readonly InstalledExtensionEntry[]> =>
       ipcRenderer.invoke(IPC_CHANNELS.extensionsListInstalled) as Promise<readonly InstalledExtensionEntry[]>,
     uninstall: (identity: ExtensionInstallIdentity): Promise<UninstalledExtensionEntry> =>
-      ipcRenderer.invoke(IPC_CHANNELS.extensionsUninstall, identity) as Promise<UninstalledExtensionEntry>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsUninstall, identity) as Promise<UninstalledExtensionEntry>,
+    setEnabled: (request: ExtensionSetEnabledRequest): Promise<InstalledExtensionEntry> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionsSetEnabled, request) as Promise<InstalledExtensionEntry>
   }
 }
 

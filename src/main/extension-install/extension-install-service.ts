@@ -6,6 +6,17 @@ import { Transform } from 'node:stream'
 import * as yauzl from 'yauzl'
 import type { InstalledExtensionEntry, UninstalledExtensionEntry } from '../../shared/extension-registry/types'
 import { ExtensionInstallError, InvalidExtensionInstallRequestError } from './errors'
+import {
+  extensionStateKey,
+  readExtensionEnabledStates,
+  writeExtensionEnabledStates
+} from './extension-state'
+import { validatedIconUrl } from '../extension-registry/extension-registry-service'
+import {
+  EXTENSION_ICON_ALLOWED_TYPES,
+  EXTENSION_ICON_MAX_BYTES,
+  type StoredExtensionIcon
+} from '../extension-icons/extension-icon-service'
 
 /**
  * Main-owned extension installer (download + validate + store only)
@@ -66,6 +77,12 @@ export const EXTENSION_INSTALL_TMP_DIR = '.tmp'
 export const EXTENSION_INSTALL_STAGING_PREFIX = '.stark-ext-staging-'
 export const EXTENSION_INSTALL_TMP_PREFIX = '.stark-ext-'
 export const EXTENSION_INSTALL_MANIFEST_NAME = 'stark-install.json'
+/**
+ * STARK-owned persisted icon bytes next to each installed version.
+ * Written only when absent from the extracted tree (never clobbers
+ * package content); removed with the version directory on uninstall.
+ */
+export const EXTENSION_INSTALL_ICON_FILE_NAME = 'stark-icon.bin'
 
 const IDENTITY_PART = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const VERSION_PART = /^[0-9A-Za-z][0-9A-Za-z._+-]*$/
@@ -76,6 +93,19 @@ export interface ValidatedInstallIdentity {
   readonly namespace: string
   readonly name: string
   readonly version: string
+}
+
+/**
+ * Narrow install-time icon persistence seam (bytes only, never a
+ * generic image surface). Production supplies the reviewed
+ * ExtensionIconService; the installer persists returned bytes beside
+ * the package and serves them back as `data:` URLs from local disk.
+ */
+export interface ExtensionIconProvider {
+  fetchIconBytes(
+    sourceUrl: string | null,
+    identity: ValidatedInstallIdentity
+  ): Promise<StoredExtensionIcon | null>
 }
 
 /**
@@ -259,6 +289,8 @@ export type InstallFetch = (
 
 interface InstallMetadata {
   readonly downloadUrl: string
+  /** Validated catalog icon source for install-time persistence, or null. */
+  readonly iconSource: string | null
 }
 
 function readVersionMetadata(payload: unknown): InstallMetadata {
@@ -266,13 +298,13 @@ function readVersionMetadata(payload: unknown): InstallMetadata {
     throw new ExtensionInstallError('Registry metadata was malformed.', { code: 'invalid_download_source' })
   }
   const files = (payload as Record<string, unknown>)['files']
-  const download =
-    typeof files === 'object' && files !== null ? (files as Record<string, unknown>)['download'] : null
+  const fileMap = typeof files === 'object' && files !== null ? (files as Record<string, unknown>) : null
+  const download = fileMap !== null ? fileMap['download'] : null
   const downloadUrl = validatedDownloadUrl(download)
   if (downloadUrl === null) {
     throw new ExtensionInstallError('Registry metadata was malformed.', { code: 'invalid_download_source' })
   }
-  return { downloadUrl }
+  return { downloadUrl, iconSource: validatedIconUrl(fileMap !== null ? fileMap['icon'] : null) }
 }
 
 function parseContentLength(value: string | null): number | null {
@@ -289,18 +321,30 @@ function parseContentLength(value: string | null): number | null {
 export class ExtensionInstallService {
   private readonly installRoot: string
   private readonly fetchImpl: InstallFetch
+  private readonly icons: ExtensionIconProvider | undefined
   private readonly inFlight = new Map<string, Promise<InstalledExtensionEntry>>()
   private readonly uninstallInFlight = new Map<string, Promise<UninstalledExtensionEntry>>()
+  private readonly stateChangeInFlight = new Map<string, Promise<InstalledExtensionEntry>>()
+  /**
+   * Serializes enabled-state file writes so concurrent installs of
+   * different extensions can never lost-update each other's flags.
+   */
+  private stateWrites: Promise<void> = Promise.resolve()
 
   /**
    * @param installRoot main-owned `<userData>/extensions` directory
    *   (tests pass a disposable temp dir; production passes the real
    *   userData path — never a renderer-supplied location).
+   * @param fetchImpl network seam (tests inject fakes).
+   * @param icons optional install-time icon persistence provider
+   *   (production wires the reviewed icon service; omitted in tests
+   *   and installs simply store no icon).
    */
-  constructor(installRoot: string, fetchImpl?: InstallFetch) {
+  constructor(installRoot: string, fetchImpl?: InstallFetch, icons?: ExtensionIconProvider) {
     this.installRoot = installRoot
     this.fetchImpl =
       fetchImpl ?? ((globalThis.fetch as unknown as InstallFetch | undefined) as InstallFetch)
+    this.icons = icons
   }
 
   /** Installs one extension by identity; concurrent duplicates share one flight. */
@@ -353,6 +397,131 @@ export class ExtensionInstallService {
     }
   }
 
+  /**
+   * Sets the enabled flag for one exact installed version. The
+   * identity must be installed (verified against the on-disk install
+   * record); the flag is the only renderer-supplied state. One
+   * in-flight change per exact identity — rapid repeats share a
+   * flight. No polling, no retries. Returns the normalized entry.
+   * Enabled means "approved for activation", never "running": nothing
+   * here loads or executes extension code.
+   */
+  async setEnabled(rawIdentity: unknown, rawEnabled: unknown): Promise<InstalledExtensionEntry> {
+    const identity = validatedInstallIdentity(rawIdentity)
+    if (typeof rawEnabled !== 'boolean') {
+      throw new InvalidExtensionInstallRequestError()
+    }
+    const key = `${identity.namespace}.${identity.name}@${identity.version}`
+    const existing = this.stateChangeInFlight.get(key)
+    if (existing !== undefined) {
+      return existing
+    }
+    const flight = this.runSetEnabled(identity, rawEnabled)
+    this.stateChangeInFlight.set(key, flight)
+    try {
+      return await flight
+    } finally {
+      if (this.stateChangeInFlight.get(key) === flight) {
+        this.stateChangeInFlight.delete(key)
+      }
+    }
+  }
+
+  private async runSetEnabled(identity: ValidatedInstallIdentity, enabled: boolean): Promise<InstalledExtensionEntry> {
+    const versionDir = join(this.installRoot, this.installDirName(identity), identity.version)
+    const record = this.readInstallRecord(versionDir)
+    if (
+      record === null ||
+      record['namespace'] !== identity.namespace ||
+      record['name'] !== identity.name ||
+      record['version'] !== identity.version ||
+      record['source'] !== 'open-vsx'
+    ) {
+      throw new ExtensionInstallError('Extension is not installed.', { code: 'storage_error' })
+    }
+    const key = extensionStateKey(identity)
+    await this.queueStateMutation((states) => {
+      states.set(key, enabled)
+    })
+    const entry = this.readInstalledEntry(versionDir, enabled)
+    if (entry === null) {
+      throw new ExtensionInstallError('Extension is not installed.', { code: 'storage_error' })
+    }
+    return entry
+  }
+
+  /**
+   * Serialized enabled-state mutation: loads the state file, applies
+   * the mutation, normalizes against the on-disk package truth (drops
+   * ghosts, defaults newcomers to true), and persists via temp file +
+   * rename. Reads default missing entries to true, so a failed write
+   * can never disable an install.
+   */
+  private async queueStateMutation(mutate: (states: Map<string, boolean>) => void): Promise<void> {
+    const run = this.stateWrites.then(() => {
+      const states = readExtensionEnabledStates(this.installRoot)
+      mutate(states)
+      const normalized = new Map<string, boolean>()
+      for (const key of this.scanInstalledKeys()) {
+        if (normalized.size >= EXTENSION_INSTALL_MAX_LISTED) {
+          break
+        }
+        normalized.set(key, states.get(key) ?? true)
+      }
+      writeExtensionEnabledStates(this.installRoot, normalized)
+    })
+    this.stateWrites = run.then(
+      () => undefined,
+      () => undefined
+    )
+    return run
+  }
+
+  /** Exact-identity keys for every version directory holding a valid install record. */
+  private scanInstalledKeys(): Set<string> {
+    const keys = new Set<string>()
+    let packageDirs: string[]
+    try {
+      packageDirs = readdirSync(this.installRoot)
+    } catch {
+      return keys
+    }
+    for (const packageDir of packageDirs) {
+      if (packageDir.startsWith('.')) {
+        continue
+      }
+      let versionDirs: string[]
+      try {
+        versionDirs = readdirSync(join(this.installRoot, packageDir))
+      } catch {
+        continue
+      }
+      for (const versionDir of versionDirs) {
+        if (versionDir.startsWith('.')) {
+          continue
+        }
+        const record = this.readInstallRecord(join(this.installRoot, packageDir, versionDir))
+        if (record === null || record['source'] !== 'open-vsx') {
+          continue
+        }
+        // The record was just verified; derive the exact-identity key
+        // from it (directory layout is <ns.name>/<version>). Keys
+        // failing strict identity validation can never enter state.
+        try {
+          const parsed = validatedInstallIdentity({
+            namespace: record['namespace'],
+            name: record['name'],
+            version: record['version']
+          })
+          keys.add(extensionStateKey(parsed))
+        } catch {
+          continue
+        }
+      }
+    }
+    return keys
+  }
+
   private async runUninstall(identity: ValidatedInstallIdentity): Promise<UninstalledExtensionEntry> {
     const root = resolve(this.installRoot)
     const packageDir = join(root, this.installDirName(identity))
@@ -388,6 +557,15 @@ export class ExtensionInstallService {
     } catch {
       // Best effort: a raced sibling install keeps its parent.
     }
+    // Drop this version's enabled-state record (normalization against
+    // disk truth removes it). Best-effort: the package is already
+    // gone, and orphaned keys are invisible to listInstalled and
+    // healed by the next mutation.
+    try {
+      await this.queueStateMutation(() => {})
+    } catch {
+      // Best effort state cleanup after a completed removal.
+    }
     return { namespace: identity.namespace, name: identity.name, version: identity.version, status: 'uninstalled' }
   }
 
@@ -408,9 +586,15 @@ export class ExtensionInstallService {
     return parsed as Record<string, unknown>
   }
 
-  /** Lists installed extensions from on-disk metadata (no paths leak). */
+  /**
+   * Lists installed extensions from on-disk metadata (no paths leak).
+   * Each entry carries its management state: enabled defaults to true
+   * for installs predating the state file, and iconUrl is a locally
+   * persisted `data:` URL (no catalog search, works offline) or null.
+   */
   async listInstalled(): Promise<readonly InstalledExtensionEntry[]> {
     const collected: InstalledExtensionEntry[] = []
+    const states = readExtensionEnabledStates(this.installRoot)
     let packageDirs: string[]
     try {
       packageDirs = readdirSync(this.installRoot)
@@ -437,7 +621,12 @@ export class ExtensionInstallService {
         if (versionDir.startsWith('.')) {
           continue
         }
-        const entry = this.readInstalledEntry(join(this.installRoot, packageDir, versionDir))
+        const fullVersionDir = join(this.installRoot, packageDir, versionDir)
+        const record = this.readInstallRecord(fullVersionDir)
+        if (record === null) {
+          continue
+        }
+        const entry = this.buildInstalledEntry(fullVersionDir, record, states)
         if (entry !== null) {
           collected.push(entry)
         }
@@ -446,21 +635,48 @@ export class ExtensionInstallService {
     return collected
   }
 
-  private readInstalledEntry(versionDir: string): InstalledExtensionEntry | null {
-    const manifestPath = join(versionDir, EXTENSION_INSTALL_MANIFEST_NAME)
-    let parsed: unknown
+  /**
+   * Normalizes one verified install record to a renderer entry.
+   * Returns null for records failing strict identity validation or
+   * the open-vsx source check. Enabled resolves from the state map
+   * (missing → true); the icon resolves from persisted bytes only.
+   */
+  private buildInstalledEntry(
+    versionDir: string,
+    record: Record<string, unknown>,
+    states: Map<string, boolean>
+  ): InstalledExtensionEntry | null {
+    const { namespace, name, version, displayName } = record
+    if (typeof namespace !== 'string' || typeof name !== 'string' || typeof version !== 'string') {
+      return null
+    }
+    let identity: ValidatedInstallIdentity
     try {
-      if (statSync(manifestPath).size > EXTENSION_INSTALL_MAX_MANIFEST_BYTES) {
-        return null
-      }
-      parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as unknown
+      identity = validatedInstallIdentity({ namespace, name, version })
     } catch {
       return null
     }
-    if (typeof parsed !== 'object' || parsed === null) {
+    if (record['source'] !== 'open-vsx') {
       return null
     }
-    const record = parsed as Record<string, unknown>
+    const iconContentType = typeof record['iconContentType'] === 'string' ? record['iconContentType'] : null
+    return {
+      namespace,
+      name,
+      displayName: typeof displayName === 'string' && displayName !== '' ? displayName : name,
+      version,
+      status: 'installed',
+      enabled: states.get(extensionStateKey(identity)) ?? true,
+      iconUrl: this.readInstalledIconUrl(versionDir, iconContentType)
+    }
+  }
+
+  private readInstalledEntry(versionDir: string, enabled: boolean): InstalledExtensionEntry | null {
+    const record = this.readInstallRecord(versionDir)
+    if (record === null) {
+      return null
+    }
+    const iconContentType = typeof record['iconContentType'] === 'string' ? record['iconContentType'] : null
     const { namespace, name, version, displayName } = record
     if (typeof namespace !== 'string' || typeof name !== 'string' || typeof version !== 'string') {
       return null
@@ -478,8 +694,42 @@ export class ExtensionInstallService {
       name,
       displayName: typeof displayName === 'string' && displayName !== '' ? displayName : name,
       version,
-      status: 'installed'
+      status: 'installed',
+      enabled,
+      iconUrl: this.readInstalledIconUrl(versionDir, iconContentType)
     }
+  }
+
+  /**
+   * Resolves a stored icon to a `data:` URL from main-persisted bytes
+   * (captured at install time). Content type is re-validated against
+   * the reviewed allowlist and bytes are re-capped on every read;
+   * anything unexpected resolves to null (generic glyph fallback).
+   */
+  private readInstalledIconUrl(versionDir: string, iconContentType: string | null): string | null {
+    if (iconContentType === null || !(EXTENSION_ICON_ALLOWED_TYPES as readonly string[]).includes(iconContentType)) {
+      return null
+    }
+    const iconPath = join(versionDir, EXTENSION_INSTALL_ICON_FILE_NAME)
+    let size: number
+    try {
+      size = statSync(iconPath).size
+    } catch {
+      return null
+    }
+    if (size <= 0 || size > EXTENSION_ICON_MAX_BYTES) {
+      return null
+    }
+    let bytes: Buffer
+    try {
+      bytes = readFileSync(iconPath)
+    } catch {
+      return null
+    }
+    if (bytes.length === 0 || bytes.length > EXTENSION_ICON_MAX_BYTES) {
+      return null
+    }
+    return `data:${iconContentType};base64,${bytes.toString('base64')}`
   }
 
   private installDirName(identity: ValidatedInstallIdentity): string {
@@ -487,7 +737,10 @@ export class ExtensionInstallService {
   }
 
   private readCommittedEntry(identity: ValidatedInstallIdentity): InstalledExtensionEntry | null {
-    const entry = this.readInstalledEntry(join(this.installRoot, this.installDirName(identity), identity.version))
+    const entry = this.readInstalledEntry(
+      join(this.installRoot, this.installDirName(identity), identity.version),
+      readExtensionEnabledStates(this.installRoot).get(extensionStateKey(identity)) ?? true
+    )
     if (entry === null || entry.version !== identity.version) {
       return null
     }
@@ -499,7 +752,7 @@ export class ExtensionInstallService {
     if (committed !== null && committed.version === identity.version) {
       return { ...committed, status: 'already_installed' }
     }
-    const downloadUrl = await this.resolveDownloadUrl(identity)
+    const metadata = await this.resolveDownloadUrl(identity)
     const staging = join(
       this.installRoot,
       EXTENSION_INSTALL_STAGING_DIR,
@@ -510,9 +763,13 @@ export class ExtensionInstallService {
     mkdirSync(staging, { recursive: true })
     mkdirSync(tmpDir, { recursive: true })
     try {
-      const sha256 = await this.downloadPackage(downloadUrl, tmpFile, identity)
+      const sha256 = await this.downloadPackage(metadata.downloadUrl, tmpFile, identity)
       await extractVsix(tmpFile, staging)
       const manifest = readExtensionManifest(staging, identity)
+      // Install-time icon persistence (best-effort, never fails the
+      // install): validated bytes land beside the package so the
+      // Installed view renders offline without a catalog search.
+      const iconContentType = await this.persistStagedIcon(staging, metadata.iconSource, identity)
       writeFileSync(
         join(staging, EXTENSION_INSTALL_MANIFEST_NAME),
         JSON.stringify(
@@ -523,7 +780,8 @@ export class ExtensionInstallService {
             version: identity.version,
             sha256,
             installedAt: new Date().toISOString(),
-            source: 'open-vsx'
+            source: 'open-vsx',
+            ...(iconContentType !== null ? { iconContentType } : {})
           },
           null,
           2
@@ -545,12 +803,28 @@ export class ExtensionInstallService {
         }
         throw error
       }
+      // Fresh installs are enabled ("approved for activation" — code
+      // is still never executed). Best-effort: reads default missing
+      // entries to true, so a failed write cannot disable an install.
+      try {
+        await this.queueStateMutation((states) => {
+          states.set(extensionStateKey(identity), true)
+        })
+      } catch {
+        // Best effort: the package commit above already succeeded.
+      }
+      const stored = this.readInstalledEntry(finalDir, true)
+      if (stored !== null) {
+        return { ...stored, status: 'installed' }
+      }
       return {
         namespace: identity.namespace,
         name: identity.name,
         displayName: manifest.displayName,
         version: identity.version,
-        status: 'installed'
+        status: 'installed',
+        enabled: true,
+        iconUrl: null
       }
     } finally {
       rmSync(staging, { recursive: true, force: true })
@@ -558,9 +832,48 @@ export class ExtensionInstallService {
     }
   }
 
-  private async resolveDownloadUrl(identity: ValidatedInstallIdentity): Promise<string> {
+  /**
+   * Captures validated icon bytes into staging (best-effort). Skips
+   * when no provider is wired, the source is invalid, the fetch
+   * fails, or the STARK-owned name already exists in the extracted
+   * tree (never clobbers package content). Returns the content type
+   * for the install record, or null.
+   */
+  private async persistStagedIcon(
+    stagingDir: string,
+    iconSource: string | null,
+    identity: ValidatedInstallIdentity
+  ): Promise<string | null> {
+    if (this.icons === undefined || iconSource === null) {
+      return null
+    }
+    let icon: StoredExtensionIcon | null
+    try {
+      icon = await this.icons.fetchIconBytes(iconSource, identity)
+    } catch {
+      return null
+    }
+    if (icon === null) {
+      return null
+    }
+    const dest = join(stagingDir, EXTENSION_INSTALL_ICON_FILE_NAME)
+    try {
+      statSync(dest)
+      return null
+    } catch {
+      // Absent: safe to persist alongside the package.
+    }
+    try {
+      writeFileSync(dest, icon.bytes, { mode: 0o600 })
+    } catch {
+      return null
+    }
+    return icon.contentType
+  }
+
+  private async resolveDownloadUrl(identity: ValidatedInstallIdentity): Promise<InstallMetadata> {
     const metadata = await this.fetchJson(versionMetadataUrl(identity))
-    return readVersionMetadata(metadata).downloadUrl
+    return readVersionMetadata(metadata)
   }
 
   private async fetchJson(url: string): Promise<unknown> {

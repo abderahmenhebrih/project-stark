@@ -894,6 +894,172 @@ describe('safe uninstall', () => {
   })
 })
 
+describe('enabled management state', () => {
+  const IDENTITY = { namespace: 'esbenp', name: 'prettier-vscode', version: '12.4.0' }
+  const ICON_SOURCE = 'https://open-vsx.org/api/esbenp/prettier-vscode/12.4.0/file/icon.png'
+
+  function metadataWithIcon(icon: unknown): InstallFetch {
+    return async (url: string) => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async (): Promise<unknown> =>
+        url.includes('/file/')
+          ? {}
+          : { files: { download: DOWNLOAD_URL, icon } },
+      body: url.includes('/file/') ? Readable.from([goodZip()]) : null
+    })
+  }
+
+  function iconProvider(bytes: Buffer | null): { fetchIconBytes: () => Promise<{ bytes: Buffer; contentType: string } | null> } {
+    return {
+      fetchIconBytes: async () => (bytes === null ? null : { bytes, contentType: 'image/png' })
+    }
+  }
+
+  it('new installs default to enabled with no icon when no provider is wired', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-enabled-default-'))
+    try {
+      const service = new ExtensionInstallService(dir, combinedFetch(goodZip(), [], { count: 0 }))
+      const result = await service.install(IDENTITY)
+      assert.equal(result.enabled, true)
+      assert.equal(result.iconUrl, null)
+      const [listed] = await service.listInstalled()
+      assert.equal(listed?.enabled, true)
+      assert.equal(listed?.iconUrl, null)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('persists install-time icons as offline data URLs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-enabled-icon-'))
+    try {
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a])
+      const service = new ExtensionInstallService(dir, metadataWithIcon(ICON_SOURCE), iconProvider(png) as never)
+      const result = await service.install(IDENTITY)
+      assert.equal(result.enabled, true)
+      assert.equal(result.iconUrl, `data:image/png;base64,${png.toString('base64')}`)
+      assert.ok(existsSync(join(dir, 'esbenp.prettier-vscode', '12.4.0', 'stark-icon.bin')))
+      // Restart (fresh instance, same root): icon survives without network.
+      const restarted = new ExtensionInstallService(dir, (async () => {
+        throw new Error('offline: no network allowed')
+      }) as never)
+      const [listed] = await restarted.listInstalled()
+      assert.equal(listed?.iconUrl, `data:image/png;base64,${png.toString('base64')}`)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('icon failures never fail the install', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-enabled-iconfail-'))
+    try {
+      const service = new ExtensionInstallService(dir, metadataWithIcon(ICON_SOURCE), iconProvider(null) as never)
+      const result = await service.install(IDENTITY)
+      assert.equal(result.status, 'installed')
+      assert.equal(result.iconUrl, null)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('disable persists false across restart; enable persists true', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-enabled-toggle-'))
+    try {
+      const service = new ExtensionInstallService(dir, combinedFetch(goodZip(), [], { count: 0 }))
+      await service.install(IDENTITY)
+      const disabled = await service.setEnabled(IDENTITY, false)
+      assert.equal(disabled.enabled, false)
+      assert.equal(disabled.namespace, 'esbenp')
+      const restarted = new ExtensionInstallService(dir)
+      const [listed] = await restarted.listInstalled()
+      assert.equal(listed?.enabled, false)
+      const enabled = await restarted.setEnabled(IDENTITY, true)
+      assert.equal(enabled.enabled, true)
+      const restartedAgain = new ExtensionInstallService(dir)
+      const [relited] = await restartedAgain.listInstalled()
+      assert.equal(relited?.enabled, true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('state belongs to the exact identity; siblings untouched', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-enabled-scope-'))
+    try {
+      craftInstalled(dir, 'esbenp', 'prettier-vscode', '10.4.0')
+      craftInstalled(dir, 'esbenp', 'prettier-vscode', '10.3.0')
+      const service = new ExtensionInstallService(dir)
+      await service.setEnabled({ namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0' }, false)
+      const listed = await service.listInstalled()
+      const byVersion = new Map(listed.map((entry) => [entry.version, entry.enabled]))
+      assert.equal(byVersion.get('10.4.0'), false)
+      assert.equal(byVersion.get('10.3.0'), true)
+      // Concurrent repeats share one flight.
+      const [first, second] = await Promise.all([
+        service.setEnabled({ namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0' }, true),
+        service.setEnabled({ namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0' }, true)
+      ])
+      assert.equal(first.enabled, true)
+      assert.equal(second.enabled, true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('old installs without state default to enabled', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-enabled-legacy-'))
+    try {
+      craftInstalled(dir, 'esbenp', 'prettier-vscode', '10.4.0')
+      const service = new ExtensionInstallService(dir)
+      const [listed] = await service.listInstalled()
+      assert.equal(listed?.enabled, true)
+      assert.equal(listed?.iconUrl, null)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('uninstall removes the exact state record; malformed state cannot delete packages', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-enabled-uninstall-'))
+    try {
+      craftInstalled(dir, 'esbenp', 'prettier-vscode', '10.4.0')
+      craftInstalled(dir, 'other', 'tool', '1.0.0')
+      const service = new ExtensionInstallService(dir)
+      await service.setEnabled({ namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0' }, false)
+      await service.uninstall({ namespace: 'esbenp', name: 'prettier-vscode', version: '10.4.0' })
+      const raw = JSON.parse(readFileSync(join(dir, 'extensions-state.json'), 'utf8')) as {
+        extensions: Record<string, unknown>
+      }
+      assert.ok(!('esbenp.prettier-vscode@10.4.0' in raw.extensions), 'removed version state must be gone')
+      const [remaining] = await service.listInstalled()
+      assert.equal(remaining?.name, 'tool')
+      // Corrupt the state file: packages must survive with enabled=true.
+      writeFileSync(join(dir, 'extensions-state.json'), '{{{not json')
+      const relisted = await service.listInstalled()
+      assert.equal(relisted.length, 1)
+      assert.equal(relisted[0]?.enabled, true)
+      assert.ok(existsSync(join(dir, 'other.tool', '1.0.0', 'stark-install.json')))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('setEnabled rejects unknown installs, bad flags, and malformed identities', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-enabled-reject-'))
+    try {
+      const service = new ExtensionInstallService(dir)
+      await assert.rejects(service.setEnabled({ namespace: 'nobody', name: 'nothing', version: '1.0.0' }, true))
+      await assert.rejects(service.setEnabled({ namespace: 'a', name: 'b', version: '1' }, 'yes' as never))
+      await assert.rejects(service.setEnabled({ namespace: '../evil', name: 'b', version: '1' }, true))
+      await assert.rejects(service.setEnabled(null, true))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('startup staging cleanup', () => {
   it('removes only exact installer-owned names, bounded, never throws', () => {
     const userData = mkdtempSync(join(tmpdir(), 'stark-ext-clean-'))

@@ -147,6 +147,20 @@ export function uninstallExtension(identity: ExtensionInstallIdentity): Promise<
 }
 
 /**
+ * Typed enable/disable caller (management state only, never execution).
+ *
+ * Sends normalized identity plus the desired flag; persistence is
+ * main-owned through the fixed preload bridge.
+ */
+export function setExtensionEnabled(identity: ExtensionInstallIdentity, enabled: boolean): Promise<InstalledExtensionEntry> {
+  const api = getStarkApi()?.extensions.setEnabled
+  if (api === undefined) {
+    return Promise.reject(new Error('Extension installation is unavailable.'))
+  }
+  return api({ ...identity, enabled })
+}
+
+/**
  * Typed Extension Host controls (foundation only: status text in,
  * start/stop out). No process details ever reach the renderer.
  */

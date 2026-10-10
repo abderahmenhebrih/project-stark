@@ -4,15 +4,16 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
 /**
- * EXTENSIONS STEP 3 — safe uninstall.
+ * EXTENSIONS STEP 5 — installed management (enable/disable + views).
  *
- * Static guarantees: uninstall requires explicit inline confirmation,
- * sends normalized identity only through the main-owned bridge, shows
- * Uninstalling/failed states with user-initiated retry, and refreshes
- * the INSTALLED section. No update/enable/disable/run surface, no
- * activation, no host, no execution anywhere. Renderer-only
- * assertions; the removal service, bindings, and preload contract are
- * covered main-side.
+ * Static guarantees: Marketplace and Installed are separate views with
+ * a local-only count; installed rows show stored icons, Enabled /
+ * Disabled state, and Enable / Disable / Uninstall controls; state
+ * flips send identity plus a boolean through the narrow bridge with
+ * user-initiated retry; activation is never claimed (single subtle
+ * note); no execution surface anywhere. Renderer-only assertions;
+ * the state file, bindings, and preload contract are covered
+ * main-side.
  */
 function readSource(...parts: string[]): string {
   const file = join(process.cwd(), ...parts)
@@ -47,9 +48,13 @@ describe('extensions install surface', () => {
     assert.ok(panel.includes('aria-label={`Install ${entry.displayName}`}'), 'Install must be labelled')
   })
 
-  it('installed section lists inert entries without controls', () => {
+  it('installed view exists separately with a local-only count', () => {
     const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
-    assert.ok(panel.includes('INSTALLED') || panel.includes('>Installed</p>'), 'INSTALLED section must exist')
+    assert.ok(panel.includes('Marketplace'), 'Marketplace tab must exist')
+    assert.ok(panel.includes('Installed ('), 'Installed tab must exist with a local count')
+    assert.ok(panel.includes("setView('marketplace')") && panel.includes("setView('installed')"), 'view switch must be renderer-local tabs')
+    assert.ok(panel.includes('No extensions installed yet'), 'empty Installed view must guide to Marketplace')
+    assert.ok(panel.includes('>Installed</p>'), 'Installed view must carry its heading')
     assert.ok(panel.includes('listInstalledExtensions'), 'installed list must load from the bridge')
     assert.ok(panel.includes('nothing runs yet'), 'installed packages must read as inert')
   })
@@ -82,8 +87,8 @@ describe('extensions install surface', () => {
 
   it('catalog icons render from normalized URLs with one-shot fallback', () => {
     const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
-    assert.ok(panel.includes('src={entry.iconUrl}'), 'rows must render the normalized icon URL')
-    assert.ok(panel.includes('entry.iconUrl === null'), 'absent icons must fall back without requesting')
+    assert.ok(panel.includes('src={iconUrl}'), 'rows must render the normalized icon URL')
+    assert.ok(panel.includes('iconUrl === null'), 'absent icons must fall back without requesting')
     assert.ok(panel.includes('onError={() => setFailed(true)}'), 'a failed load must swap that row once')
     assert.ok(panel.includes('extensions__icon-fallback'), 'fallback must be the local generic glyph')
     assert.equal(panel.split('onError').length - 1, 1, 'exactly one error handler may exist, so no reload loop is possible')
@@ -93,9 +98,31 @@ describe('extensions install surface', () => {
     assert.ok(icon[0].includes('object-fit: contain'), 'icons must preserve aspect ratio')
   })
 
-  it('no activation, host execution, or update surface exists', () => {
+  it('installed rows show stored icons, state labels, and Enable/Disable controls', () => {
     const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
-    for (const forbidden of ['>Enable<', '>Disable<', '>Run<', '>Update<', 'Enable extensions', 'auto-update', 'Auto-update', '.vsix', 'activationEvents', 'postinstall', 'deactivate', 'child_process', 'require(', 'import(']) {
+    assert.ok(panel.includes('>Enable<') || panel.includes('Enable\n'), 'disabled rows must offer Enable')
+    assert.ok(panel.includes('>Disable<') || panel.includes('Disable\n'), 'enabled rows must offer Disable')
+    assert.ok(panel.includes('>Enabled<') || panel.includes("'Enabled'"), 'enabled state label must render')
+    assert.ok(panel.includes('>Disabled<') || panel.includes("'Disabled'"), 'disabled state label must render')
+    assert.ok(panel.includes('aria-label={`Enable ${item.displayName}`}'), 'Enable must be labelled')
+    assert.ok(panel.includes('aria-label={`Disable ${item.displayName}`}'), 'Disable must be labelled')
+    assert.ok(panel.includes('setExtensionEnabled'), 'state flips must go through the narrow bridge')
+    assert.ok(panel.includes('Couldn’t update extension state.'), 'state failure copy must exist')
+    assert.ok(panel.includes('stateChangingKeys.includes(key)'), 'rapid repeats must share one in-flight change')
+    assert.ok(panel.includes('Extension activation support is still in development.'), 'installed view must carry the single subtle activation note')
+    for (const falseClaim of ['>Running<', '>Active<', '>Loaded<', 'is running', 'is now active']) {
+      assert.ok(!panel.includes(falseClaim), `panel must never claim execution (${falseClaim})`)
+    }
+    const api = readRenderer('lib/stark-api.ts')
+    assert.ok(api.includes('setExtensionEnabled'), 'bridge must expose the enable/disable helper')
+  })
+
+  it('no execution, host takeover, or update surface exists', () => {
+    const panel = readRenderer('features/extensions/ExtensionsPanel.tsx')
+    // Enable/Disable are management-state flips only (approved for
+    // activation, never running). Everything that would load, run, or
+    // update third-party code stays forbidden.
+    for (const forbidden of ['>Run<', '>Running<', '>Update<', 'Enable extensions', 'auto-update', 'Auto-update', '.vsix', 'activationEvents', 'postinstall', 'deactivate', 'child_process', 'require(', 'import(']) {
       assert.ok(!panel.includes(forbidden), `panel must not contain ${forbidden}`)
     }
     const api = readRenderer('lib/stark-api.ts')
@@ -117,7 +144,7 @@ describe('extensions install surface', () => {
 
   it('only normalized shapes cross the bridge', () => {
     const types = readSource('src', 'shared', 'extension-registry', 'types.ts')
-    for (const field of ['namespace', 'name', 'version', 'displayName', 'status']) {
+    for (const field of ['namespace', 'name', 'version', 'displayName', 'status', 'enabled', 'setEnabled']) {
       assert.ok(types.includes(field), `install contract must carry ${field}`)
     }
     assert.ok(!types.includes('downloadUrl') && !types.includes('vsix') && !types.includes('installPath'), 'paths and archives must not exist in the contract')
@@ -136,6 +163,7 @@ describe('extensions install surface', () => {
       "extensionsInstall: 'stark:extensions:install'",
       "extensionsListInstalled: 'stark:extensions:list-installed'",
       "extensionsUninstall: 'stark:extensions:uninstall'",
+      "extensionsSetEnabled: 'stark:extensions:set-enabled'",
       "extensionsHostStatus: 'stark:extensions:host-status'",
       "extensionsHostStart: 'stark:extensions:host-start'",
       "extensionsHostStop: 'stark:extensions:host-stop'"

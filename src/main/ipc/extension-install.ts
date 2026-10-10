@@ -1,6 +1,6 @@
 import { IPC_CHANNELS } from '../../shared/constants'
 import type { InstalledExtensionEntry, UninstalledExtensionEntry } from '../../shared/extension-registry/types'
-import { InvalidExtensionInstallRequestError, toPublicExtensionInstallError } from '../extension-install/errors'
+import { InvalidExtensionInstallRequestError, toPublicExtensionInstallError, toPublicExtensionStateError } from '../extension-install/errors'
 import { validatedInstallIdentity } from '../extension-install/extension-install-service'
 import type { ExtensionInstallService } from '../extension-install/extension-install-service'
 import type { IpcBinding } from './binding'
@@ -16,6 +16,36 @@ function readIdentity(payload: unknown): { namespace: string; name: string; vers
   return validatedInstallIdentity(payload)
 }
 
+/**
+ * Strict setEnabled payload: exactly identity plus a boolean flag.
+ * No paths, no URLs, no metadata authority of any kind.
+ */
+function readSetEnabledRequest(payload: unknown): { namespace: string; name: string; version: string; enabled: boolean } {
+  if (typeof payload !== 'object' || payload === null) {
+    throw new InvalidExtensionInstallRequestError()
+  }
+  const keys = Object.keys(payload)
+  if (
+    keys.length !== 4 ||
+    !keys.includes('namespace') ||
+    !keys.includes('name') ||
+    !keys.includes('version') ||
+    !keys.includes('enabled')
+  ) {
+    throw new InvalidExtensionInstallRequestError()
+  }
+  const identity = validatedInstallIdentity({
+    namespace: (payload as Record<string, unknown>)['namespace'],
+    name: (payload as Record<string, unknown>)['name'],
+    version: (payload as Record<string, unknown>)['version']
+  })
+  const enabled = (payload as Record<string, unknown>)['enabled']
+  if (typeof enabled !== 'boolean') {
+    throw new InvalidExtensionInstallRequestError()
+  }
+  return { ...identity, enabled }
+}
+
 function requireEmpty(payload: unknown): void {
   if (payload === undefined) {
     return
@@ -28,11 +58,12 @@ function requireEmpty(payload: unknown): void {
 
 /**
  * Extension-install IPC bindings (store only, never execute): exactly
- * three invoke channels (install, list-installed, uninstall). The
- * renderer supplies normalized identity only — destinations, URLs,
- * and paths are all main-derived. No generic download/unzip/write
- * or delete surface. Registration through handleSecureIpc happens in
- * ./index.ts.
+ * four invoke channels (install, list-installed, uninstall,
+ * set-enabled). The renderer supplies normalized identity only (plus
+ * one boolean for setEnabled) — destinations, URLs, paths, and state
+ * files are all main-derived. No generic download/unzip/write,
+ * settings-mutation, or delete surface. Registration through
+ * handleSecureIpc happens in ./index.ts.
  */
 export function createExtensionInstallBindings(service: ExtensionInstallService): readonly IpcBinding[] {
   return [
@@ -66,6 +97,21 @@ export function createExtensionInstallBindings(service: ExtensionInstallService)
           .then((identity) => service.uninstall(identity))
           .catch((error: unknown) => {
             throw toPublicExtensionInstallError(error)
+          })
+    },
+    {
+      channel: IPC_CHANNELS.extensionsSetEnabled,
+      invoke: (payload): Promise<InstalledExtensionEntry> =>
+        Promise.resolve()
+          .then(() => readSetEnabledRequest(payload))
+          .then((request) =>
+            service.setEnabled(
+              { namespace: request.namespace, name: request.name, version: request.version },
+              request.enabled
+            )
+          )
+          .catch((error: unknown) => {
+            throw toPublicExtensionStateError(error)
           })
     }
   ]

@@ -214,6 +214,26 @@ export class ExtensionIconService {
    * (including failures) are cached so catalog reloads never loop.
    */
   async resolveIcon(sourceUrl: string | null, identity: ExtensionIconIdentity): Promise<string | null> {
+    const outcome = await this.loadIcon(sourceUrl, identity)
+    return outcome === null ? null : `${EXTENSION_ICON_PROTOCOL}://${outcome.id}`
+  }
+
+  /**
+   * Narrow install-time accessor: returns validated icon bytes for
+   * persistence alongside the installed package (same single-attempt,
+   * same bounds, same allowlist as catalog resolution). Null when the
+   * source is invalid or the icon genuinely fails — callers fall back
+   * to the generic glyph and must never fail an install over icons.
+   */
+  async fetchIconBytes(sourceUrl: string | null, identity: ExtensionIconIdentity): Promise<StoredExtensionIcon | null> {
+    const outcome = await this.loadIcon(sourceUrl, identity)
+    return outcome === null ? null : outcome.stored
+  }
+
+  private async loadIcon(
+    sourceUrl: string | null,
+    identity: ExtensionIconIdentity
+  ): Promise<{ readonly id: string; readonly stored: StoredExtensionIcon } | null> {
     if (sourceUrl === null) {
       return null
     }
@@ -223,7 +243,7 @@ export class ExtensionIconService {
     }
     const cached = this.cache.get(validated)
     if (cached !== undefined) {
-      return cached === null ? null : `${EXTENSION_ICON_PROTOCOL}://${cached.id}`
+      return cached
     }
     let outcome: { readonly id: string; readonly stored: StoredExtensionIcon } | null
     try {
@@ -238,7 +258,7 @@ export class ExtensionIconService {
       }
     }
     this.cache.set(validated, outcome)
-    return outcome === null ? null : `${EXTENSION_ICON_PROTOCOL}://${outcome.id}`
+    return outcome
   }
 
   /** Cache read for the protocol handler (ID → bytes, throws when unknown). */

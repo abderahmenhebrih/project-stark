@@ -180,6 +180,7 @@ const EXPECTED_PRODUCTION_CHANNELS: readonly string[] = [
   IPC_CHANNELS.extensionsInstall,
   IPC_CHANNELS.extensionsListInstalled,
   IPC_CHANNELS.extensionsUninstall,
+  IPC_CHANNELS.extensionsSetEnabled,
   IPC_CHANNELS.extensionsHostStatus,
   IPC_CHANNELS.extensionsHostStart,
   IPC_CHANNELS.extensionsHostStop
@@ -330,6 +331,7 @@ describe('authoritative production IPC surface', () => {
       'IPC_CHANNELS.extensionsInstall',
       'IPC_CHANNELS.extensionsListInstalled',
       'IPC_CHANNELS.extensionsUninstall',
+      'IPC_CHANNELS.extensionsSetEnabled',
       'IPC_CHANNELS.extensionsHostStatus',
       'IPC_CHANNELS.extensionsHostStart',
       'IPC_CHANNELS.extensionsHostStop',
