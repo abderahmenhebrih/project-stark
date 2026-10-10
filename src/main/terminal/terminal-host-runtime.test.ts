@@ -214,4 +214,31 @@ describe('terminal host runtime', () => {
     assert.equal(spawned[0]?.kills, 1)
     assert.equal(byType(sent, 'SHUTDOWN_COMPLETE').length, 1)
   })
+
+  it('fails closed on out-of-range dimensions (main-bound parity)', async () => {
+    const { sent, receive, spawned } = await openHost()
+    const base = (CREATE.payload ?? {}) as Record<string, unknown>
+    // CREATE below the main-enforced minimums is rejected, never spawned.
+    receive({
+      protocol: 'stark-terminal-host/v1',
+      type: 'CREATE',
+      payload: { ...base, requestId: 'req-tiny', sessionId: 'sess-tiny', cols: 1, rows: 1 }
+    })
+    receive({
+      protocol: 'stark-terminal-host/v1',
+      type: 'CREATE',
+      payload: { ...base, requestId: 'req-huge', sessionId: 'sess-huge', cols: 501, rows: 201 }
+    })
+    assert.equal(spawned.length, 0)
+    assert.equal(byType(sent, 'CREATED').length, 0)
+    assert.equal(byType(sent, 'CREATE_FAILED').length, 2)
+    // A valid session ignores out-of-range RESIZE without touching PTY.
+    receive(CREATE)
+    assert.equal(spawned.length, 1)
+    receive({ protocol: 'stark-terminal-host/v1', type: 'RESIZE', payload: { sessionId: 'sess-1', cols: 1, rows: 1 } })
+    receive({ protocol: 'stark-terminal-host/v1', type: 'RESIZE', payload: { sessionId: 'sess-1', cols: 501, rows: 201 } })
+    assert.deepEqual(spawned[0]?.resized, [])
+    receive({ protocol: 'stark-terminal-host/v1', type: 'RESIZE', payload: { sessionId: 'sess-1', cols: 100, rows: 30 } })
+    assert.deepEqual(spawned[0]?.resized, [{ cols: 100, rows: 30 }])
+  })
 })

@@ -1,11 +1,13 @@
 /**
- * Single shared guard for the active human terminal.
+ * Shared guard for ALL running human terminals (multi-terminal).
  *
  * Workspace switching consults this alongside the editor discard guard:
- * when a PTY session is running, switching requires explicit user
+ * when any PTY session is running, switching requires one explicit user
  * confirmation ("Close the active terminal and switch projects?").
- * The flag lives in module scope: TerminalPanel sets it, and every
- * workspace-switch trigger reads it.
+ * The flag lives in module scope: Explorer sets it from the live
+ * session list, and every workspace-switch trigger reads it. The
+ * registered kill handler terminates every owned terminal (not merely
+ * the selected one) with bounded exact cleanup.
  */
 
 export const TERMINAL_SWITCH_CONFIRM_MESSAGE = 'Close the active terminal and switch projects?'
@@ -13,23 +15,23 @@ export const TERMINAL_SWITCH_CONFIRM_MESSAGE = 'Close the active terminal and sw
 let terminalActive = false
 let killHandler: (() => Promise<void>) | null = null
 
-/** Called by TerminalPanel whenever its running state changes. */
+/** Called by Explorer whenever the live running-terminal set changes. */
 export function setTerminalActive(value: boolean): void {
   terminalActive = value
 }
 
-/** True while a PTY session is running for the current window. */
+/** True while any PTY session is running for the current window. */
 export function hasActiveTerminal(): boolean {
   return terminalActive
 }
 
-/** TerminalPanel registers its bounded kill routine; WorkspaceSection invokes it on confirmed switch. */
+/** Explorer registers its bounded kill-all routine; workspace-switch flows invoke it on confirmed switch. */
 export function registerTerminalKillHandler(handler: (() => Promise<void>) | null): void {
   killHandler = handler
 }
 
-/** Kills the active terminal with bounded cleanup (no-op when none). */
-export async function closeActiveTerminalForSwitch(): Promise<void> {
+/** Kills every owned terminal with bounded cleanup (no-op when none). */
+export async function closeAllTerminalsForSwitch(): Promise<void> {
   if (!terminalActive) {
     return
   }

@@ -367,6 +367,10 @@ export function Explorer({
   // In-flight kills by exact session id: same-tick double × collapses
   // to one backend kill (reducer closingIds covers re-renders).
   const terminalClosingRef = useRef(new Set<string>())
+  // Bounded close-generation per session id: an EXIT that wins the
+  // race bumps the generation so the still-in-flight kill response
+  // for that same close attempt is ignored (never resurrects).
+  const terminalCloseGenRef = useRef(new Map<string, number>())
   useEffect(() => {
     terminalMountRef.current = true
     return () => {
@@ -501,6 +505,12 @@ export function Explorer({
       }
     })
     const offExit = api.onExit((event) => {
+      // EXIT is authoritative: while a close is in flight it wins the
+      // race — bump the generation so the late kill response for that
+      // same attempt is ignored; the reducer finalizes removal.
+      if (terminalClosingRef.current.has(event.sessionId)) {
+        terminalCloseGenRef.current.set(event.sessionId, (terminalCloseGenRef.current.get(event.sessionId) ?? 0) + 1)
+      }
       terminalDispatch({ type: 'exit-received', exit: event })
       const term = terminalInstancesRef.current.get(event.sessionId)
       if (term === undefined) {
@@ -541,8 +551,11 @@ export function Explorer({
   }, [terminals.activeId])
 
   // Bounded kill-all for confirmed workspace switches: every owned
-  // PTY dies by exact handle; nothing else is touched. Hiding the UI
-  // never reaches this path — PTYs survive hidden viewports.
+  // PTY dies by exact handle; nothing else is touched. Kills run
+  // concurrently (never sequential awaits over slow ConPTY teardowns)
+  // and stay best-effort so the switch never waits indefinitely.
+  // Hiding the UI never reaches this path — PTYs survive hidden
+  // viewports.
   useEffect(() => {
     const ids = terminals.sessions.map((entry) => entry.id)
     registerTerminalKillHandler(async () => {
@@ -550,13 +563,15 @@ export function Explorer({
       if (api === undefined) {
         return
       }
-      for (const sessionId of ids) {
-        try {
-          await api.kill({ sessionId })
-        } catch {
-          // Best effort; the switch proceeds and the panel resets.
-        }
-      }
+      await Promise.all(
+        ids.map(async (sessionId) => {
+          try {
+            await api.kill({ sessionId })
+          } catch {
+            // Best effort; the switch proceeds and the panel resets.
+          }
+        })
+      )
     })
     return () => {
       registerTerminalKillHandler(null)
@@ -647,19 +662,40 @@ export function Explorer({
     // resolve now (<100ms perceived) while the exact PTY kill
     // completes asynchronously in the Terminal Host — never on
     // Electron main. Single-flight per id.
+    const entry = terminals.sessions.find((candidate) => candidate.id === sessionId)
+    if (entry === undefined) {
+      return
+    }
+    if (entry.status !== 'running') {
+      // Already exited (natural exit, host crash, or prior EXIT):
+      // VS Code-like cleanup with no backend kill and no error.
+      terminalDispatch({ type: 'close-finalized', sessionId })
+      return
+    }
     if (terminalClosingRef.current.has(sessionId)) {
       return
     }
     terminalClosingRef.current.add(sessionId)
+    const generation = (terminalCloseGenRef.current.get(sessionId) ?? 0) + 1
+    terminalCloseGenRef.current.set(sessionId, generation)
     terminalDispatch({ type: 'close-requested', sessionId })
     const api = getTerminalApi()
     void (async () => {
       try {
         await api?.kill({ sessionId })
         // Termination initiated (or no bridge at all): finalize and
-        // dispose the retained instance.
+        // dispose the retained instance — unless EXIT already won the
+        // race and bumped the generation for this same attempt.
+        if (terminalCloseGenRef.current.get(sessionId) !== generation) {
+          return
+        }
         terminalDispatch({ type: 'close-finalized', sessionId })
       } catch (error: unknown) {
+        // A stale late response after EXIT-finalized must never
+        // resurrect the dead terminal or raise a close error.
+        if (terminalCloseGenRef.current.get(sessionId) !== generation) {
+          return
+        }
         const message = error instanceof Error ? error.message : ''
         if (message === 'That terminal session is no longer available.') {
           // Already gone backend-side: finalize removal the same way.
@@ -672,6 +708,11 @@ export function Explorer({
         }
       } finally {
         terminalClosingRef.current.delete(sessionId)
+        // Unconditional: the EXIT-bump path leaves a newer generation
+        // that belongs to this same settled attempt — never to a
+        // future close (single-flight) — so always drop it to keep the
+        // map bounded by in-flight closes only.
+        terminalCloseGenRef.current.delete(sessionId)
       }
     })()
   }

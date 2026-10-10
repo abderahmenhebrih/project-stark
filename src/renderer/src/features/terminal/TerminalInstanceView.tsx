@@ -141,9 +141,14 @@ export function TerminalInstanceView({
 
   // Refit when revealed (hidden containers measure zero) and on
   // container resizes (rAF debounce, single observer, full cleanup).
+  // Hidden instances stay mounted (buffer preserved) but observe
+  // nothing: a display:none container only ever measures zero, so
+  // observing it would churn rAF without ever reporting a resize.
   useEffect(() => {
     if (visible) {
       fitAndReport()
+    } else {
+      return
     }
     const container = containerRef.current
     if (container === null || typeof ResizeObserver === 'undefined') {

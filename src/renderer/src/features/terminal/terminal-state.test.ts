@@ -254,22 +254,26 @@ describe('terminal sessions state', () => {
     assert.equal(state.activeId, idB)
   })
 
-  it('late exit after optimistic close only clears kill tracking', () => {
+  it('late exit after optimistic close finalizes removal (EXIT wins the race)', () => {
     const idA = '11111111-1111-4111-8111-111111111111'
     const idB = '22222222-2222-4222-8222-222222222222'
     let state = start(bound(), 'k1', idA)
     state = start(state, 'k2', idB)
     state = terminalSessionsReducer(state, { type: 'close-requested', sessionId: idB })
-    // Delayed backend exit arrives while B is still retained: B is
-    // marked exited (honest), selection stays on A, tracking clears.
-    // close-finalized (already dispatched on kill initiation) removes it.
+    // EXIT is authoritative while closing: it finalizes removal at
+    // once (no Exited row, no close error). A late kill response for
+    // the same attempt is then a harmless no-op.
     state = terminalSessionsReducer(state, {
       type: 'exit-received',
       exit: { sessionId: idB, exitCode: 0, signal: null }
     })
     assert.deepEqual(state.closingIds, [])
     assert.equal(state.activeId, idA)
-    assert.equal(state.sessions[1]?.status, 'exited')
+    assert.deepEqual(
+      state.sessions.map((entry) => entry.id),
+      [idA]
+    )
+    assert.equal(state.notice, null)
     state = terminalSessionsReducer(state, { type: 'close-finalized', sessionId: idB })
     assert.deepEqual(visibleTerminalIds(state), [idA])
     assert.deepEqual(
@@ -472,5 +476,266 @@ describe('terminal sessions state', () => {
     assert.equal(confirmCloseTerminalAndSwitch(() => true), true)
     assert.equal(TERMINAL_SWITCH_CONFIRM_MESSAGE, 'Close the active terminal and switch projects?')
     setTerminalActive(false)
+  })
+})
+
+describe('terminal close race (exit wins)', () => {
+  const idA = '11111111-1111-4111-8111-111111111111'
+  const idB = '22222222-2222-4222-8222-222222222222'
+  const idC = '33333333-3333-4333-8333-333333333333'
+  const CLOSE_ERROR = 'We couldn’t close the terminal.'
+
+  function twoRunning(): TerminalSessionsState {
+    const state = start(bound(), 'k1', idA)
+    return start(state, 'k2', idB)
+  }
+
+  it('CASE 1: KILL_RESULT initiated then EXIT finalizes exactly once', () => {
+    let state = twoRunning()
+    state = terminalSessionsReducer(state, { type: 'close-requested', sessionId: idB })
+    state = terminalSessionsReducer(state, { type: 'close-finalized', sessionId: idB })
+    assert.deepEqual(
+      state.sessions.map((entry) => entry.id),
+      [idA]
+    )
+    assert.deepEqual(state.closingIds, [])
+    assert.equal(state.notice, null)
+    // Delayed EXIT for the already-finalized id is ignored: no
+    // resurrection, no duplicate, no error.
+    const before = state
+    state = terminalSessionsReducer(state, {
+      type: 'exit-received',
+      exit: { sessionId: idB, exitCode: 0, signal: null }
+    })
+    assert.equal(state, before)
+    const again = terminalSessionsReducer(state, { type: 'close-finalized', sessionId: idB })
+    assert.equal(again, state)
+  })
+
+  it('CASE 2: EXIT before KILL_RESULT finalizes and the late result is ignored', () => {
+    let state = twoRunning()
+    state = terminalSessionsReducer(state, { type: 'close-requested', sessionId: idB })
+    state = terminalSessionsReducer(state, {
+      type: 'exit-received',
+      exit: { sessionId: idB, exitCode: 0, signal: null }
+    })
+    assert.deepEqual(
+      state.sessions.map((entry) => entry.id),
+      [idA]
+    )
+    assert.deepEqual(state.closingIds, [])
+    assert.equal(state.notice, null)
+    // Late initiated result: no-op, no restore.
+    const finalized = terminalSessionsReducer(state, { type: 'close-finalized', sessionId: idB })
+    assert.equal(finalized, state)
+    // Late failure result: must not resurrect or show an error.
+    const aborted = terminalSessionsReducer(state, { type: 'close-aborted', sessionId: idB, message: CLOSE_ERROR })
+    assert.equal(aborted, state)
+    assert.equal(state.notice, null)
+  })
+
+  it('CASE 3: EXIT then late failure/NotFound stays finalized with no error', () => {
+    let state = twoRunning()
+    state = terminalSessionsReducer(state, { type: 'close-requested', sessionId: idB })
+    state = terminalSessionsReducer(state, {
+      type: 'exit-received',
+      exit: { sessionId: idB, exitCode: 1, signal: null }
+    })
+    assert.deepEqual(
+      state.sessions.map((entry) => entry.id),
+      [idA]
+    )
+    const aborted = terminalSessionsReducer(state, { type: 'close-aborted', sessionId: idB, message: CLOSE_ERROR })
+    assert.equal(aborted, state)
+    assert.equal(aborted.notice, null)
+    assert.deepEqual(aborted.closingIds, [])
+    assert.equal(aborted.activeId, idA)
+  })
+
+  it('CASE 4: already-exited cleanup finalizes immediately with no error', () => {
+    let state = start(bound(), 'k1', idA)
+    // Natural shell exit keeps the readable row (no auto-delete).
+    state = terminalSessionsReducer(state, {
+      type: 'exit-received',
+      exit: { sessionId: idA, exitCode: 0, signal: null }
+    })
+    assert.equal(state.sessions[0]?.status, 'exited')
+    assert.equal(state.sessions.length, 1)
+    // × on the exited row finalizes presentation at once.
+    state = terminalSessionsReducer(state, { type: 'close-finalized', sessionId: idA })
+    assert.deepEqual(state.sessions, [])
+    assert.deepEqual(state.closingIds, [])
+    assert.equal(state.activeId, null)
+    assert.equal(state.notice, null)
+    assert.deepEqual(visibleTerminalIds(state), [])
+  })
+
+  it('CASE 5: genuine kill-initiation failure restores the live terminal with retry', () => {
+    let state = twoRunning()
+    state = terminalSessionsReducer(state, { type: 'close-requested', sessionId: idB })
+    state = terminalSessionsReducer(state, { type: 'close-aborted', sessionId: idB, message: CLOSE_ERROR })
+    assert.deepEqual(
+      state.sessions.map((entry) => entry.id),
+      [idA, idB]
+    )
+    assert.deepEqual(state.closingIds, [])
+    assert.equal(state.activeId, idB)
+    assert.deepEqual(visibleTerminalIds(state), [idB])
+    assert.equal(state.sessions[1]?.status, 'running')
+    assert.equal(state.notice, CLOSE_ERROR)
+    // Retry is possible: a fresh close-request hides again and a
+    // later success finalizes and clears the stale error.
+    state = terminalSessionsReducer(state, { type: 'close-requested', sessionId: idB })
+    assert.deepEqual(state.closingIds, [idB])
+    state = terminalSessionsReducer(state, { type: 'close-finalized', sessionId: idB })
+    assert.deepEqual(
+      state.sessions.map((entry) => entry.id),
+      [idA]
+    )
+    assert.equal(state.notice, null)
+  })
+
+  it('CASE 6: host-crash exits each clean up locally per row with no error', () => {
+    let state = start(bound(), 'k1', idA)
+    state = start(state, 'k2', idB)
+    // Host down delivers one honest exit per session (not closing):
+    // rows stay as Exited for explicit per-row cleanup.
+    state = terminalSessionsReducer(state, {
+      type: 'exit-received',
+      exit: { sessionId: idA, exitCode: null, signal: null }
+    })
+    state = terminalSessionsReducer(state, {
+      type: 'exit-received',
+      exit: { sessionId: idB, exitCode: null, signal: null }
+    })
+    assert.equal(state.sessions[0]?.status, 'exited')
+    assert.equal(state.sessions[1]?.status, 'exited')
+    // × on one exited row removes only that row.
+    state = terminalSessionsReducer(state, { type: 'close-finalized', sessionId: idA })
+    assert.deepEqual(
+      state.sessions.map((entry) => entry.id),
+      [idB]
+    )
+    assert.equal(state.sessions[0]?.status, 'exited')
+    assert.equal(state.notice, null)
+    state = terminalSessionsReducer(state, { type: 'close-finalized', sessionId: idB })
+    assert.deepEqual(state.sessions, [])
+    assert.equal(state.notice, null)
+  })
+
+  it('CASE 7: closing A leaves B/C untouched (per-terminal independence)', () => {
+    let state = start(bound(), 'k1', idA)
+    state = start(state, 'k2', idB)
+    state = start(state, 'k3', idC)
+    state = terminalSessionsReducer(state, { type: 'close-requested', sessionId: idA })
+    assert.deepEqual(state.closingIds, [idA])
+    state = terminalSessionsReducer(state, {
+      type: 'exit-received',
+      exit: { sessionId: idA, exitCode: 0, signal: null }
+    })
+    assert.deepEqual(
+      state.sessions.map((entry) => entry.id),
+      [idB, idC]
+    )
+    assert.equal(state.sessions[0]?.status, 'running')
+    assert.equal(state.sessions[1]?.status, 'running')
+    assert.deepEqual(state.closingIds, [])
+    // Sibling titles/statuses unchanged; active fell to a live neighbor.
+    assert.deepEqual(
+      state.sessions.map((entry) => entry.title),
+      ['PowerShell 2', 'PowerShell 3']
+    )
+  })
+
+  it('close-aborted on an exited session finalizes silently instead of restoring', () => {
+    let state = start(bound(), 'k1', idA)
+    state = terminalSessionsReducer(state, {
+      type: 'exit-received',
+      exit: { sessionId: idA, exitCode: 0, signal: null }
+    })
+    // A stale failure arriving for an already-exited row must clean
+    // up locally with no "couldn’t close" notice.
+    state = terminalSessionsReducer(state, { type: 'close-aborted', sessionId: idA, message: CLOSE_ERROR })
+    assert.deepEqual(state.sessions, [])
+    assert.deepEqual(state.closingIds, [])
+    assert.equal(state.notice, null)
+  })
+
+  it('stale close-aborted after finalize never sets a close error', () => {
+    let state = twoRunning()
+    state = terminalSessionsReducer(state, { type: 'close-requested', sessionId: idB })
+    state = terminalSessionsReducer(state, { type: 'close-finalized', sessionId: idB })
+    assert.equal(state.notice, null)
+    const stale = terminalSessionsReducer(state, { type: 'close-aborted', sessionId: idB, message: CLOSE_ERROR })
+    assert.equal(stale, state)
+    assert.equal(stale.notice, null)
+  })
+
+  it('natural exit inside a split keeps the readable pair until closed', () => {
+    let state = twoRunning()
+    state = terminalSessionsReducer(state, { type: 'split-opened', sessionIds: [idA, idB] })
+    // Shell in A ends naturally (not closing): the pair stays so the
+    // output remains readable — never a blank pane, never 3 panes.
+    state = terminalSessionsReducer(state, {
+      type: 'exit-received',
+      exit: { sessionId: idA, exitCode: 0, signal: null }
+    })
+    assert.equal(state.sessions[0]?.status, 'exited')
+    assert.deepEqual(state.splitIds, [idA, idB])
+    assert.deepEqual(visibleTerminalIds(state), [idA, idB])
+    // × on the exited member collapses the survivor to single view.
+    state = terminalSessionsReducer(state, { type: 'close-finalized', sessionId: idA })
+    assert.deepEqual(
+      state.sessions.map((entry) => entry.id),
+      [idB]
+    )
+    assert.equal(state.splitIds, null)
+    assert.deepEqual(visibleTerminalIds(state), [idB])
+  })
+
+  it('concurrent creations never exceed the cap or strand pending entries', () => {
+    let state = bound()
+    for (let index = 0; index < MAX_HUMAN_TERMINALS; index += 1) {
+      state = terminalSessionsReducer(state, { type: 'start-requested', key: `k${index}` })
+    }
+    assert.equal(canCreateTerminal(state), false)
+    // One more concurrent request is refused without a pending entry.
+    const refused = terminalSessionsReducer(state, { type: 'start-requested', key: 'k-overflow' })
+    assert.deepEqual(refused.pending.length, MAX_HUMAN_TERMINALS)
+    // Each in-flight creation settles exactly once; unknown keys never
+    // create entries (stale late success after a switch is dropped).
+    state = terminalSessionsReducer(state, {
+      type: 'start-succeeded',
+      key: 'k0',
+      session: session(idA),
+      title: ''
+    })
+    assert.equal(state.sessions.length, 1)
+    const stale = terminalSessionsReducer(state, {
+      type: 'start-succeeded',
+      key: 'k-unknown',
+      session: session(idB),
+      title: ''
+    })
+    assert.equal(stale, state)
+  })
+
+  it('split state stays valid across an EXIT-wins close', () => {
+    let state = twoRunning()
+    state = terminalSessionsReducer(state, { type: 'split-opened', sessionIds: [idA, idB] })
+    assert.deepEqual(state.splitIds, [idA, idB])
+    state = terminalSessionsReducer(state, { type: 'close-requested', sessionId: idB })
+    assert.equal(state.splitIds, null)
+    state = terminalSessionsReducer(state, {
+      type: 'exit-received',
+      exit: { sessionId: idB, exitCode: 0, signal: null }
+    })
+    assert.deepEqual(
+      state.sessions.map((entry) => entry.id),
+      [idA]
+    )
+    assert.equal(state.activeId, idA)
+    assert.deepEqual(visibleTerminalIds(state), [idA])
+    assert.deepEqual(state.closingIds, [])
   })
 })

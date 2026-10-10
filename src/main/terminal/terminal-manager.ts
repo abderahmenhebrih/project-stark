@@ -36,6 +36,13 @@ interface ManagedSession {
   readonly ownerWebContentsId: number
   running: boolean
   exitDelivered: boolean
+  /**
+   * Owner renderer is gone (window destroyed): bookkeeping is
+   * RETAINED until EXIT reaps it — never dropped while a live PTY
+   * may exist. All front-door ops reject with NotFound; EXIT and
+   * host-down still remove normally.
+   */
+  ownerGone: boolean
 }
 
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -89,6 +96,19 @@ function inputByteLength(data: string): number {
 export class TerminalManager {
   private readonly sessions = new Map<string, ManagedSession>()
   private readonly ownerIndex = new Map<number, Set<string>>()
+  /**
+   * Creates in flight per owner (session ids SENT to the host but not
+   * yet tracked). Lets window-destroyed cleanup recognize a session
+   * that materializes after its owner died. Bounded: entries live
+   * only until their own create settles.
+   */
+  private readonly pendingCreates = new Map<number, Set<string>>()
+  /**
+   * Owners destroyed while a create was in flight. Bounded: an entry
+   * exists only while its owner has pending creates; removed when the
+   * last one settles.
+   */
+  private readonly deadOwners = new Set<number>()
 
   constructor(
     private readonly host: TerminalHostClient,
@@ -151,6 +171,7 @@ export class TerminalManager {
       throw new TerminalLimitError()
     }
     const id = randomUUID()
+    this.registerPendingCreate(input.ownerWebContentsId, id)
     try {
       await this.host.create({
         sessionId: id,
@@ -163,6 +184,30 @@ export class TerminalManager {
         env: input.env
       })
     } catch {
+      this.unregisterPendingCreate(input.ownerWebContentsId, id)
+      // Uncertain result: the host may still own a live PTY for this
+      // id (CREATE ack lost/timed out after a successful spawn).
+      // Exact scoped cleanup of that one session before failing —
+      // a `gone` answer is the common no-op; never throws.
+      try {
+        await this.host.kill(id)
+      } catch {
+        // Best effort; host-down reaps everything regardless.
+      }
+      throw new TerminalUnavailableError()
+    }
+    // Dead-owner check runs BEFORE unregistering: the unregister
+    // drops the dead mark once no creates remain in flight.
+    const ownerDiedMidCreate = this.deadOwners.has(input.ownerWebContentsId)
+    this.unregisterPendingCreate(input.ownerWebContentsId, id)
+    if (ownerDiedMidCreate) {
+      // Owner died mid-create: never track a session for a dead
+      // renderer. Exact cleanup of the just-created PTY instead.
+      try {
+        await this.host.kill(id)
+      } catch {
+        // Best effort; EXIT/host-down still reaps when it can.
+      }
       throw new TerminalUnavailableError()
     }
     const session: TerminalSession = {
@@ -175,7 +220,8 @@ export class TerminalManager {
       session,
       ownerWebContentsId: input.ownerWebContentsId,
       running: true,
-      exitDelivered: false
+      exitDelivered: false,
+      ownerGone: false
     }
     this.sessions.set(id, managed)
     let owned = this.ownerIndex.get(input.ownerWebContentsId)
@@ -236,6 +282,14 @@ export class TerminalManager {
       throw new TerminalNotFoundError()
     }
     const outcome = await this.host.kill(sessionId)
+    // EXIT (or host-down) may win the race while the kill is in
+    // flight and remove bookkeeping first: a session that
+    // disappeared because it exited is already_gone/success — never
+    // a termination failure. Ownership/security checks above stay
+    // exact; only this post-await disappearance is normalized.
+    if (this.sessions.get(sessionId) === undefined) {
+      throw new TerminalNotFoundError()
+    }
     if (outcome === 'gone') {
       this.removeSession(managed.session.id)
       throw new TerminalNotFoundError()
@@ -248,25 +302,35 @@ export class TerminalManager {
     managed.running = false
   }
 
-  /** Bounded cleanup when an owning renderer is destroyed: no orphans. */
+  /**
+   * Bounded cleanup when an owning renderer is destroyed.
+   *
+   * Bookkeeping is RETAINED (marked ownerGone) until EXIT or
+   * host-down reaps each session: dropping it while a kill is
+   * unconfirmed would orphan a live PTY with no owner record. EXIT
+   * delivery to the dead owner is a sink no-op; removal is normal.
+   */
   handleWebContentsDestroyed(ownerWebContentsId: number): void {
+    if (this.pendingCreates.has(ownerWebContentsId)) {
+      this.deadOwners.add(ownerWebContentsId)
+    }
     const owned = this.ownerIndex.get(ownerWebContentsId)
     if (owned === undefined) {
       return
     }
     for (const sessionId of [...owned]) {
-      if (!this.sessions.has(sessionId)) {
+      const managed = this.sessions.get(sessionId)
+      if (managed === undefined) {
         continue
       }
-      // Fire-and-forget exact kills; local bookkeeping drops now
-      // while the host processes termination. App-quit shutdown
-      // follows with a bounded host stop as the backstop.
+      managed.ownerGone = true
+      // Initiate exact termination; the EXIT callback performs
+      // authoritative removal. App-quit shutdown follows with a
+      // bounded host stop as the backstop.
       try {
         void this.host.kill(sessionId).catch(() => {})
       } catch {
         // Best effort during teardown.
-      } finally {
-        this.removeSession(sessionId)
       }
     }
   }
@@ -283,7 +347,7 @@ export class TerminalManager {
     }
   }
 
-  /** A running session for an owner, if any (insertion order). */
+  /** A running session for a live owner, if any (insertion order). */
   findActiveForOwner(ownerWebContentsId: number): TerminalSession | undefined {
     const owned = this.ownerIndex.get(ownerWebContentsId)
     if (owned === undefined) {
@@ -291,14 +355,19 @@ export class TerminalManager {
     }
     for (const sessionId of owned) {
       const managed = this.sessions.get(sessionId)
-      if (managed !== undefined && managed.running) {
+      if (managed !== undefined && managed.running && !managed.ownerGone) {
         return managed.session
       }
     }
     return undefined
   }
 
-  /** Live session count for an owner (cap accounting). */
+  /**
+   * Tracked resource count for an owner (cap accounting). Counts every
+   * tracked session — including closing-but-not-yet-exited ones whose
+   * ConPTY still physically exists — so at most 8 real resources exist
+   * per owner. Dead-owner sessions never count against a recycled id.
+   */
   liveCountForOwner(ownerWebContentsId: number): number {
     const owned = this.ownerIndex.get(ownerWebContentsId)
     if (owned === undefined) {
@@ -306,7 +375,8 @@ export class TerminalManager {
     }
     let count = 0
     for (const sessionId of owned) {
-      if (this.sessions.get(sessionId)?.running === true) {
+      const managed = this.sessions.get(sessionId)
+      if (managed !== undefined && !managed.ownerGone) {
         count += 1
       }
     }
@@ -332,6 +402,27 @@ export class TerminalManager {
     }
   }
 
+  private registerPendingCreate(ownerWebContentsId: number, sessionId: string): void {
+    let pending = this.pendingCreates.get(ownerWebContentsId)
+    if (pending === undefined) {
+      pending = new Set<string>()
+      this.pendingCreates.set(ownerWebContentsId, pending)
+    }
+    pending.add(sessionId)
+  }
+
+  private unregisterPendingCreate(ownerWebContentsId: number, sessionId: string): void {
+    const pending = this.pendingCreates.get(ownerWebContentsId)
+    if (pending === undefined) {
+      return
+    }
+    pending.delete(sessionId)
+    if (pending.size === 0) {
+      this.pendingCreates.delete(ownerWebContentsId)
+      this.deadOwners.delete(ownerWebContentsId)
+    }
+  }
+
   private requireOwnedSession(ownerWebContentsId: number, sessionId: string): ManagedSession {
     const managed = this.sessions.get(sessionId)
     if (managed === undefined) {
@@ -340,12 +431,15 @@ export class TerminalManager {
     if (managed.ownerWebContentsId !== ownerWebContentsId) {
       throw new TerminalOwnershipError()
     }
+    if (managed.ownerGone) {
+      throw new TerminalNotFoundError()
+    }
     return managed
   }
 
   private handleHostData(sessionId: string, data: string): void {
     const managed = this.sessions.get(sessionId)
-    if (managed === undefined || !managed.running) {
+    if (managed === undefined || !managed.running || managed.ownerGone) {
       return
     }
     const chunks = splitOutputForIpc(data, MAX_TERMINAL_OUTPUT_CHUNK_BYTES)

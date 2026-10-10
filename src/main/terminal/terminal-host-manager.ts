@@ -341,6 +341,9 @@ export class TerminalHostManager {
       this.state = 'stopped'
       this.log('stopped')
       this.failAllRequests('Terminal Host stopped.')
+      // Waiting ensureReady() callers must never hang: the startup
+      // promise below only settles through these waiters.
+      this.settleReadyWaiters(new Error('Terminal Host stopped.'))
       return
     }
     const stopTimeoutMs = this.options.stopTimeoutMs ?? TERMINAL_HOST_STOP_TIMEOUT_MS
@@ -348,8 +351,17 @@ export class TerminalHostManager {
     this.log('stopping')
     return new Promise<void>((resolve) => {
       const child = this.child
+      let settled = false
       const finishStopped = (): void => {
+        if (settled) {
+          return
+        }
+        settled = true
         this.clearStopTimer()
+        // SHUTDOWN_COMPLETE is a message, not process exit: the host
+        // never self-terminates, so terminate the exact owned child
+        // here or a live utility process lingers after every stop.
+        this.killOwned()
         this.detach()
         this.state = 'stopped'
         this.log('stopped')
@@ -360,9 +372,11 @@ export class TerminalHostManager {
         return
       }
       // One-shot: SHUTDOWN_COMPLETE or host exit, whichever arrives
-      // first (both flow through the shared subscriber channel).
+      // first (both flow through the shared subscriber channel). The
+      // local flag (not state) guards double-settle: the exit path in
+      // attachChild may flip state before this listener runs.
       const unsubscribe = this.onHostEvent((event) => {
-        if (this.state !== 'stopping') {
+        if (settled) {
           return
         }
         if (event.kind === 'exit' || event.kind === 'shutdown-complete') {

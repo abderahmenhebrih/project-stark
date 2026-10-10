@@ -230,22 +230,38 @@ export function terminalSessionsReducer(
       }
     }
     case 'exit-received': {
-      // A late exit for an optimistically closed terminal only clears
-      // its in-flight kill tracking (presentation left on
-      // close-requested; main removed its own bookkeeping too).
+      // EXIT is authoritative evidence the process is gone. While a
+      // close is in flight (closingIds) it wins the race outright:
+      // finalize removal now so a late stale kill-failure can never
+      // resurrect the dead terminal or raise a close error. Natural
+      // exits (not closing) keep the readable [Terminal exited] row.
       const known = state.sessions.some((entry) => entry.id === action.exit.sessionId)
       const wasClosing = state.closingIds.includes(action.exit.sessionId)
       if (!known && !wasClosing) {
         return state
       }
+      if (wasClosing) {
+        if (!known) {
+          return {
+            ...state,
+            closingIds: state.closingIds.filter((id) => id !== action.exit.sessionId)
+          }
+        }
+        return withValidSelection({
+          ...state,
+          sessions: state.sessions.filter((entry) => entry.id !== action.exit.sessionId),
+          closingIds: state.closingIds.filter((id) => id !== action.exit.sessionId),
+          notice: null
+        })
+      }
+      if (!known) {
+        return state
+      }
       return {
         ...state,
-        closingIds: wasClosing ? state.closingIds.filter((id) => id !== action.exit.sessionId) : state.closingIds,
-        sessions: known
-          ? state.sessions.map((entry) =>
-              entry.id === action.exit.sessionId ? { ...entry, status: 'exited' as const, exit: action.exit } : entry
-            )
-          : state.sessions
+        sessions: state.sessions.map((entry) =>
+          entry.id === action.exit.sessionId ? { ...entry, status: 'exited' as const, exit: action.exit } : entry
+        )
       }
     }
     case 'close-requested': {
@@ -283,14 +299,23 @@ export function terminalSessionsReducer(
       })
     }
     case 'close-aborted': {
-      // Initiation failed and the terminal may still be alive: clear
-      // closing, reshow the SAME retained instance (buffer intact —
-      // never a recreated empty terminal), and reselect it so the
-      // user can retry. Deterministic in every case.
-      if (!state.sessions.some((entry) => entry.id === action.sessionId)) {
+      // Initiation failed: restore ONLY when the terminal is still
+      // alive (status running). An already-exited or already-removed
+      // terminal is authoritative gone — finalize silently with no
+      // error so a stale late failure can never resurrect it.
+      const entry = state.sessions.find((candidate) => candidate.id === action.sessionId)
+      if (entry === undefined) {
         return state.closingIds.includes(action.sessionId)
-          ? { ...state, closingIds: state.closingIds.filter((id) => id !== action.sessionId), notice: action.message }
+          ? { ...state, closingIds: state.closingIds.filter((id) => id !== action.sessionId) }
           : state
+      }
+      if (entry.status !== 'running') {
+        return withValidSelection({
+          ...state,
+          sessions: state.sessions.filter((candidate) => candidate.id !== action.sessionId),
+          closingIds: state.closingIds.filter((id) => id !== action.sessionId),
+          notice: null
+        })
       }
       return {
         ...state,

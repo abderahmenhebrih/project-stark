@@ -132,6 +132,7 @@ describe('terminal host process isolation', () => {
         send({ protocol: PROTOCOL, type: 'KILL', payload: { requestId: 'req-kill-a', sessionId: 'sess-a' } })
         // A second command issued DURING the kill window must still
         // complete promptly (host message pump stays alive).
+        const echoSentAt = Date.now()
         send({ protocol: PROTOCOL, type: 'WRITE', payload: { sessionId: 'sess-b', data: 'echo alive\r' } })
         const echo = await waitFor(
           'DATA',
@@ -145,13 +146,18 @@ describe('terminal host process isolation', () => {
         )
         const exitA = await waitFor('EXIT', (payload) => payload?.['sessionId'] === 'sess-a', 20000)
         const killToExitMs = exitA.at - killSentAt
+        const echoLatencyMs = echo.at - echoSentAt
         assert.equal((killResult.payload as Record<string, unknown>)['outcome'], 'initiated')
         // Parent responsiveness holds unconditionally.
         assert.ok(worstGapMs < 1000, `parent event loop must stay responsive (worst gap ${worstGapMs}ms)`)
-        // When this environment blocks inside native kill (Windows
-        // ConPTY, measured ~3–5s), the echo MUST have completed
-        // during that window — the isolation proof.
-        if (killToExitMs >= 1000) {
+        // Sibling responsiveness holds unconditionally: one terminal's
+        // teardown must never stall another terminal's round trip
+        // beyond this SLO (baseline here is tens of ms; a 2–5s
+        // head-of-line block would trip this).
+        assert.ok(echoLatencyMs < 5000, `sibling round trip during kill must stay fast (${echoLatencyMs}ms)`)
+        // When this environment blocks inside native kill, the echo
+        // MUST have completed during that window — the isolation proof.
+        if (killToExitMs >= 500) {
           assert.ok(echo.at < exitA.at, 'sibling traffic must complete while the kill is still blocked in-host')
         }
       } finally {

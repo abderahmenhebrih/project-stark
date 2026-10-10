@@ -1,7 +1,7 @@
 import type { WorkspaceSlice } from '../../app/app-context'
 import { confirmDiscardUnsavedDraft } from '../explorer/editor-guard'
 import {
-  closeActiveTerminalForSwitch,
+  closeAllTerminalsForSwitch,
   confirmCloseTerminalAndSwitch,
   hasActiveTerminal
 } from '../terminal/terminal-guard'
@@ -12,9 +12,9 @@ import {
  * surface). Switching consults the editor discard guard and the
  * terminal switch guard first: a declined confirmation keeps the
  * current workspace (and its dirty draft / running terminal) in place.
- * An accepted terminal prompt kills the session with bounded cleanup
- * before switching; nothing is ever re-created automatically. No
- * duplicate workspace state, no new persistence.
+ * An accepted terminal prompt kills every owned terminal with bounded
+ * cleanup before switching; nothing is ever re-created automatically.
+ * No duplicate workspace state, no new persistence.
  */
 export async function chooseWorkspaceWithGuards(workspace: WorkspaceSlice): Promise<void> {
   if (!confirmDiscardUnsavedDraft()) {
@@ -23,7 +23,7 @@ export async function chooseWorkspaceWithGuards(workspace: WorkspaceSlice): Prom
   if (hasActiveTerminal() && !confirmCloseTerminalAndSwitch()) {
     return
   }
-  await closeActiveTerminalForSwitch()
+  await closeAllTerminalsForSwitch()
   await workspace.chooseWorkspace()
 }
 
@@ -35,6 +35,6 @@ export async function openWorkspaceWithGuards(workspace: WorkspaceSlice, workspa
   if (hasActiveTerminal() && !confirmCloseTerminalAndSwitch()) {
     return
   }
-  await closeActiveTerminalForSwitch()
+  await closeAllTerminalsForSwitch()
   await workspace.openWorkspace(workspaceId)
 }

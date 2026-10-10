@@ -252,6 +252,58 @@ describe('split terminals', () => {
       assert.ok(body.includes('closingIds.includes(sourceId)'), `${marker} must refuse a closing source`)
     }
   })
+
+  it('already-exited close cleans up locally with no backend kill', () => {
+    const explorer = codeOnly(renderer('features/explorer/Explorer.tsx'))
+    const body = functionBody(explorer, 'function handleKillTerminal(')
+    // Exited rows must finalize presentation immediately without
+    // another PTY kill and without an error notice.
+    assert.ok(body.includes("status !== 'running'"), 'close must branch on live versus exited status')
+    const statusAt = body.indexOf("status !== 'running'")
+    const finalizedAt = body.indexOf("terminalDispatch({ type: 'close-finalized'")
+    const killAt = body.indexOf('api?.kill({ sessionId })') >= 0 ? body.indexOf('api?.kill({ sessionId })') : body.indexOf('api.kill({ sessionId })')
+    assert.ok(statusAt >= 0 && finalizedAt > statusAt && killAt > finalizedAt, 'exited fast-path must finalize before any backend kill')
+  })
+
+  it('exit invalidates the in-flight kill so stale responses never resurrect', () => {
+    const explorer = renderer('features/explorer/Explorer.tsx')
+    assert.ok(explorer.includes('terminalCloseGenRef'), 'close path must own a bounded generation token')
+    const killBody = functionBody(codeOnly(explorer), 'function handleKillTerminal(')
+    assert.ok(killBody.includes('terminalCloseGenRef.current.get(sessionId) !== generation'), 'late kill responses must be ignored after EXIT wins')
+    const code = codeOnly(explorer)
+    const exitAt = code.indexOf('const offExit = api.onExit')
+    assert.ok(exitAt >= 0, 'exit subscription must exist')
+    const exitSlice = code.slice(exitAt, exitAt + 800)
+    assert.ok(exitSlice.includes('terminalCloseGenRef'), 'EXIT while closing must bump the generation')
+    assert.ok(exitSlice.includes("terminalDispatch({ type: 'exit-received'"), 'EXIT must still flow through the reducer')
+  })
+
+  it('close generation entries are always released after settle', () => {
+    const explorer = codeOnly(renderer('features/explorer/Explorer.tsx'))
+    const killBody = functionBody(explorer, 'function handleKillTerminal(')
+    // The EXIT-bump path leaves a newer generation belonging to the
+    // same settled attempt: conditional release would leak one map
+    // entry per raced close (unbounded UUID-keyed growth).
+    assert.ok(killBody.includes('terminalCloseGenRef.current.delete(sessionId)'), 'settled closes must release the generation')
+    assert.ok(!killBody.includes('=== generation'), 'release must be unconditional, never generation-guarded')
+  })
+
+  it('workspace switch kills every terminal concurrently, not one by one', () => {
+    const explorer = codeOnly(renderer('features/explorer/Explorer.tsx'))
+    const guardAt = explorer.indexOf('registerTerminalKillHandler(async () => {')
+    assert.ok(guardAt >= 0, 'kill-all handler must be registered')
+    const body = explorer.slice(guardAt, guardAt + 800)
+    assert.ok(body.includes('api.kill({ sessionId })'), 'switch cleanup must kill by exact session handle')
+    assert.ok(body.includes('Promise.all'), 'switch kills must run concurrently (no sequential slow-kill stalls)')
+  })
+
+  it('workspace-switch guard names the multi-terminal truth', () => {
+    const guard = readSource('renderer', 'src', 'features/terminal/terminal-guard.ts')
+    assert.ok(guard.includes('closeAllTerminalsForSwitch'), 'switch closer must name the kill-all behavior')
+    assert.ok(!codeOnly(guard).includes('closeActiveTerminalForSwitch'), 'singular closer name must be gone')
+    const flow = readSource('renderer', 'src', 'features/workspace/workspace-switch.ts')
+    assert.ok(flow.includes('closeAllTerminalsForSwitch'), 'switch flows must call the kill-all closer')
+  })
 })
 
 describe('duplicate terminals', () => {

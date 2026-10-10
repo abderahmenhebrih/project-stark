@@ -111,7 +111,9 @@ function validCreate(payload) {
   if (!Array.isArray(shellArgs) || !shellArgs.every((entry) => typeof entry === 'string')) {
     return false;
   }
-  if (!Number.isInteger(cols) || cols <= 0 || cols > 500 || !Number.isInteger(rows) || rows <= 0 || rows > 200) {
+  // Parity with the main-enforced bounds (20..500 x 5..200): the
+  // host fails closed on values main would reject.
+  if (!Number.isInteger(cols) || cols < 20 || cols > 500 || !Number.isInteger(rows) || rows < 5 || rows > 200) {
     return false;
   }
   if (!isRecord(env) || !Object.values(env).every((entry) => typeof entry === 'string')) {
@@ -251,7 +253,17 @@ export function createTerminalHostRuntime(deps) {
     }
     if (type === 'RESIZE') {
       const { sessionId, cols, rows } = payload;
-      if (!isBoundedId(sessionId) || !Number.isInteger(cols) || !Number.isInteger(rows)) {
+      // Same bounds as CREATE/main: reject degenerate or absurd sizes
+      // instead of forwarding them to the native layer.
+      if (
+        !isBoundedId(sessionId) ||
+        !Number.isInteger(cols) ||
+        cols < 20 ||
+        cols > 500 ||
+        !Number.isInteger(rows) ||
+        rows < 5 ||
+        rows > 200
+      ) {
         return;
       }
       const tracked = sessions.get(sessionId);

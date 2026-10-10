@@ -30,6 +30,10 @@ export interface FakeHostSession {
 export interface FakeTerminalHostOptions {
   /** Fail every create with a spawn error. */
   readonly failCreate?: boolean
+  /** Spawn the session but then throw, simulating a lost CREATE acknowledgement (orphan drill). */
+  readonly loseCreateAck?: boolean
+  /** When true, create() waits until releaseCreate() before proceeding. */
+  readonly deferCreate?: boolean
   /** Answer every kill with this outcome (default 'initiated'). */
   readonly killOutcome?: TerminalHostKillOutcome
   /** When true, kill() returns a promise resolved only via releaseKill(). */
@@ -46,6 +50,7 @@ export interface FakeTerminalHost extends TerminalHostClient {
   fireExit(sessionId: string, exitCode: number | null, signal: number | null): void
   fireHostDown(): void
   releaseKill(): void
+  releaseCreate(): void
 }
 
 export function createFakeTerminalHostClient(options: FakeTerminalHostOptions = {}): FakeTerminalHost {
@@ -54,6 +59,7 @@ export function createFakeTerminalHostClient(options: FakeTerminalHostOptions = 
   const listeners = new Set<(event: TerminalHostClientEvent) => void>()
   let shutdowns = 0
   let killWaiters: Array<() => void> = []
+  let createWaiters: Array<() => void> = []
 
   function emit(event: TerminalHostClientEvent): void {
     for (const listener of [...listeners]) {
@@ -79,6 +85,11 @@ export function createFakeTerminalHostClient(options: FakeTerminalHostOptions = 
     },
     create: async (input: TerminalHostCreateInput) => {
       created.push(input)
+      if (options.deferCreate === true) {
+        await new Promise<void>((resolve) => {
+          createWaiters.push(resolve)
+        })
+      }
       if (options.failCreate === true) {
         throw new Error('Terminal Host failed to start the terminal.')
       }
@@ -92,6 +103,9 @@ export function createFakeTerminalHostClient(options: FakeTerminalHostOptions = 
         kills: 0,
         exited: false
       })
+      if (options.loseCreateAck === true) {
+        throw new Error('Terminal Host acknowledgement lost.')
+      }
     },
     write: (sessionId: string, data: string) => {
       sessions.get(sessionId)?.written.push(data)
@@ -134,6 +148,13 @@ export function createFakeTerminalHostClient(options: FakeTerminalHostOptions = 
     releaseKill: () => {
       const waiting = killWaiters
       killWaiters = []
+      for (const resolve of waiting) {
+        resolve()
+      }
+    },
+    releaseCreate: () => {
+      const waiting = createWaiters
+      createWaiters = []
       for (const resolve of waiting) {
         resolve()
       }

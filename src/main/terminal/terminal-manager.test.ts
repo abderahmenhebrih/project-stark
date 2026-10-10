@@ -16,7 +16,13 @@ function createSink(data: TerminalDataEvent[], exits: TerminalExitEvent[]): Term
   }
 }
 
-function openStack(options?: { failCreate?: boolean; killOutcome?: 'initiated' | 'gone' | 'failed'; deferKill?: boolean }): {
+function openStack(options?: {
+  failCreate?: boolean
+  loseCreateAck?: boolean
+  deferCreate?: boolean
+  killOutcome?: 'initiated' | 'gone' | 'failed'
+  deferKill?: boolean
+}): {
   manager: TerminalManager
   host: FakeTerminalHost
   data: TerminalDataEvent[]
@@ -203,14 +209,24 @@ describe('terminal manager', () => {
     assert.equal(manager.findActiveForOwner(72), undefined)
   })
 
-  it('webContents destruction cleans up without orphans', async () => {
-    const { manager, host } = openStack()
+  it('webContents destruction retains bookkeeping until EXIT reaps it', async () => {
+    const { manager, host, exits } = openStack()
     const session = await manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 81, env: {} })
     manager.handleWebContentsDestroyed(81)
+    // Exact kill initiated, but the record stays until the host
+    // confirms the PTY is gone — dropping it here would orphan a
+    // live PTY with no owner record on kill failure/timeout.
     assert.equal(host.sessions.get(session.id)?.kills, 1)
-    assert.equal(manager.size, 0)
+    assert.equal(manager.size, 1)
     assert.equal(manager.findActiveForOwner(81), undefined)
+    assert.equal(manager.liveCountForOwner(81), 0)
     assert.throws(() => manager.writeSession(81, session.id, 'x'), /no longer available/)
+    assert.throws(() => manager.resizeSession(81, session.id, 80, 24), /no longer available/)
+    await assert.rejects(manager.killSession(81, session.id), /no longer available/)
+    // The authoritative EXIT reaps the retained record.
+    host.fireExit(session.id, 0, null)
+    assert.equal(exits.length, 1)
+    assert.equal(manager.size, 0)
   })
 
   it('destroying one owner kills every owned session and nothing else', async () => {
@@ -222,11 +238,16 @@ describe('terminal manager', () => {
     assert.equal(host.sessions.get(first.id)?.kills, 1)
     assert.equal(host.sessions.get(second.id)?.kills, 1)
     assert.equal(host.sessions.get(other.id)?.kills ?? 0, 0)
-    assert.equal(manager.size, 1)
+    assert.equal(manager.size, 3)
+    assert.equal(manager.liveCountForOwner(82), 0)
+    assert.equal(manager.liveCountForOwner(83), 1)
     assert.throws(() => manager.writeSession(82, first.id, 'x'), /no longer available/)
     assert.throws(() => manager.writeSession(82, second.id, 'x'), /no longer available/)
     manager.writeSession(83, other.id, 'x')
     assert.deepEqual(host.sessions.get(other.id)?.written, ['x'])
+    host.fireExit(first.id, 0, null)
+    host.fireExit(second.id, 0, null)
+    assert.equal(manager.size, 1)
   })
 
   it('killing one session leaves its siblings running', async () => {
@@ -271,5 +292,144 @@ describe('terminal manager', () => {
     host.fireExit(session.id, 1, null)
     assert.equal(exits.length, 1)
     assert.equal(exits[0]?.sessionId, session.id)
+  })
+
+  it('EXIT winning during a failing kill reports already-gone, not close failure', async () => {
+    // Deferred failed kill + EXIT arriving mid-flight: the session
+    // disappeared because it exited, so the broker must report
+    // NotFound (renderer finalizes) rather than a close failure
+    // (which would wrongly restore an Exited row with an error).
+    const { manager, host, exits } = openStack({ deferKill: true, killOutcome: 'failed' })
+    const session = await manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 111, env: {} })
+    const killing = manager.killSession(111, session.id)
+    host.fireExit(session.id, 0, null)
+    assert.equal(exits.length, 1)
+    host.releaseKill()
+    await assert.rejects(killing, /no longer available/)
+    assert.equal(manager.size, 0)
+  })
+
+  it('EXIT winning during an initiated kill reports already-gone once', async () => {
+    const { manager, host, exits } = openStack({ deferKill: true })
+    const session = await manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 112, env: {} })
+    const killing = manager.killSession(112, session.id)
+    host.fireExit(session.id, 0, null)
+    host.releaseKill()
+    // Already gone (EXIT removed bookkeeping first): the renderer
+    // finalizes the same way; no duplicate exit follows.
+    await assert.rejects(killing, /no longer available/)
+    host.fireExit(session.id, 0, null)
+    assert.equal(exits.length, 1)
+    assert.equal(manager.size, 0)
+  })
+
+  it('host crash during a failing kill reports already-gone, not close failure', async () => {
+    const { manager, host, exits } = openStack({ deferKill: true, killOutcome: 'failed' })
+    const first = await manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 113, env: {} })
+    await manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 113, env: {} })
+    const killing = manager.killSession(113, first.id)
+    host.fireHostDown()
+    assert.equal(exits.length, 2)
+    host.releaseKill()
+    await assert.rejects(killing, /no longer available/)
+    assert.equal(manager.size, 0)
+  })
+
+  it('genuine kill failure while alive keeps the session for retry', async () => {
+    const { manager, host } = openStack({ killOutcome: 'failed' })
+    const session = await manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 114, env: {} })
+    await assert.rejects(manager.killSession(114, session.id), /We couldn’t close the terminal\./)
+    assert.equal(manager.size, 1)
+    assert.equal(manager.liveCountForOwner(114), 1)
+    // The terminal is still alive and usable, so a retry stays possible.
+    manager.writeSession(114, session.id, 'retry\r')
+    assert.deepEqual(host.sessions.get(session.id)?.written, ['retry\r'])
+  })
+
+  it('a kill in flight for A leaves B/C running', async () => {
+    const { manager, host, exits } = openStack({ deferKill: true })
+    const first = await manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 115, env: {} })
+    const second = await manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 115, env: {} })
+    const third = await manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 115, env: {} })
+    const killing = manager.killSession(115, first.id)
+    host.fireExit(first.id, 0, null)
+    host.releaseKill()
+    await assert.rejects(killing, /no longer available/)
+    assert.equal(exits.length, 1)
+    manager.writeSession(115, second.id, 'b\r')
+    manager.writeSession(115, third.id, 'c\r')
+    assert.deepEqual(host.sessions.get(second.id)?.written, ['b\r'])
+    assert.deepEqual(host.sessions.get(third.id)?.written, ['c\r'])
+  })
+
+  it('the cap counts closing-but-tracked resources until EXIT frees them', async () => {
+    const { manager, host } = openStack()
+    const ids: string[] = []
+    for (let index = 0; index < MAX_HUMAN_TERMINALS; index += 1) {
+      ids.push((await manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 121, env: {} })).id)
+    }
+    // Kill initiated (running=false) but EXIT not yet delivered: the
+    // ConPTY still exists, so the slot must stay occupied.
+    await manager.killSession(121, ids[0] as string)
+    assert.equal(manager.liveCountForOwner(121), MAX_HUMAN_TERMINALS)
+    await assert.rejects(
+      manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 121, env: {} }),
+      /Too many terminals are open/
+    )
+    assert.equal(host.created.length, MAX_HUMAN_TERMINALS)
+    // The authoritative EXIT frees the real resource and the slot.
+    host.fireExit(ids[0] as string, 0, null)
+    assert.equal(manager.liveCountForOwner(121), MAX_HUMAN_TERMINALS - 1)
+    const next = await manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 121, env: {} })
+    assert.ok(next.id.length > 0)
+  })
+
+  it('a lost CREATE acknowledgement triggers exact cleanup before failing', async () => {
+    const { manager, host } = openStack({ loseCreateAck: true })
+    await assert.rejects(
+      manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 122, env: {} }),
+      /We couldn’t start the terminal\./
+    )
+    // The host did spawn: without scoped cleanup this PTY would be an
+    // orphan nobody tracks. The broker must have killed exactly it.
+    const spawnedId = host.created[0]?.sessionId as string
+    assert.ok(spawnedId.length > 0)
+    assert.equal(host.sessions.get(spawnedId)?.kills, 1)
+    assert.equal(manager.size, 0)
+    assert.equal(manager.liveCountForOwner(122), 0)
+  })
+
+  it('destroy during CREATE never tracks a session for the dead owner', async () => {
+    const { manager, host } = openStack({ deferCreate: true })
+    const creating = manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 123, env: {} })
+    // Host has not answered yet; the window dies mid-flight.
+    manager.handleWebContentsDestroyed(123)
+    host.releaseCreate()
+    await assert.rejects(creating, /We couldn’t start the terminal\./)
+    const spawnedId = host.created[0]?.sessionId as string
+    assert.equal(host.sessions.get(spawnedId)?.kills, 1)
+    assert.equal(manager.size, 0)
+    // The dead-owner mark is scoped to the in-flight create: a later
+    // owner reusing the id starts clean (the fake still defers every
+    // create, so release after starting the retry).
+    const retrying = manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 123, env: {} })
+    host.releaseCreate()
+    const retry = await retrying
+    assert.ok(retry.id.length > 0)
+    assert.equal(manager.size, 1)
+  })
+
+  it('destroy with a failing kill retains until EXIT instead of orphaning', async () => {
+    const { manager, host, exits } = openStack({ killOutcome: 'failed' })
+    const session = await manager.createSessionWithEnv({ ...BASE, ownerWebContentsId: 124, env: {} })
+    manager.handleWebContentsDestroyed(124)
+    assert.equal(host.sessions.get(session.id)?.kills, 1)
+    // Kill failed: the PTY is presumably alive, so the record stays
+    // (all front-door ops already reject) instead of being dropped.
+    assert.equal(manager.size, 1)
+    assert.throws(() => manager.writeSession(124, session.id, 'x'), /no longer available/)
+    host.fireExit(session.id, 0, null)
+    assert.equal(exits.length, 1)
+    assert.equal(manager.size, 0)
   })
 })

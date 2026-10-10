@@ -30,8 +30,5 @@ export const MAX_TERMINAL_SESSION_ID_LENGTH = 128
  */
 export const MAX_HUMAN_TERMINALS = 8
 
-/** Graceful PTY shutdown wait before scoped forced cleanup (5s). */
-export const TERMINAL_SHUTDOWN_TIMEOUT_MS = 5000
-
 /** xterm visible scrollback lines (renderer-side, no persistence). */
 export const TERMINAL_SCROLLBACK_LINES = 5000
