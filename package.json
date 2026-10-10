@@ -5,7 +5,7 @@
   "main": "./out/main/index.js",
   "type": "module",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "node scripts/copy-extension-host-bootstrap.cjs && electron-vite dev",
     "build": "electron-vite build && node scripts/copy-extension-host-bootstrap.cjs",
     "start": "electron ./out/main/index.js",
     "dist": "npm run build && electron-builder --publish=never",

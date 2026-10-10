@@ -34,6 +34,7 @@ import type { WorkspaceSearchService } from '../workspace-search/workspace-searc
 import type { ExtensionRegistryService } from '../extension-registry/extension-registry-service'
 import type { ExtensionInstallService } from '../extension-install/extension-install-service'
 import type { ExtensionHostManager } from '../extension-host/extension-host-manager'
+import type { FormatterService } from '../formatter/formatter-service'
 import type { AttachmentPicker } from '../chat-attachments/picker'
 import type { ChatAttachmentService } from '../chat-attachments/service'
 import { getAppInfo } from '../services/app-info'
@@ -63,6 +64,7 @@ import { createWorkspaceSearchBindings } from './workspace-search'
 import { createExtensionsBindings } from './extensions'
 import { createExtensionInstallBindings } from './extension-install'
 import { createExtensionHostBindings } from './extension-host'
+import { createFormatterBindings } from './formatter'
 import { createAttachmentBindings } from './attachments'
 import { createAccountBindings } from './account'
 
@@ -106,6 +108,12 @@ export interface IpcDependencies {
   readonly extensionInstallService?: ExtensionInstallService
   /** Extension Host broker (foundation only). Optional in older harnesses; absent means no host channels. */
   readonly extensionHostManager?: ExtensionHostManager
+  /**
+   * Document formatter (Prettier pilot). Optional; absent means no
+   * formatter channel. Constructed in main/index.ts from the host
+   * manager plus install/files/workspace services.
+   */
+  readonly formatterService?: FormatterService
   /** Chat attachments (local files + images). Optional in older harnesses; absent means no attachment channels. */
   readonly attachmentService?: ChatAttachmentService
   readonly attachmentPicker?: AttachmentPicker
@@ -206,10 +214,27 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
     bindings.push(...createExtensionsBindings(deps.extensionRegistryService))
   }
   if (deps.extensionInstallService !== undefined) {
-    bindings.push(...createExtensionInstallBindings(deps.extensionInstallService))
+    const formatter = deps.formatterService
+    bindings.push(
+      ...createExtensionInstallBindings(deps.extensionInstallService, {
+        onEnabledStateChanged: (_identity, enabled) => {
+          // Unload on disable only; enabling needs no host action.
+          // Fire-and-forget by design (best-effort unload).
+          if (!enabled) {
+            void formatter?.noteExtensionDisabled()
+          }
+        },
+        onUninstalled: () => {
+          void formatter?.noteExtensionDisabled()
+        }
+      })
+    )
   }
   if (deps.extensionHostManager !== undefined) {
     bindings.push(...createExtensionHostBindings(deps.extensionHostManager))
+  }
+  if (deps.formatterService !== undefined) {
+    bindings.push(...createFormatterBindings(deps.formatterService))
   }
   if (deps.attachmentService !== undefined && deps.attachmentPicker !== undefined) {
     bindings.push(...createAttachmentBindings(deps.attachmentService, deps.attachmentPicker))

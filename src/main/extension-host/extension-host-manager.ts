@@ -54,21 +54,35 @@ export interface ExtensionHostManagerOptions {
 }
 
 /**
- * Main-owned Extension Host broker (foundation only).
+ * Main-owned Extension Host broker (formatter pilot).
  *
  * One host instance per manager: start() while starting/ready (or
  * stopping) reuses current status without spawning. The host runs
- * STARK-owned bootstrap code only — installed extension paths are
- * never enumerated here and never sent to it. Unexpected exits become
- * `crashed` without restarting; startup/shutdown are hard-bounded
- * with exact-handle termination and no retries, polling, or loops.
+ * STARK-owned bootstrap code plus, on explicit main request, the
+ * single allowlisted formatter extension behind the formatter
+ * module's own identity and containment checks — installed extension
+ * paths are derived main-side and never enumerated here. Unexpected
+ * exits become `crashed` without restarting; startup/shutdown are
+ * hard-bounded with exact-handle termination and no retries,
+ * polling, or loops.
+ *
+ * Formatter orchestration lives in the formatter service: the broker
+ * exposes exactly two narrow additions beyond lifecycle — posting a
+ * validated message to a ready host, and subscribing to host events
+ * (messages/exit). Subscribers survive restarts (re-attached per
+ * child); posting to a non-ready host throws.
  */
+export type ExtensionHostEvent =
+  | { readonly kind: 'message'; readonly raw: unknown }
+  | { readonly kind: 'exit' }
+
 export class ExtensionHostManager {
   private state: ExtensionHostState = 'stopped'
   private child: ExtensionHostProcess | null = null
   private startupTimer: ReturnType<typeof setTimeout> | null = null
   private stopTimer: ReturnType<typeof setTimeout> | null = null
   private pendingStart: { readonly resolve: (status: ExtensionHostStatus) => void; readonly reject: (error: Error) => void } | null = null
+  private readonly subscribers = new Set<(event: ExtensionHostEvent) => void>()
   private readonly options: ExtensionHostManagerOptions
 
   constructor(options: ExtensionHostManagerOptions) {
@@ -77,6 +91,46 @@ export class ExtensionHostManager {
 
   getStatus(): ExtensionHostStatus {
     return { state: this.state }
+  }
+
+  /**
+   * Subscribes to host events (validated messages and exits) for
+   * formatter orchestration. Listeners persist across restarts and
+   * must never throw (a throwing listener is dropped for that event).
+   * Returns an unsubscribe function.
+   */
+  onHostEvent(listener: (event: ExtensionHostEvent) => void): () => void {
+    this.subscribers.add(listener)
+    return () => {
+      this.subscribers.delete(listener)
+    }
+  }
+
+  private emit(event: ExtensionHostEvent): void {
+    for (const listener of [...this.subscribers]) {
+      try {
+        listener(event)
+      } catch {
+        // Subscriber failures must never break lifecycle control.
+      }
+    }
+  }
+
+  /**
+   * Posts one validated message to a ready host. Throws when the host
+   * is not ready (callers start it on demand first). Payload shape and
+   * size are the caller's contract (see protocol payload builders).
+   */
+  postToHost(message: unknown): void {
+    const child = this.child
+    if (child === null || this.state !== 'ready') {
+      throw new ExtensionHostError('Extension Host is not ready.')
+    }
+    try {
+      child.postMessage(message)
+    } catch (error: unknown) {
+      throw new ExtensionHostError('Extension Host failed to receive a message.', { cause: error })
+    }
   }
 
   private log(transition: string): void {
@@ -172,6 +226,7 @@ export class ExtensionHostManager {
       }
       child.on('message', (message: unknown) => {
         const type = parseHostMessage(message)
+        this.emit({ kind: 'message', raw: message })
         if (type === null) {
           return
         }
@@ -180,6 +235,7 @@ export class ExtensionHostManager {
         }
       })
       child.on('exit', () => {
+        this.emit({ kind: 'exit' })
         if (this.state === 'starting') {
           settleCrashed(new ExtensionHostError('Extension Host exited during startup.'))
         } else if (this.state === 'ready') {
@@ -231,11 +287,13 @@ export class ExtensionHostManager {
         return
       }
       child.on('message', (message: unknown) => {
+        this.emit({ kind: 'message', raw: message })
         if (parseHostMessage(message) === 'SHUTDOWN_COMPLETE' && this.state === 'stopping') {
           finishStopped()
         }
       })
       child.on('exit', () => {
+        this.emit({ kind: 'exit' })
         if (this.state === 'stopping') {
           finishStopped()
         }

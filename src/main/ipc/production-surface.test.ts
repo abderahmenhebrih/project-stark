@@ -29,6 +29,7 @@ import type { CredentialProtector } from '../ai/credential-protector'
 import type { AiProviderAdapter, ProviderGenerateRequest, ProviderGenerateResult } from '../ai/provider-adapter'
 import { ProviderRegistry } from '../ai/provider-adapter'
 import { ExtensionHostManager } from '../extension-host/extension-host-manager'
+import { FormatterService } from '../formatter/formatter-service'
 import { ChatAttachmentService } from '../chat-attachments/service'
 import type { ProviderModel } from '../../shared/providers/types'
 import { createIpcBindings } from './index'
@@ -183,7 +184,8 @@ const EXPECTED_PRODUCTION_CHANNELS: readonly string[] = [
   IPC_CHANNELS.extensionsSetEnabled,
   IPC_CHANNELS.extensionsHostStatus,
   IPC_CHANNELS.extensionsHostStart,
-  IPC_CHANNELS.extensionsHostStop
+  IPC_CHANNELS.extensionsHostStop,
+  IPC_CHANNELS.formatterFormatDocument
 ]
 
 describe('authoritative production IPC surface', () => {
@@ -237,6 +239,21 @@ describe('authoritative production IPC surface', () => {
               throw new Error('spawn must not run in surface tests')
             }
           }
+        }),
+        formatterService: new FormatterService({
+          manager: new ExtensionHostManager({
+            bootstrapPath: join(installRoot, 'extension-host-bootstrap.js'),
+            userDataDir: installRoot,
+            launcher: {
+              fork: () => {
+                throw new Error('spawn must not run in surface tests')
+              }
+            }
+          }),
+          installService: new ExtensionInstallService(installRoot),
+          filesService: services.workspaceFilesService,
+          workspaces: new WorkspaceRepository(db),
+          formatterModuleUrl: 'file:///stark-test/formatter-host.mjs'
         }),
         attachmentService: new ChatAttachmentService(
           join(installRoot, 'attachments'),
@@ -335,10 +352,13 @@ describe('authoritative production IPC surface', () => {
       'IPC_CHANNELS.extensionsHostStatus',
       'IPC_CHANNELS.extensionsHostStart',
       'IPC_CHANNELS.extensionsHostStop',
+      'IPC_CHANNELS.formatterFormatDocument',
       'createExtensionsApi()',
       'extensions: createExtensionsApi()',
       'createExtensionHostApi()',
       'extensionHost: createExtensionHostApi()',
+      'createFormatterApi()',
+      'formatter: createFormatterApi()',
       'IPC_CHANNELS.attachmentsChoose',
       'IPC_CHANNELS.attachmentsRemoveDraft',
       'createAttachmentsApi()',

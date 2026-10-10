@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, protocol, utilityProcess } from 'electron'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { IPC_CHANNELS } from '../shared/constants'
 import type { CloudAccountStatus } from '../shared/cloud-account/types'
 import type { ProjectRuntimeUpdatedEvent } from '../shared/project-runtime/types'
@@ -17,6 +18,7 @@ import {
   ExtensionInstallService
 } from './extension-install/extension-install-service'
 import { ExtensionHostManager, type ExtensionHostLauncher } from './extension-host/extension-host-manager'
+import { FormatterService } from './formatter/formatter-service'
 import { electronAttachmentPicker } from './chat-attachments/picker'
 import { ATTACHMENT_PROTOCOL, serveAttachmentRequest } from './chat-attachments/protocol'
 import { EXTENSION_ICON_PROTOCOL, serveExtensionIconRequest } from './extension-icons/protocol'
@@ -426,6 +428,24 @@ void app.whenReady().then(() => {
       // Best effort during quit.
     }
   }
+  // Document formatter (Prettier pilot): allowlisted extension code
+  // executes ONLY inside the Extension Host, on explicit user Format
+  // actions. The install service below is the single instance shared
+  // with install/uninstall/setEnabled IPC so enabled state is one
+  // source of truth. Disabling or uninstalling unloads the formatter
+  // best-effort (future formats re-check state regardless).
+  const extensionInstallService = new ExtensionInstallService(
+    join(app.getPath('userData'), EXTENSION_INSTALL_DIR_NAME),
+    undefined,
+    services.extensionIconService
+  )
+  const formatterService = new FormatterService({
+    manager: extensionHostManager,
+    installService: extensionInstallService,
+    filesService: services.workspaceFilesService,
+    workspaces: starkDatabase.getWorkspaces(),
+    formatterModuleUrl: pathToFileURL(join(__dirname, 'formatter-host.mjs')).href
+  })
   registerIpcHandlers({    settingsService: services.settingsService,
     profileService: services.profileService,
     workspaceService: services.workspaceService,
@@ -433,12 +453,9 @@ void app.whenReady().then(() => {
     workspaceFileWriteService: services.workspaceFileWriteService,
     workspaceSearchService: services.workspaceSearchService,
     extensionRegistryService: services.extensionRegistryService,
-    extensionInstallService: new ExtensionInstallService(
-      join(app.getPath('userData'), EXTENSION_INSTALL_DIR_NAME),
-      undefined,
-      services.extensionIconService
-    ),
+    extensionInstallService,
     extensionHostManager,
+    formatterService,
     attachmentService: services.chatAttachmentService,
     attachmentPicker: electronAttachmentPicker,
     changeTransactionService: services.changeTransactionService,

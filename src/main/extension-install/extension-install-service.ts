@@ -95,6 +95,42 @@ export interface ValidatedInstallIdentity {
   readonly version: string
 }
 
+export interface EnabledExtensionPackage {
+  /** Canonical verified extension content directory (`<versionDir>/extension`). */
+  readonly extensionDir: string
+  readonly version: string
+  readonly displayName: string
+}
+
+function compareSemverDescending(a: string, b: string): number {
+  const parse = (version: string): readonly (number | string)[] =>
+    version.split('.').map((part) => {
+      const numeric = Number(part)
+      return Number.isInteger(numeric) && numeric >= 0 && part !== '' ? numeric : part
+    })
+  const pa = parse(a)
+  const pb = parse(b)
+  const length = Math.max(pa.length, pb.length)
+  for (let index = 0; index < length; index += 1) {
+    const va = pa[index]
+    const vb = pb[index]
+    if (va === vb) {
+      continue
+    }
+    if (va === undefined) {
+      return 1
+    }
+    if (vb === undefined) {
+      return -1
+    }
+    if (typeof va === 'number' && typeof vb === 'number') {
+      return vb - va
+    }
+    return String(vb) < String(va) ? -1 : 1
+  }
+  return 0
+}
+
 /**
  * Narrow install-time icon persistence seam (bytes only, never a
  * generic image surface). Production supplies the reviewed
@@ -734,6 +770,85 @@ export class ExtensionInstallService {
 
   private installDirName(identity: ValidatedInstallIdentity): string {
     return `${identity.namespace}.${identity.name}`
+  }
+
+  /**
+   * Resolves one installed AND enabled extension package for
+   * main-owned execution decisions (formatter pilot). Verifies, in
+   * order: strict namespace/name shape, an on-disk install record
+   * with source `open-vsx`, identity-matching manifest-as-data, and
+   * enabled state (missing state defaults to true). With several
+   * installed versions, the highest semver wins deterministically.
+   * Returns null when absent, disabled, or unverifiable — callers map
+   * that to calm copy. The returned directory is always strictly
+   * under the main-owned install root.
+   */
+  resolveEnabledExtensionPackage(namespace: string, name: string): EnabledExtensionPackage | null {
+    if (
+      typeof namespace !== 'string' ||
+      typeof name !== 'string' ||
+      namespace === '' ||
+      name === '' ||
+      !IDENTITY_PART.test(namespace) ||
+      !IDENTITY_PART.test(name)
+    ) {
+      return null
+    }
+    let packageDirs: string[]
+    try {
+      packageDirs = readdirSync(join(this.installRoot, `${namespace}.${name}`))
+    } catch {
+      return null
+    }
+    const states = readExtensionEnabledStates(this.installRoot)
+    const candidates: { readonly version: string; readonly displayName: string; readonly versionDir: string }[] = []
+    for (const versionDir of packageDirs) {
+      if (versionDir.startsWith('.')) {
+        continue
+      }
+      const fullVersionDir = join(this.installRoot, `${namespace}.${name}`, versionDir)
+      const record = this.readInstallRecord(fullVersionDir)
+      if (
+        record === null ||
+        record['namespace'] !== namespace ||
+        record['name'] !== name ||
+        record['source'] !== 'open-vsx' ||
+        typeof record['version'] !== 'string'
+      ) {
+        continue
+      }
+      let identity: ValidatedInstallIdentity
+      try {
+        identity = validatedInstallIdentity({ namespace, name, version: record['version'] })
+      } catch {
+        continue
+      }
+      if (identity.version !== versionDir) {
+        continue
+      }
+      if ((states.get(extensionStateKey(identity)) ?? true) !== true) {
+        continue
+      }
+      try {
+        readExtensionManifest(fullVersionDir, identity)
+      } catch {
+        continue
+      }
+      candidates.push({
+        version: identity.version,
+        displayName: typeof record['displayName'] === 'string' && record['displayName'] !== '' ? record['displayName'] : name,
+        versionDir: fullVersionDir
+      })
+    }
+    if (candidates.length === 0) {
+      return null
+    }
+    candidates.sort((a, b) => compareSemverDescending(a.version, b.version))
+    const winner = candidates[0]
+    if (winner === undefined) {
+      return null
+    }
+    return { extensionDir: join(winner.versionDir, 'extension'), version: winner.version, displayName: winner.displayName }
   }
 
   private readCommittedEntry(identity: ValidatedInstallIdentity): InstalledExtensionEntry | null {

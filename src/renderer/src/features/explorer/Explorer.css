@@ -758,6 +758,34 @@ button.explorer__attach:hover {
   background: var(--stark-surface);
 }
 
+/* Format trust notice: compact inline confirmation reusing the
+   existing primary/secondary button styling. Session-scoped only —
+   trust is never persisted. */
+.explorer__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.explorer__confirm-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--stark-text);
+}
+
+.explorer__confirm-copy {
+  margin: 0;
+  font-size: 12px;
+  color: var(--stark-text-dim);
+}
+
+.explorer__confirm-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .explorer__primary {
   padding: var(--stark-space-xs) var(--stark-space-sm);
   font-size: 12px;

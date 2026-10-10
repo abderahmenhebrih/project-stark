@@ -64,8 +64,32 @@ function requireEmpty(payload: unknown): void {
  * files are all main-derived. No generic download/unzip/write,
  * settings-mutation, or delete surface. Registration through
  * handleSecureIpc happens in ./index.ts.
+ *
+ * The optional hooks let the formatter pilot unload on disable /
+ * uninstall (best-effort host stop; future formats re-check enabled
+ * state regardless). They default to no-ops so older harnesses and
+ * unit tests are unaffected.
  */
-export function createExtensionInstallBindings(service: ExtensionInstallService): readonly IpcBinding[] {
+export interface ExtensionInstallHooks {
+  readonly onEnabledStateChanged?: (identity: { namespace: string; name: string; version: string }, enabled: boolean) => void
+  readonly onUninstalled?: (identity: { namespace: string; name: string; version: string }) => void
+}
+
+function notify(hook: (() => void) | undefined): void {
+  if (hook === undefined) {
+    return
+  }
+  try {
+    hook()
+  } catch {
+    // Hook failures must never break install/uninstall results.
+  }
+}
+
+export function createExtensionInstallBindings(
+  service: ExtensionInstallService,
+  hooks?: ExtensionInstallHooks
+): readonly IpcBinding[] {
   return [
     {
       channel: IPC_CHANNELS.extensionsInstall,
@@ -94,7 +118,17 @@ export function createExtensionInstallBindings(service: ExtensionInstallService)
       invoke: (payload): Promise<UninstalledExtensionEntry> =>
         Promise.resolve()
           .then(() => readIdentity(payload))
-          .then((identity) => service.uninstall(identity))
+          .then((identity) =>
+            service.uninstall(identity).then((result) => {
+              if (result.status === 'uninstalled') {
+                const hook = hooks?.onUninstalled
+                if (hook !== undefined) {
+                  notify(() => hook({ namespace: identity.namespace, name: identity.name, version: identity.version }))
+                }
+              }
+              return result
+            })
+          )
           .catch((error: unknown) => {
             throw toPublicExtensionInstallError(error)
           })
@@ -105,10 +139,23 @@ export function createExtensionInstallBindings(service: ExtensionInstallService)
         Promise.resolve()
           .then(() => readSetEnabledRequest(payload))
           .then((request) =>
-            service.setEnabled(
-              { namespace: request.namespace, name: request.name, version: request.version },
-              request.enabled
-            )
+            service
+              .setEnabled(
+                { namespace: request.namespace, name: request.name, version: request.version },
+                request.enabled
+              )
+              .then((entry) => {
+                const hook = hooks?.onEnabledStateChanged
+                if (hook !== undefined) {
+                  notify(() =>
+                    hook(
+                      { namespace: request.namespace, name: request.name, version: request.version },
+                      request.enabled
+                    )
+                  )
+                }
+                return entry
+              })
           )
           .catch((error: unknown) => {
             throw toPublicExtensionStateError(error)

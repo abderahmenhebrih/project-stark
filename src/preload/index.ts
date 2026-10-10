@@ -125,6 +125,7 @@ import type {
   UninstalledExtensionEntry
 } from '../shared/extension-registry/types'
 import type { ExtensionHostStatus, ExtensionHostApi } from '../shared/extension-host/types'
+import type { FormatDocumentRequest, FormatDocumentResult, FormatterApi } from '../shared/formatter/types'
 import type { ChatAttachmentsApi, ChatAttachment, ChooseAttachmentsRequest } from '../shared/chat-attachments/types'
 import { isCloudAccountStatus } from '../shared/cloud-account/types'
 import type { AppInfo, StarkApi } from '../shared/types'
@@ -410,6 +411,13 @@ function createExtensionHostApi(): ExtensionHostApi {
   }
 }
 
+function createFormatterApi(): FormatterApi {
+  return {
+    formatDocument: (request: FormatDocumentRequest): Promise<FormatDocumentResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.formatterFormatDocument, request) as Promise<FormatDocumentResult>
+  }
+}
+
 function createAttachmentsApi(): ChatAttachmentsApi {
   return {
     choose: (request: ChooseAttachmentsRequest): Promise<readonly ChatAttachment[]> =>
@@ -518,6 +526,7 @@ const starkApi: StarkApi = {
   account: createAccountApi(),
   extensions: createExtensionsApi(),
   extensionHost: createExtensionHostApi(),
+  formatter: createFormatterApi(),
   attachments: createAttachmentsApi()
 }
 

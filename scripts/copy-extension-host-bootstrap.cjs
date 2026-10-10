@@ -1,24 +1,38 @@
 /**
- * Copies the STARK-owned Extension Host bootstrap into the built main
- * output so production packages (and the smoke runner) can fork it.
+ * Copies the STARK-owned Extension Host files into the built main
+ * output so production packages (and the smoke runner) can fork them.
  *
- * The bootstrap is dependency-free plain Node.js on purpose: it is
- * copied verbatim, never bundled, so what ships is exactly what is
- * audited in src/main/extension-host/bootstrap.js. Fails the build if
- * the source is missing.
+ * The entrypoint plus its formatter modules are dependency-free,
+ * STARK-owned plain Node.js on purpose: they are copied verbatim,
+ * never bundled, so what ships is exactly what is audited in
+ * src/main/extension-host/. Fails the build if any source is missing.
  */
 const { copyFileSync, existsSync, mkdirSync } = require('node:fs');
 const { join } = require('node:path');
 
 const ROOT = join(__dirname, '..');
-const SOURCE = join(ROOT, 'src', 'main', 'extension-host', 'bootstrap.js');
+const SOURCE_DIR = join(ROOT, 'src', 'main', 'extension-host');
 const DEST_DIR = join(ROOT, 'out', 'main');
-const DEST = join(DEST_DIR, 'extension-host-bootstrap.js');
 
-if (!existsSync(SOURCE)) {
-  process.stderr.write(`[extension-host] FAILED: missing ${SOURCE}\n`);
-  process.exit(1);
-}
+const SHIPPED_HOST_FILES = [
+  // Bootstrap entrypoint (forked by Electron utilityProcess).
+  { src: 'bootstrap.js', dest: 'extension-host-bootstrap.js' },
+  // Formatter pilot modules (loaded only via the bootstrap's narrow
+  // dynamic import of a main-supplied STARK-owned file URL). Copied
+  // under identical names so the formatter module's relative loader
+  // resolution (`./vscode-loader.mjs`) holds in src and in out/.
+  { src: 'formatter-host.mjs', dest: 'formatter-host.mjs' },
+  { src: 'vscode-shim.mjs', dest: 'vscode-shim.mjs' },
+  { src: 'vscode-loader.mjs', dest: 'vscode-loader.mjs' }
+];
+
 mkdirSync(DEST_DIR, { recursive: true });
-copyFileSync(SOURCE, DEST);
-process.stdout.write(`[extension-host] bootstrap copied to ${DEST}\n`);
+for (const file of SHIPPED_HOST_FILES) {
+  const source = join(SOURCE_DIR, file.src);
+  if (!existsSync(source)) {
+    process.stderr.write(`[extension-host] FAILED: missing ${source}\n`);
+    process.exit(1);
+  }
+  copyFileSync(source, join(DEST_DIR, file.dest));
+  process.stdout.write(`[extension-host] ${file.src} copied to ${join(DEST_DIR, file.dest)}\n`);
+}

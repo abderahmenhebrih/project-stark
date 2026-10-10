@@ -327,3 +327,46 @@ describe('extension host isolation', () => {
     }
   })
 })
+
+describe('extension host formatter channel', () => {
+  it('fans out messages and exits to subscribers and posts only when ready', async () => {
+    const { dir, forks, manager } = openManager()
+    try {
+      assert.throws(() => manager.postToHost({ type: 'PING' }), /not ready/)
+      const seen: unknown[] = []
+      const unsubscribe = manager.onHostEvent((event) => {
+        seen.push(event)
+      })
+      const starting = manager.start()
+      const host = forks[0]?.host
+      assert.ok(host !== undefined)
+      host.emitMessage(readyEnvelope('READY'))
+      await starting
+      manager.postToHost({ protocol: EXTENSION_HOST_PROTOCOL, type: 'PING' })
+      assert.equal(host.posted.length, 1)
+      host.emitMessage(readyEnvelope('FORMATTER_READY', { payload: { activationId: 'a' } }))
+      host.emitExit(1)
+      assert.ok(seen.some((event) => (event as { kind: string }).kind === 'message'))
+      assert.ok(seen.some((event) => (event as { kind: string }).kind === 'exit'))
+      assert.equal(manager.getStatus().state, 'crashed')
+      unsubscribe()
+      assert.throws(() => manager.postToHost({ type: 'PING' }), /not ready/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('subscriber failures never break lifecycle control', async () => {
+    const { dir, forks, manager } = openManager()
+    try {
+      manager.onHostEvent(() => {
+        throw new Error('subscriber boom')
+      })
+      const starting = manager.start()
+      forks[0]?.host.emitMessage(readyEnvelope('READY'))
+      assert.equal((await starting).state, 'ready')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

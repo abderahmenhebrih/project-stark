@@ -17,6 +17,8 @@ import {
 import { normalizeContextError } from '../../lib/session-context-error'
 import { getChangeSet, listRecentChangeSets } from '../../lib/change-sets-api'
 import { getWorkspaceFilesApi } from '../../lib/stark-api'
+import { formatDocumentWithPrettier } from '../../lib/format-api'
+import { normalizeFormatterError } from '../../lib/format-error'
 import type { WorkspaceSearchMatch } from '../../../../shared/workspace-search/types'
 import type { SessionContextDraft } from '../../../../shared/context/types'
 import { ChangesPanel } from '../changes/ChangesPanel'
@@ -333,6 +335,14 @@ export function Explorer({
   const consumedContextRequestRef = useRef(0)
   const workareaRef = useRef<HTMLDivElement | null>(null)
   const draggingRef = useRef(false)
+  // Document formatting (Prettier pilot): explicit user action only.
+  // Trust is session-scoped (asked once per mount, never persisted);
+  // busy/error/notice are renderer-local; the file itself is never
+  // written here — results become reviewable change transactions.
+  const [prettierTrusted, setPrettierTrusted] = useState(false)
+  const [formatTrustOpen, setFormatTrustOpen] = useState(false)
+  const [formatBusy, setFormatBusy] = useState(false)
+  const [formatNotice, setFormatNotice] = useState<string | null>(null)
 
   // Publish the derived dirty flag so file selection, search-result
   // selection, and workspace switching share one discard guard.
@@ -684,6 +694,82 @@ export function Explorer({
       // method" prefix) to canonical display-safe copy. The draft stays
       // intact, including the "no changes" outcome.
       setEditor(markEditorSaveFailed(saving, normalizeChangeTransactionError(error).message))
+    }
+  }
+
+  /**
+   * Format Document (Prettier pilot): explicit user action on the
+   * read-only preview. First activation per mount asks the one-time
+   * trust question; the file is never written here. Main returns the
+   * snapshot revision it formatted plus formatted text; a mismatch
+   * with the click-time revision rejects as stale, identical output
+   * reports "already formatted", and anything else becomes a
+   * reviewable change transaction (Accept writes, Reject discards).
+   */
+  function handleFormatRequest(): void {
+    const preview = state.preview
+    if (preview === null || preview.content === null || preview.revision === null || editor !== null || formatBusy) {
+      return
+    }
+    setFormatNotice(null)
+    if (!prettierTrusted) {
+      setFormatTrustOpen(true)
+      return
+    }
+    void runFormatDocument(preview.path, preview.revision, preview.content)
+  }
+
+  function handleFormatTrustCancel(): void {
+    setFormatTrustOpen(false)
+  }
+
+  function handleFormatTrustConfirm(): void {
+    const preview = state.preview
+    if (preview === null || preview.content === null || preview.revision === null || editor !== null || formatBusy) {
+      setFormatTrustOpen(false)
+      return
+    }
+    setPrettierTrusted(true)
+    void runFormatDocument(preview.path, preview.revision, preview.content)
+  }
+
+  async function runFormatDocument(relativePath: string, startedRevision: string, startedContent: string): Promise<void> {
+    setFormatTrustOpen(false)
+    setFormatBusy(true)
+    try {
+      let result: { revision: string; afterText: string }
+      try {
+        result = await formatDocumentWithPrettier(workspaceId, relativePath)
+      } catch (error: unknown) {
+        setFormatNotice(normalizeFormatterError(error).message)
+        return
+      }
+      // Stale protection: main formats the revision it just read. If
+      // the click-time revision differs, the file moved under us —
+      // never propose onto newer content.
+      if (result.revision !== startedRevision) {
+        setFormatNotice('This file changed on disk. Reload it before saving your changes.')
+        return
+      }
+      if (result.afterText === startedContent) {
+        setFormatNotice('Already formatted.')
+        return
+      }
+      try {
+        const transaction = await createFileChange({
+          workspaceId,
+          relativePath,
+          expectedRevision: result.revision,
+          proposedContent: result.afterText
+        })
+        changesDispatch({ type: 'review-opened', transaction })
+        secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
+        void refreshHistory()
+      } catch (error: unknown) {
+        setFormatNotice(normalizeChangeTransactionError(error).message)
+      }
+    } finally {
+      setFormatBusy(false)
     }
   }
 
@@ -1081,6 +1167,15 @@ export function Explorer({
                 <button
                   className="explorer__secondary"
                   type="button"
+                  onClick={handleFormatRequest}
+                  disabled={formatBusy}
+                  title="Format with Prettier (review before anything is written)"
+                >
+                  {formatBusy ? 'Formatting…' : 'Format Document'}
+                </button>
+                <button
+                  className="explorer__secondary"
+                  type="button"
                   onClick={handleAttachPreviewSelection}
                   disabled={editorSelection === null}
                   title={editorSelection === null ? 'Select text in the preview first' : 'Attach the selected lines to chat'}
@@ -1094,6 +1189,25 @@ export function Explorer({
             ) : null
           }
         />
+        {formatTrustOpen && (
+          <div className="explorer__inline-alert explorer__confirm" role="alertdialog" aria-label="Run Prettier in the Extension Host?">
+            <p className="explorer__confirm-title">STARK is about to run Prettier in the Extension Host.</p>
+            <p className="explorer__confirm-copy">VS Code extensions can execute code on your computer.</p>
+            <div className="explorer__confirm-actions">
+              <button className="explorer__secondary" type="button" onClick={handleFormatTrustCancel}>
+                Cancel
+              </button>
+              <button className="explorer__primary" type="button" onClick={handleFormatTrustConfirm}>
+                Run Prettier
+              </button>
+            </div>
+          </div>
+        )}
+        {formatNotice !== null && !formatTrustOpen && (
+          <p className="explorer__status explorer__inline-alert" role="status">
+            {formatNotice}
+          </p>
+        )}
         {previewEol !== null && !previewEditable && (
           <p className="explorer__error explorer__inline-alert" role="alert">
             {MIXED_EOL_MESSAGE}

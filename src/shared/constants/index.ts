@@ -109,7 +109,8 @@ export const IPC_CHANNELS = {
   extensionsSetEnabled: 'stark:extensions:set-enabled',
   extensionsHostStatus: 'stark:extensions:host-status',
   extensionsHostStart: 'stark:extensions:host-start',
-  extensionsHostStop: 'stark:extensions:host-stop'
+  extensionsHostStop: 'stark:extensions:host-stop',
+  formatterFormatDocument: 'stark:formatter:format-document'
 } as const
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS]

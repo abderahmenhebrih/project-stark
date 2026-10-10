@@ -36,6 +36,7 @@ import type { TerminalApi } from '../terminal/types'
 import type { GitApi } from '../git/types'
 import type { ExtensionsApi } from '../extension-registry/types'
 import type { ExtensionHostApi } from '../extension-host/types'
+import type { FormatterApi } from '../formatter/types'
 import type { ChatAttachmentsApi } from '../chat-attachments/types'
 import type { WorkspaceApi } from '../workspace/types'
 
@@ -71,6 +72,7 @@ export interface StarkApi {
   account: CloudAccountApi
   extensions: ExtensionsApi
   extensionHost: ExtensionHostApi
+  formatter: FormatterApi
   attachments: ChatAttachmentsApi
 }
 
