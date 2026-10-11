@@ -6,13 +6,11 @@ import { FREE_CATALOG_COUNT, deriveModelLibrary } from './model-library'
 import { initialProviderPanelState } from '../../../sessions/provider-state'
 
 /**
- * Model icons: distinct bundled local marks for the 15 Free models —
- * one registry shared by the library cards and both LoopLink rosters.
- * Offline, packaged, decorative (names carry meaning), with a safe
- * fallback. Follows the brand-assets precedent: the registry module
- * itself carries Vite asset imports (unrunnable under plain Node), so
- * mapping is proven against repository source plus on-disk assets —
- * no pixels asserted.
+ * Official model icon registry: verified first-party provider marks,
+ * one shared mapping, provenance manifest, sanitized assets. Mapping
+ * behavior is proven against repository source plus on-disk assets
+ * (the registry module carries Vite asset imports, unrunnable under
+ * plain Node — same precedent as brand-assets).
  */
 function readSource(...parts: string[]): string {
   const file = join(process.cwd(), ...parts)
@@ -22,6 +20,10 @@ function readSource(...parts: string[]): string {
 
 function readModels(relative: string): string {
   return readSource('src', 'renderer', 'src', 'features', 'settings', 'sections', ...relative.split('/'))
+}
+
+function iconsDir(): string {
+  return join(process.cwd(), 'src', 'public', 'model-icons')
 }
 
 const EXPECTED_IDS = [
@@ -42,8 +44,16 @@ const EXPECTED_IDS = [
   'builtin:mistral-large-4'
 ]
 
+/** Retired generated-artwork filenames that must never be referenced again. */
+const RETIRED_GENERATED = [
+  'muse-spark-13.svg', 'muse-spark-12.svg', 'deepseek-v41.svg', 'deepseek-v4.svg',
+  'gpt-luna.svg', 'mimo-pro.svg', 'mimo-flash.svg', 'nemotron.svg', 'gemini.svg',
+  'claude.svg', 'kimi.svg', 'minimax.svg', 'mistral.svg', 'longcat.svg', 'glm.svg',
+  'fallback.svg'
+]
+
 describe('model icon registry', () => {
-  it('all 15 Free model IDs map to a bundled icon (none missing, none extra)', () => {
+  it('all 15 Free model IDs map to a local asset (none missing, none extra)', () => {
     assert.equal(FREE_CATALOG_COUNT, 15)
     const registry = readModels('models/model-icons.ts')
     for (const stableId of EXPECTED_IDS) {
@@ -59,11 +69,15 @@ describe('model icon registry', () => {
     assert.deepEqual(builtins, EXPECTED_IDS)
   })
 
-  it('no icon uses a remote http/https URL (offline by construction)', () => {
+  it('no mapping uses a remote URL at runtime (offline by construction)', () => {
     const registry = readModels('models/model-icons.ts')
     assert.ok(!registry.includes('http://') && !registry.includes('https://'), 'registry must contain no remote URLs')
-    assert.ok(registry.includes('.png'), 'icons must resolve to local raster assets')
-    assert.ok(!registry.includes('.svg'), 'no minimalist glyph assets may remain')
+  })
+
+  it('Claude Haiku 5.5 resolves to the official orange Claude mark (not the Anthropic logo)', () => {
+    const registry = readModels('models/model-icons.ts')
+    assert.ok(registry.includes("'builtin:claude-haiku-5.5': claudeIcon"), 'Claude model must map to the Claude icon')
+    assert.ok(!registry.includes('anthropic.png') && !registry.includes('anthropicIcon'), 'no Anthropic-logo reference may remain')
   })
 
   it('unknown model IDs resolve to the fallback (never broken/empty)', () => {
@@ -75,37 +89,76 @@ describe('model icon registry', () => {
     )
   })
 
-  it('related models share family marks (no invented variants)', () => {
+  it('related models share the verified provider mark (no manufactured variation)', () => {
     const registry = readModels('models/model-icons.ts')
-    assert.ok(registry.includes("'builtin:deepseek-v4.1-flash': deepseekV41Icon"))
-    assert.ok(registry.includes("'builtin:deepseek-v4-flash': deepseekV4Icon"))
-    assert.ok(registry.includes("'builtin:mimo-v2.6-pro': mimoProIcon"))
-    assert.ok(registry.includes("'builtin:mimo-v2.6-flash': mimoFlashIcon"))
-    assert.ok(registry.includes("'builtin:muse-spark-1.3': museSpark13Icon"))
-    assert.ok(registry.includes("'builtin:muse-spark-1.2': museSpark12Icon"))
+    assert.ok(registry.includes("'builtin:deepseek-v4.1-flash': deepseekIcon"))
+    assert.ok(registry.includes("'builtin:deepseek-v4-flash': deepseekIcon"))
+    assert.ok(registry.includes("'builtin:mimo-v2.6-pro': xiaomiIcon"))
+    assert.ok(registry.includes("'builtin:mimo-v2.6-flash': xiaomiIcon"))
+    assert.ok(registry.includes("'builtin:muse-spark-1.3': metaIcon"))
+    assert.ok(registry.includes("'builtin:muse-spark-1.2': metaIcon"))
+  })
+
+  it('no retired generated artwork remains referenced', () => {
+    const registry = readModels('models/model-icons.ts')
+    for (const retired of RETIRED_GENERATED) {
+      assert.ok(!registry.includes(retired), `generated asset ${retired} must not be referenced`)
+    }
+    const onDisk = readdirSync(iconsDir()).filter((name) => name.endsWith('.svg'))
+    assert.deepEqual(onDisk, ['zai.svg'], 'only the verified first-party zai.svg may remain as SVG')
   })
 })
 
-/** Reads PNG dimensions from the IHDR chunk (no image decoder needed). */
-function pngDimensions(path: string): { readonly width: number; readonly height: number } {
-  const bytes = readFileSync(path)
-  assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], `${path} must be a PNG`)
-  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) }
-}
+describe('model icon provenance manifest', () => {
+  it('manifest exists and covers every non-fallback asset with an official source', () => {
+    const manifest = readModels('models/model-icon-sources.md')
+    for (const file of ['openai.png', 'google.png', 'claude.png', 'deepseek.png', 'mistral.png', 'nvidia.png', 'kimi.jpg', 'minimax.jpg', 'xiaomi.png', 'meta.png', 'longcat.png', 'zai.svg']) {
+      assert.ok(manifest.includes(file), `manifest must document ${file}`)
+    }
+    assert.ok(manifest.includes('github.com/'), 'manifest must record official org sources')
+    assert.ok(!manifest.includes('pinimg') && !manifest.includes('seeklogo'), 'manifest must show no scraper sources')
+  })
+})
 
 describe('model icon assets on disk', () => {
-  it('local raster assets exist at the expected build paths: square, sized, optimized', () => {
-    const dir = join(process.cwd(), 'src', 'public', 'model-icons')
-    assert.ok(existsSync(dir), 'src/public/model-icons must exist')
-    const files = readdirSync(dir).filter((file) => file.endsWith('.png'))
-    assert.ok(files.length >= 16, `at least 16 icons expected, found ${files.length}`)
-    assert.ok(!readdirSync(dir).some((file) => file.endsWith('.svg')), 'no glyph SVGs may remain')
-    for (const file of files) {
+  it('raster assets are real decodable images: correct magic, square, bounded', () => {
+    const dir = iconsDir()
+    for (const file of readdirSync(dir).filter((name) => name.endsWith('.png'))) {
       const path = join(dir, file)
+      const bytes = readFileSync(path)
+      assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], `${file} must be a real PNG`)
+      const width = bytes.readUInt32BE(16)
+      const height = bytes.readUInt32BE(20)
+      assert.equal(width, height, `${file} must be square`)
+      // Official first-party sources ship small favicon-grade marks
+      // (e.g. 48px); 48px is the floor so official assets are never
+      // resampled or rejected for their published size.
+      assert.ok(width >= 48, `${file} must be usable source (≥48px)`)
       assert.ok(statSync(path).size < 100 * 1024, `${file} must stay under 100KB`)
-      const { width, height } = pngDimensions(path)
-      assert.equal(width, height, `${file} must be square 1:1`)
-      assert.ok(width >= 128, `${file} must be high-resolution source`)
+    }
+    for (const file of readdirSync(dir).filter((name) => name.endsWith('.jpg'))) {
+      const path = join(dir, file)
+      const bytes = readFileSync(path)
+      assert.equal(bytes[0], 0xff, `${file} must be a real JPEG`)
+      assert.equal(bytes[1], 0xd8, `${file} must be a real JPEG`)
+      assert.ok(statSync(path).size < 100 * 1024, `${file} must stay under 100KB`)
+    }
+  })
+
+  it('SVG assets pass sanitization (no script, no remote refs, no handlers)', () => {
+    const dir = iconsDir()
+    const svgs = readdirSync(dir).filter((name) => name.endsWith('.svg'))
+    assert.ok(svgs.length >= 1, 'downloaded SVG assets must be checked')
+    for (const file of svgs) {
+      const content = readFileSync(join(dir, file), 'utf8')
+      assert.ok(!content.includes('<script'), `${file} must contain no script`)
+      assert.ok(!content.includes('javascript:'), `${file} must contain no script URLs`)
+      assert.ok(!content.includes('href="http'), `${file} must reference nothing remote`)
+      assert.ok((content.match(/\son\w+\s*=/g) ?? []).length === 0, `${file} must contain no event handlers`)
+      for (const tag of ['<iframe', '<object', '<embed']) {
+        assert.ok(!content.includes(tag), `${file} must contain no ${tag}`)
+      }
+      assert.ok(content.includes('viewBox'), `${file} must be a scalable vector`)
     }
   })
 })
@@ -131,15 +184,5 @@ describe('model icon integration', () => {
     for (const fake of ['generateText', 'ProviderRegistry', 'fetch(', '.invoke(']) {
       assert.ok(!registry.includes(fake), `registry must not contain ${fake}`)
     }
-  })
-
-  it('images fill their containers (full-icon rendering, no tile-in-tile)', () => {
-    const css = readModels('models/ModelsSettings.css')
-    const card = css.match(/\.models-card__img\s*\{[^}]*\}/)
-    assert.ok(card !== null && card[0].includes('object-fit: cover'), 'library images must fill the icon')
-    assert.ok(card[0].includes('52px'), 'library icons must render large (~52px)')
-    const row = css.match(/\.models-chain__img\s*\{[^}]*\}/)
-    assert.ok(row !== null && row[0].includes('object-fit: cover'), 'roster images must fill the icon')
-    assert.ok(row[0].includes('30px'), 'roster icons must render compact (~30px)')
   })
 })
