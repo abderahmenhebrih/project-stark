@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -8,6 +9,10 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactElement
 } from 'react'
+import { SponsoredWorkingSlot } from '../monetization/sponsored-working/SponsoredWorkingSlot'
+import { NullSponsorProvider } from '../monetization/sponsored-working/sponsor-provider'
+import { buildAiRunId, deriveAiRunState } from '../monetization/sponsored-working/sponsor-lifecycle'
+import { resolveMonetizationEntitlement } from '../monetization/sponsored-working/sponsor-policy'
 import type { CodingMessage } from '../../../../shared/sessions/types'
 import type { SessionContextDraft } from '../../../../shared/context/types'
 import type { ChatAttachment } from '../../../../shared/chat-attachments/types'
@@ -75,6 +80,7 @@ import {
 } from '../../lib/brain-error'
 import { getHeartConfig, saveHeartConfig } from '../../lib/heart-api'
 import { initialHeartPanelState, heartPanelReducer } from './heart-state'
+import { initialModelChainsPanelState, modelChainsPanelReducer } from '../settings/sections/models/model-chains-state'
 import { dismissRecovery, getRecoveryConfig, getRecoveryForTarget, saveRecoveryConfig } from '../../lib/recovery-api'
 import { initialRecoveryPanelState, recoveryPanelReducer, recoverySourceCopy, recoveryTargetCopy } from './recovery-state'
 import {
@@ -189,6 +195,15 @@ export interface SessionChromeActions {
 }
 
 const OPENAI_PROVIDER_ID = 'openai' as const
+
+/**
+ * Sponsored-working production binding (Free-tier monetization foundation).
+ * Production uses the null provider → renders nothing until a real sponsor
+ * provider is integrated. The dev/test fixture is injected explicitly in
+ * tests only and never referenced here. Billing source is future work:
+ * entitlement defaults to Free via the narrow policy seam.
+ */
+const SPONSOR_PROVIDER = new NullSponsorProvider()
 
 /** Renderer-side composer byte cap (main enforces authoritatively). */
 const COMPOSER_MAX_BYTES = 64 * 1024
@@ -325,6 +340,14 @@ export function SessionPanel({
   }))
   const [heart, heartDispatch] = useReducer(heartPanelReducer, workspaceId, (id) => ({
     ...initialHeartPanelState(),
+    workspaceId: id
+  }))
+  // Settings → Models V2 Brain/Heart LoopLink chain configuration:
+  // renderer/session-local ordered stable model ids, workspace-scoped
+  // like every other panel state. No persistence (schema stays v19),
+  // no IPC, no secrets — configuration for the later AI pass only.
+  const [modelChains, modelChainsDispatch] = useReducer(modelChainsPanelReducer, workspaceId, (id) => ({
+    ...initialModelChainsPanelState(),
     workspaceId: id
   }))
   const [looplink, looplinkDispatch] = useReducer(looplinkPanelReducer, workspaceId, (id) => ({
@@ -703,6 +726,7 @@ export function SessionPanel({
     workDispatch({ type: 'workspace-changed', workspaceId })
     looplinkDispatch({ type: 'workspace-changed', workspaceId })
     heartDispatch({ type: 'workspace-changed', workspaceId })
+    modelChainsDispatch({ type: 'workspace-changed', workspaceId })
     recoveryDispatch({ type: 'workspace-changed', workspaceId })
     capabilitiesDispatch({ type: 'workspace-changed', workspaceId })
     usageDispatch({ type: 'workspace-changed', workspaceId })
@@ -2028,6 +2052,26 @@ export function SessionPanel({
     proposal.preparing ||
     work.preparing ||
     (proposeMode && !eligibility.eligible)
+  // Sponsored-working narrow binding: observational AI-run state only.
+  // Never delays, gates, or alters sends, generations, proposals, work
+  // runs, streaming, cancellation, navigation, Settings, or terminal.
+  const sponsorAiState = deriveAiRunState({
+    sending: state.sending,
+    generating: state.generating,
+    proposalPreparing: proposal.preparing,
+    workPreparing: work.preparing,
+    looplinkActing: looplink.acting
+  })
+  const sponsorRunId = useMemo(
+    () =>
+      buildAiRunId({
+        workspaceId,
+        sessionId: state.selectedSessionId,
+        generationRequestId: state.generationRequestId
+      }),
+    [workspaceId, state.selectedSessionId, state.generationRequestId]
+  )
+  const sponsorEntitlement = useMemo(() => resolveMonetizationEntitlement('free'), [])
   const latestMessage = state.messages[state.messages.length - 1] ?? null
   const showRetry =
     latestMessage !== null &&
@@ -2158,6 +2202,13 @@ export function SessionPanel({
               onTestConnection: () => void handleTestConnection(),
               onRefreshModels: () => void handleRefreshModels(),
               onUseModel: () => void handleUseModel(),
+              brainChain: modelChains.brain,
+              heartChain: modelChains.heart,
+              onChainAdd: (chain, stableId) => modelChainsDispatch({ type: 'chain-add', workspaceId, chain, stableId }),
+              onChainRemove: (chain, stableId) =>
+                modelChainsDispatch({ type: 'chain-remove', workspaceId, chain, stableId }),
+              onChainMove: (chain, stableId, direction) =>
+                modelChainsDispatch({ type: 'chain-move', workspaceId, chain, stableId, direction }),
               capabilities,
               capabilitiesDispatch,
               onSaveCapabilities: () => void handleSaveCapabilities(),
@@ -2303,6 +2354,18 @@ export function SessionPanel({
                 STARK is thinking…
               </p>
             )}
+            {/* Sponsored-working slot: single placement inside the existing
+                AI working surface. Observational only — the component
+                returns null unless Free + genuinely working + visible +
+                focused + creative + frequency cap ok. Disappears
+                immediately when the run ends. Never inside messages. */}
+            <SponsoredWorkingSlot
+              key={sponsorRunId}
+              runId={sponsorRunId}
+              aiState={sponsorAiState}
+              entitlement={sponsorEntitlement}
+              provider={SPONSOR_PROVIDER}
+            />
             {state.generationError !== null && (
               <div className="session__generation-error" role="alert">
                 <p className="session__error">{state.generationError}</p>

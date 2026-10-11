@@ -33,6 +33,15 @@ const SETTINGS_FILES = [
   'features/settings/SettingsNav.tsx',
   'features/settings/settings-section.ts',
   'features/settings/sections/ModelsSettings.tsx',
+  'features/settings/sections/models/ModelCard.tsx',
+  'features/settings/sections/models/AddModelCard.tsx',
+  'features/settings/sections/models/AddModelFlow.tsx',
+  'features/settings/sections/models/ModelChain.tsx',
+  'features/settings/sections/models/BrainChain.tsx',
+  'features/settings/sections/models/HeartChain.tsx',
+  'features/settings/sections/models/model-library.ts',
+  'features/settings/sections/models/model-chain.ts',
+  'features/settings/sections/models/model-chains-state.ts',
   'features/settings/sections/PermissionsSettings.tsx',
   'features/settings/sections/AccountSettings.tsx',
   'features/settings/sections/BillingSettings.tsx',
@@ -183,15 +192,21 @@ describe('settings V2 full-page surface', () => {
   })
 
   it('Models keeps secure key handling with no secret regressions', () => {
+    // Models V2 presents a library + chains; the reviewed provider
+    // form lives re-housed behind the Add API key flow unchanged.
     const models = readRenderer('features/settings/sections/ModelsSettings.tsx')
-    assert.ok(models.includes('type={props.revealKey'), 'key field must stay masked by default')
-    assert.ok(models.includes("type={props.revealKey ? 'text' : 'password'}"), 'key field must stay masked by default')
-    assert.ok(models.includes("autoComplete=\"off\""), 'key field must disable autocomplete')
-    assert.ok(models.includes('Save key'), 'save must stay explicit')
-    assert.ok(models.includes('Remove key'), 'removal must stay explicit')
-    assert.ok(models.includes('Test connection'), 'connection test must stay explicit')
-    assert.ok(models.includes('Refresh models'), 'model refresh must stay explicit')
-    assert.ok(models.includes('Use model'), 'model selection must stay explicit')
+    assert.ok(models.includes('<ModelCard') || models.includes('ModelCard'), 'library must render model cards')
+    assert.ok(models.includes('<BrainChain'), 'page must render the Brain Chain')
+    assert.ok(models.includes('<HeartChain'), 'page must render the Heart Chain')
+    const flow = readRenderer('features/settings/sections/models/AddModelFlow.tsx')
+    assert.ok(flow.includes('type={props.revealKey'), 'key field must stay masked by default')
+    assert.ok(flow.includes("type={props.revealKey ? 'text' : 'password'}"), 'key field must stay masked by default')
+    assert.ok(flow.includes("autoComplete=\"off\""), 'key field must disable autocomplete')
+    assert.ok(flow.includes('Save key'), 'save must stay explicit')
+    assert.ok(flow.includes('Remove key'), 'removal must stay explicit')
+    assert.ok(flow.includes('Test connection'), 'connection test must stay explicit')
+    assert.ok(flow.includes('Refresh models'), 'model refresh must stay explicit')
+    assert.ok(flow.includes('Use model'), 'model selection must stay explicit')
     // Web-storage persistence is enforced globally by the release
     // security matrix, which scans every renderer file including this
     // settings surface.

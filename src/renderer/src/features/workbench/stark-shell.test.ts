@@ -133,7 +133,9 @@ describe('stage 31 D05 shell proof', () => {
       assert.ok(panel.includes(feature), `session must keep ${feature}`)
     }
     const models = readRenderer('features/settings/sections/ModelsSettings.tsx')
-    assert.ok(models.includes('Use model'), 'settings must keep Use model')
+    const addFlow = readRenderer('features/settings/sections/models/AddModelFlow.tsx')
+    assert.ok(models.includes('<ModelCard') || models.includes('ModelCard'), 'settings must keep the model library')
+    assert.ok(addFlow.includes('Use model'), 'settings must keep Use model')
     const permissions = readRenderer('features/settings/sections/PermissionsSettings.tsx')
     assert.ok(permissions.includes('Save permissions'), 'settings must keep Save permissions')
     // Heart/Recovery/Usage editors left Settings V2 (locked nav); their

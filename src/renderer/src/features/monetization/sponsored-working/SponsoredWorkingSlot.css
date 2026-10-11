@@ -1,0 +1,48 @@
+/* STARK sponsored-working slot: compact, calm, clearly labeled, secondary
+   to task progress. Never mistaken for STARK output. No animation that
+   steals attention, no overlay, no media. */
+
+.sponsor-slot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 6px 12px;
+  font-family: var(--stark-font-sans);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--stark-text-dim);
+  background: transparent;
+  border-top: 1px solid var(--stark-border);
+}
+
+.sponsor-slot__label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--stark-text-dim);
+}
+
+.sponsor-slot__separator {
+  color: var(--stark-text-dim);
+  opacity: 0.6;
+}
+
+.sponsor-slot__name {
+  font-weight: 600;
+  color: var(--stark-text-dim);
+}
+
+.sponsor-slot__message {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--stark-text-dim);
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

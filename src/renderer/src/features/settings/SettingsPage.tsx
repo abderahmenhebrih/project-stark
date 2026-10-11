@@ -1,5 +1,6 @@
 import { useEffect, useRef, type Dispatch, type ReactElement } from 'react'
 import type { HeartPanelAction, HeartPanelState } from '../sessions/heart-state'
+import type { ChainMoveDirection } from './sections/models/model-chain'
 import type { RecoveryPanelAction, RecoveryPanelState } from '../sessions/recovery-state'
 import type { UsagePanelAction, UsagePanelState } from '../sessions/usage-state'
 import type { CapabilityPanelAction, CapabilityPanelState } from '../sessions/capabilities-state'
@@ -30,6 +31,16 @@ export interface SettingsPageBinding {
   readonly onTestConnection: () => void
   readonly onRefreshModels: () => void
   readonly onUseModel: () => void
+  /**
+   * Renderer-local Brain/Heart LoopLink chain configuration (stable
+   * model ids only, session-local, workspace-scoped). Owned by
+   * SessionPanel like every other panel state; no persistence, no IPC.
+   */
+  readonly brainChain: readonly string[]
+  readonly heartChain: readonly string[]
+  readonly onChainAdd: (chain: 'brain' | 'heart', stableId: string) => void
+  readonly onChainRemove: (chain: 'brain' | 'heart', stableId: string) => void
+  readonly onChainMove: (chain: 'brain' | 'heart', stableId: string, direction: ChainMoveDirection) => void
   readonly capabilities: CapabilityPanelState
   readonly capabilitiesDispatch: Dispatch<CapabilityPanelAction>
   readonly onSaveCapabilities: () => void
@@ -122,6 +133,12 @@ export function SettingsPage({ section, onSectionChange, onBack, binding }: Sett
               onTestConnection={binding.onTestConnection}
               onRefreshModels={binding.onRefreshModels}
               onUseModel={binding.onUseModel}
+              brain={binding.brainChain}
+              heart={binding.heartChain}
+              onChainAdd={binding.onChainAdd}
+              onChainRemove={binding.onChainRemove}
+              onChainMove={binding.onChainMove}
+              onNavigateBilling={() => onSectionChange('billing')}
             />
           )}
           {section === 'permissions' && (

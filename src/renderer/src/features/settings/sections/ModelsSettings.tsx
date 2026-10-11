@@ -1,6 +1,13 @@
-import type { ReactElement } from 'react'
-import type { ProviderConnectionStatus } from '../../../../../shared/providers/types'
+import { useState, type ReactElement } from 'react'
 import type { ProviderPanelState } from '../../sessions/provider-state'
+import type { ChainMoveDirection } from './models/model-chain'
+import { canEnterChain, deriveModelLibrary, findLibraryModel } from './models/model-library'
+import { ModelCard } from './models/ModelCard'
+import { AddModelCard } from './models/AddModelCard'
+import { AddModelFlow } from './models/AddModelFlow'
+import { BrainChain } from './models/BrainChain'
+import { HeartChain } from './models/HeartChain'
+import './models/ModelsSettings.css'
 
 interface ModelsSettingsProps {
   readonly provider: ProviderPanelState
@@ -17,162 +24,113 @@ interface ModelsSettingsProps {
   readonly onTestConnection: () => void
   readonly onRefreshModels: () => void
   readonly onUseModel: () => void
-}
-
-function connectionStatusLabel(status: ProviderConnectionStatus): string {
-  switch (status) {
-    case 'connected':
-      return 'Connected.'
-    case 'invalid-credential':
-      return 'The saved API key was rejected. Check the key and try again.'
-    case 'rate-limited':
-      return 'The AI provider is rate-limiting requests. Try again shortly.'
-    case 'network-error':
-      return 'The AI provider could not be reached. Check your connection.'
-    case 'timeout':
-      return 'The AI provider request timed out. Try again.'
-    default:
-      return 'The AI provider status is unknown.'
-  }
+  readonly brain: readonly string[]
+  readonly heart: readonly string[]
+  readonly onChainAdd: (chain: 'brain' | 'heart', stableId: string) => void
+  readonly onChainRemove: (chain: 'brain' | 'heart', stableId: string) => void
+  readonly onChainMove: (chain: 'brain' | 'heart', stableId: string, direction: ChainMoveDirection) => void
+  readonly onNavigateBilling: () => void
 }
 
 /**
- * Settings → Models: the existing provider/key/model configuration,
- * re-housed from the old modal without backend or behavior changes.
- * One provider subsection per configured provider (today: the single
- * configured provider), so multi-provider UI can extend this shape.
+ * Settings → Models V2: visual Model Library (built-in, then
+ * user-added, then plan-exclusive, then the grid-native Add model
+ * card with the in-page three-choice flow), then the independent
+ * Brain and Heart LoopLink chain configuration.
+ *
+ * The library derives from the model catalog plus provider source
+ * truth — never fake models. Locked plan entries explain their lock
+ * on the card and route to Billing; the chain insertion guard refuses
+ * them at configuration time so a locked model can never enter a
+ * chain. Entries missing from the library render as Unavailable and
+ * are kept, so removing a key never strands a dangling reference.
+ * Chains start empty by design: built-in models appear in the library
+ * but chain membership stays a deliberate user choice (no default
+ * assignment exists in the current architecture). Chain order is
+ * configuration for the upcoming AI integration pass — STARK does not
+ * route inference through these chains yet. No IPC, no network, no
+ * storage calls live here; chain state is renderer/session-local and
+ * resets on workspace switch (schema stays v19).
  */
 export function ModelsSettings(props: ModelsSettingsProps): ReactElement {
-  const { provider } = props
-  const selectedModel = provider.selectedModel
+  const [addOpen, setAddOpen] = useState(false)
+  const library = deriveModelLibrary(props.provider)
+  const builtIn = library.filter((entry) => entry.origin === 'built-in')
+  const userModels = library.filter((entry) => entry.origin === 'api' || entry.origin === 'local')
+  const planModels = library.filter((entry) => entry.origin === 'plan')
+
+  function handleChainAdd(chain: 'brain' | 'heart', stableId: string): void {
+    const entry = findLibraryModel(library, stableId)
+    if (entry === undefined || !canEnterChain(entry)) {
+      return
+    }
+    props.onChainAdd(chain, stableId)
+  }
+
   return (
     <section aria-label="Models">
       <p className="settings-section__title">Models</p>
-      <p className="settings-section__copy">Configure the AI providers and models STARK can use.</p>
-      <div className="settings-provider">
-        <p className="session__eyebrow">Provider</p>
-        <div className="session__settings-row">
-          <span className="session__provider-name">{provider.displayName}</span>
-        </div>
-        {!provider.secureStorageAvailable && (
-          <p className="session__error" role="alert">
-            Secure credential storage is not available on this system.
+      <p className="settings-section__copy">Model library, Brain Chain and Heart Chain configuration.</p>
+      <div className="models-library__head">
+        <p className="session__eyebrow">Model Library</p>
+        {library.length === 0 ? (
+          <p className="models-empty" role="note">
+            No models added yet.
           </p>
-        )}
-        <label className="session__eyebrow" htmlFor="settings-api-key">
-          API key
-        </label>
-        <div className="session__settings-row">
-          <input
-            id="settings-api-key"
-            className="session__field"
-            type={props.revealKey ? 'text' : 'password'}
-            value={props.apiKeyInput}
-            onChange={(event) => props.onApiKeyInputChange(event.target.value)}
-            placeholder="Paste OpenAI API key…"
-            autoComplete="off"
-            spellCheck={false}
-            aria-label="OpenAI API key"
-          />
-          <button
-            className="explorer__secondary"
-            type="button"
-            onClick={props.onToggleRevealKey}
-            aria-label={props.revealKey ? 'Hide typed key' : 'Reveal typed key'}
-          >
-            {props.revealKey ? 'Hide' : 'Show'}
-          </button>
-        </div>
-        <div className="session__settings-row">
-          <button
-            className="explorer__primary"
-            type="button"
-            onClick={props.onSaveKey}
-            disabled={props.apiKeyInput.trim() === '' || !provider.secureStorageAvailable}
-          >
-            Save key
-          </button>
-          <button
-            className="explorer__secondary"
-            type="button"
-            onClick={props.onRemoveKey}
-            disabled={!provider.configured}
-          >
-            Remove key
-          </button>
-          <span className="session__hint">{provider.configured ? 'Configured' : 'Not configured'}</span>
-        </div>
-        {provider.error !== null && (
-          <p className="session__error" role="alert">
-            {provider.error}
-          </p>
-        )}
-        <p className="session__eyebrow">Connection</p>
-        <div className="session__settings-row">
-          <button
-            className="explorer__secondary"
-            type="button"
-            onClick={props.onTestConnection}
-            disabled={!provider.configured || provider.connectionPhase === 'testing'}
-          >
-            {provider.connectionPhase === 'testing' ? 'Testing…' : 'Test connection'}
-          </button>
-          <button
-            className="explorer__secondary"
-            type="button"
-            onClick={props.onRefreshModels}
-            disabled={!provider.configured || provider.loadingModels}
-          >
-            {provider.loadingModels ? 'Loading…' : 'Refresh models'}
-          </button>
-        </div>
-        {provider.connectionPhase === 'done' && provider.connectionStatus !== null && (
-          <p className="session__status" role="status">
-            Connection: {connectionStatusLabel(provider.connectionStatus)}
-          </p>
-        )}
-        {provider.connectionPhase === 'error' && provider.connectionError !== null && (
-          <p className="session__error" role="alert">
-            {provider.connectionError}
-          </p>
-        )}
-        <p className="session__eyebrow">Available models</p>
-        <div className="session__settings-row">
-          <select
-            id="settings-model-select"
-            className="session__select"
-            value={props.modelValue}
-            onChange={(event) => props.onModelDraftChange(event.target.value)}
-            disabled={!provider.configured || (provider.models.length === 0 && provider.selectedModel === null)}
-            aria-label="Available models"
-          >
-            {props.modelValue === '' && <option value="">Select a model…</option>}
-            {props.selectedModelMissing && selectedModel !== null ? (
-              <option key={selectedModel} value={selectedModel}>
-                {selectedModel}
-              </option>
-            ) : null}
-            {provider.models.map((entry) => (
-              <option key={entry.id} value={entry.id}>
-                {entry.id}
-              </option>
-            ))}
-          </select>
-          <button
-            className="explorer__secondary"
-            type="button"
-            onClick={props.onUseModel}
-            disabled={props.useModelDisabled}
-          >
-            Use model
-          </button>
-        </div>
-        {provider.modelsError !== null && (
-          <p className="session__error" role="alert">
-            {provider.modelsError}
-          </p>
-        )}
+        ) : null}
       </div>
+      <div className="models-grid" aria-label="Model library">
+        {builtIn.length > 0 ? <p className="models-grid__label">Included</p> : null}
+        {builtIn.map((entry) => (
+          <ModelCard key={entry.stableId} model={entry} />
+        ))}
+        {userModels.length > 0 ? <p className="models-grid__label">Your models</p> : null}
+        {userModels.map((entry) => (
+          <ModelCard key={entry.stableId} model={entry} />
+        ))}
+        {planModels.length > 0 ? <p className="models-grid__label">Available with STARK plans</p> : null}
+        {planModels.map((entry) => (
+          <ModelCard key={entry.stableId} model={entry} onUpgrade={props.onNavigateBilling} />
+        ))}
+        <AddModelCard onOpen={() => setAddOpen(true)} />
+      </div>
+      {addOpen ? (
+        <AddModelFlow
+          provider={props.provider}
+          apiKeyInput={props.apiKeyInput}
+          onApiKeyInputChange={props.onApiKeyInputChange}
+          revealKey={props.revealKey}
+          onToggleRevealKey={props.onToggleRevealKey}
+          modelValue={props.modelValue}
+          selectedModelMissing={props.selectedModelMissing}
+          useModelDisabled={props.useModelDisabled}
+          onModelDraftChange={props.onModelDraftChange}
+          onSaveKey={props.onSaveKey}
+          onRemoveKey={props.onRemoveKey}
+          onTestConnection={props.onTestConnection}
+          onRefreshModels={props.onRefreshModels}
+          onUseModel={props.onUseModel}
+          onNavigateBilling={props.onNavigateBilling}
+          onClose={() => setAddOpen(false)}
+        />
+      ) : null}
+      <BrainChain
+        chain={props.brain}
+        library={library}
+        onAdd={(stableId) => handleChainAdd('brain', stableId)}
+        onRemove={(stableId) => props.onChainRemove('brain', stableId)}
+        onMove={(stableId, direction) => props.onChainMove('brain', stableId, direction)}
+      />
+      <HeartChain
+        chain={props.heart}
+        library={library}
+        onAdd={(stableId) => handleChainAdd('heart', stableId)}
+        onRemove={(stableId) => props.onChainRemove('heart', stableId)}
+        onMove={(stableId, direction) => props.onChainMove('heart', stableId, direction)}
+      />
+      <p className="session__hint" role="note">
+        Chains configure order for the upcoming AI integration. STARK does not route inference through them yet.
+      </p>
     </section>
   )
 }
