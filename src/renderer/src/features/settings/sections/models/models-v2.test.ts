@@ -35,7 +35,7 @@ describe('models V2 library', () => {
     assert.ok(page.includes('<AddModelCard'), 'grid must end with an Add model card')
     assert.ok(page.indexOf('<ModelCard') < page.indexOf('<AddModelCard'), 'Add model card must be last')
     const card = codeOnly(readModels('models/ModelCard.tsx'))
-    assert.ok(card.includes('StarkIcon'), 'card must carry an icon')
+    assert.ok(card.includes('modelIconFor'), 'card must carry the mapped model icon')
     assert.ok(card.includes('displayName'), 'card must show the model name')
     assert.ok(card.includes('tokenSessionLabel'), 'card must show honest token metadata')
     const library = codeOnly(readModels('models/model-library.ts'))
@@ -121,14 +121,12 @@ describe('models V2 brain and heart chains', () => {
     assert.ok(heart.includes('kind="heart"'), 'heart must identify itself')
   })
 
-  it('reads as an ordered LoopLink with positions and keyboard controls', () => {
+  it('reads as an ordered LoopLink roster with toggles and keyboard controls', () => {
     const chain = codeOnly(readModels('models/ModelChain.tsx'))
     assert.ok(chain.includes('LoopLink'), 'chain must carry the LoopLink indicator')
     assert.ok(chain.includes('Position'), 'positions must be exposed')
-    assert.ok(chain.includes('Remove'), 'each node must offer remove')
-    assert.ok(chain.includes('Move'), 'each node must offer reorder')
-    assert.ok(chain.includes('Add a model to'), 'partial chains must offer an Add slot')
-    assert.ok(chain.includes('Add a model to configure the'), 'empty chains must show a configuration state')
+    assert.ok(chain.includes('role="switch"'), 'each row must offer an enable switch')
+    assert.ok(chain.includes('Reorder'), 'each enabled row must offer reorder')
     assert.ok(chain.includes('aria-label'), 'chain controls must be labelled')
   })
 

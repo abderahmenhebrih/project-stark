@@ -2,19 +2,25 @@
  * Brain/Heart LoopLink chain rules (Settings → Models V2).
  *
  * Pure, renderer-local, no React imports — unit-testable with the Node
- * runner. Chains are ordered lists of stable model ids (see
- * model-library.ts). No secrets, no provider config, no inference.
+ * runner. The single source of truth is the ORDERED ENABLED ID LIST
+ * (see model-chains-state.ts). Roster rows are DERIVED from the
+ * eligible plan catalog plus those active ids — never a second
+ * boolean store (enabled = active chain contains the id).
  *
  * LOCKED rules (Free defaults; paid tiers raise the cap through the
  * central entitlements — see billing/entitlements.ts):
- * - 1..max entries when configured (fewer allowed, never 0 via
- *   add-path; empty renders as configuration-required).
- * - The same model may NOT appear twice inside one chain.
- * - The same model MAY appear in both chains (enforced by keeping the
- *   two lists independent — no cross-chain check lives here).
- * - Removal collapses positions (no holes); reorder preserves ids.
- * - Insertions past the cap are rejected by state logic, not CSS.
+ * - Active holds 0..max entries (below cap allowed, empty allowed —
+ *   the roster never disappears).
+ * - The same model may NOT appear twice in one active chain.
+ * - The same model MAY be active in both chains (lists independent).
+ * - Disable collapses positions (no holes); re-enable appends to the
+ *   END unless it arrives via the limit-swap flow (takes the replaced
+ *   position); reorder preserves ids.
+ * - Enabling past the cap is refused with `limitReached` (the UI
+ *   opens the limit dialog — never silent, never auto-disabling).
  */
+import type { StarkModelIdentity } from './model-library'
+import { canEnterChain } from './model-library'
 
 /** Free-tier chain cap. Paid entitlements pass a higher max explicitly. */
 export const MAX_CHAIN_MODELS = 5
@@ -23,7 +29,7 @@ export const MIN_CHAIN_MODELS = 1
 
 export type ModelChainKind = 'brain' | 'heart'
 
-export type ChainMoveDirection = 'left' | 'right'
+export type ChainMoveDirection = 'up' | 'down'
 
 /** True when the chain already holds this model (same-chain duplicate). */
 export function chainContains(chain: readonly string[], stableId: string): boolean {
@@ -71,8 +77,9 @@ export function removeFromChain(chain: readonly string[], stableId: string): rea
 }
 
 /**
- * Moves one entry one step left/right. Edge moves and unknown ids are
- * no-ops. Identities are preserved — only positions change.
+ * Moves one entry one step up/down the vertical list. Edge moves and
+ * unknown ids are no-ops. Identities are preserved — only positions
+ * change.
  */
 export function moveInChain(
   chain: readonly string[],
@@ -83,7 +90,7 @@ export function moveInChain(
   if (at === -1) {
     return chain
   }
-  const next = direction === 'left' ? at - 1 : at + 1
+  const next = direction === 'up' ? at - 1 : at + 1
   if (next < 0 || next >= chain.length) {
     return chain
   }
@@ -111,4 +118,131 @@ export function isChainFull(chain: readonly string[], maxModels: number = MAX_CH
  */
 export function isChainEntryAvailable(libraryIds: ReadonlySet<string>, stableId: string): boolean {
   return libraryIds.has(stableId)
+}
+
+/** One derived LoopLink roster row. `enabled` is derived, never stored. */
+export interface LoopLinkRosterRow {
+  readonly stableId: string
+  readonly enabled: boolean
+  /** 1-based position within the active chain, or null when disabled. */
+  readonly position: number | null
+  /** Catalog entry when resolvable; undefined for retained stale ids. */
+  readonly entry: StarkModelIdentity | undefined
+}
+
+export interface LoopLinkRoster {
+  readonly rows: readonly LoopLinkRosterRow[]
+  readonly enabledCount: number
+  readonly totalCount: number
+}
+
+/**
+ * Derives the full plan roster: enabled rows first in active order
+ * (including retained ids missing from the catalog, marked
+ * entry-less), then disabled rows in catalog order. Eligible = usable
+ * now (locked/unavailable plan entries excluded); the roster grows
+ * automatically when Billing adds paid catalog entries later.
+ */
+export function deriveModelRoster(
+  library: readonly StarkModelIdentity[],
+  activeIds: readonly string[]
+): LoopLinkRoster {
+  const byId = new Map(library.map((entry) => [entry.stableId, entry]))
+  const activeSet = new Set(activeIds)
+  const rows: LoopLinkRosterRow[] = []
+  activeIds.forEach((stableId, index) => {
+    rows.push({ stableId, enabled: true, position: index + 1, entry: byId.get(stableId) })
+  })
+  for (const entry of library) {
+    if (activeSet.has(entry.stableId) || !canEnterChain(entry)) {
+      continue
+    }
+    rows.push({ stableId: entry.stableId, enabled: false, position: null, entry })
+  }
+  const enabledCount = activeIds.length
+  return { rows, enabledCount, totalCount: rows.length }
+}
+
+export interface EnableModelOutcome {
+  readonly applied: boolean
+  /** True when the entitlement cap blocked the enable (open the limit dialog). */
+  readonly limitReached: boolean
+  readonly chain: readonly string[]
+}
+
+/**
+ * Enables one model (append to END of active order) unless already
+ * active or the cap is reached. Never auto-disables another model.
+ */
+export function enableModel(
+  active: readonly string[],
+  stableId: string,
+  maxModels: number = MAX_CHAIN_MODELS
+): EnableModelOutcome {
+  if (stableId === '' || active.includes(stableId)) {
+    return { applied: false, limitReached: false, chain: active }
+  }
+  if (active.length >= maxModels) {
+    return { applied: false, limitReached: true, chain: active }
+  }
+  return { applied: true, limitReached: false, chain: [...active, stableId] }
+}
+
+export interface DisableModelOutcome {
+  readonly applied: boolean
+  readonly chain: readonly string[]
+}
+
+/** Disables one model (positions collapse, row stays visible). */
+export function disableModel(active: readonly string[], stableId: string): DisableModelOutcome {
+  if (!active.includes(stableId)) {
+    return { applied: false, chain: active }
+  }
+  return { applied: true, chain: active.filter((entry) => entry !== stableId) }
+}
+
+export interface SwapModelOutcome {
+  readonly applied: boolean
+  readonly chain: readonly string[]
+}
+
+/**
+ * Limit-flow swap: the incoming model takes the SAME active position
+ * as the replaced outgoing model. Count is preserved; duplicates
+ * impossible (incoming already active, or outgoing missing, rejects).
+ */
+export function swapEnabledModel(
+  active: readonly string[],
+  outgoingId: string,
+  incomingId: string
+): SwapModelOutcome {
+  const at = active.indexOf(outgoingId)
+  if (at === -1 || incomingId === '' || (incomingId !== outgoingId && active.includes(incomingId))) {
+    return { applied: false, chain: active }
+  }
+  const next = [...active]
+  next[at] = incomingId
+  return { applied: true, chain: next }
+}
+
+/**
+ * Drag/keyboard reorder inside the enabled region: moves one active id
+ * to a target index (clamped). Order-only — nothing enables/disables.
+ */
+export function reorderEnabledModel(
+  active: readonly string[],
+  stableId: string,
+  toIndex: number
+): readonly string[] {
+  const from = active.indexOf(stableId)
+  if (from === -1) {
+    return active
+  }
+  const clamped = Math.max(0, Math.min(active.length - 1, toIndex))
+  if (clamped === from) {
+    return active
+  }
+  const next = active.filter((entry) => entry !== stableId)
+  next.splice(clamped, 0, stableId)
+  return next
 }

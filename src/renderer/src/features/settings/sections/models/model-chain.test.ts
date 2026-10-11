@@ -56,11 +56,11 @@ describe('model chain rules', () => {
 
   it('reorders while preserving identities', () => {
     const chain = ['openai:a', 'openai:b', 'openai:c']
-    assert.deepEqual(moveInChain(chain, 'openai:b', 'left'), ['openai:b', 'openai:a', 'openai:c'])
-    assert.deepEqual(moveInChain(chain, 'openai:b', 'right'), ['openai:a', 'openai:c', 'openai:b'])
-    assert.deepEqual(moveInChain(chain, 'openai:a', 'left'), chain)
-    assert.deepEqual(moveInChain(chain, 'openai:c', 'right'), chain)
-    assert.deepEqual(moveInChain(chain, 'openai:missing', 'left'), chain)
+    assert.deepEqual(moveInChain(chain, 'openai:b', 'up'), ['openai:b', 'openai:a', 'openai:c'])
+    assert.deepEqual(moveInChain(chain, 'openai:b', 'down'), ['openai:a', 'openai:c', 'openai:b'])
+    assert.deepEqual(moveInChain(chain, 'openai:a', 'up'), chain)
+    assert.deepEqual(moveInChain(chain, 'openai:c', 'down'), chain)
+    assert.deepEqual(moveInChain(chain, 'openai:missing', 'up'), chain)
   })
 
   it('marks entries missing from the library as unavailable (never dangling)', () => {

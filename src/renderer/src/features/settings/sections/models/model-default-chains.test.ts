@@ -98,7 +98,7 @@ describe('default free chains', () => {
       workspaceId: 7,
       chain: 'brain',
       stableId: moved,
-      direction: 'left'
+      direction: 'up'
     })
     assert.equal(state.brain[state.brain.length - 2], moved)
     const dropped = state.heart[0]
@@ -122,7 +122,7 @@ describe('default free chains', () => {
       workspaceId: 7,
       chain: 'heart',
       stableId: 'builtin:kimi-k2.7-code',
-      direction: 'right'
+      direction: 'down'
     })
     assert.ok(!state.brain.includes('builtin:gpt-5.6-luna'))
     assert.equal(state.brain.length, 4)

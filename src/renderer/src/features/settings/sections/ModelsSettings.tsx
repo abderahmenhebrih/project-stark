@@ -1,6 +1,5 @@
 import { useState, type ReactElement } from 'react'
 import type { ProviderPanelState } from '../../sessions/provider-state'
-import type { ChainMoveDirection } from './models/model-chain'
 import { canEnterChain, deriveModelLibrary, findLibraryModel } from './models/model-library'
 import { ModelCard } from './models/ModelCard'
 import { AddModelCard } from './models/AddModelCard'
@@ -29,33 +28,38 @@ interface ModelsSettingsProps {
   /** Entitlement caps from the central product state (Free default 5). */
   readonly maxBrainModels?: number
   readonly maxHeartModels?: number
-  readonly onChainAdd: (chain: 'brain' | 'heart', stableId: string) => void
-  readonly onChainRemove: (chain: 'brain' | 'heart', stableId: string) => void
-  readonly onChainMove: (chain: 'brain' | 'heart', stableId: string, direction: ChainMoveDirection) => void
+  /** Plan display name for LoopLink limit copy (defaults to STARK Free). */
+  readonly planLabel?: string
+  readonly onToggleModel: (chain: 'brain' | 'heart', stableId: string, enable: boolean) => void
+  readonly onSwapModel: (chain: 'brain' | 'heart', outgoingId: string, incomingId: string) => void
+  readonly onReorderModel: (chain: 'brain' | 'heart', stableId: string, toIndex: number) => void
   readonly onNavigateBilling: () => void
 }
 
 /**
  * Settings → Models V2: visual Model Library (the 15 STARK Free
  * built-ins, then user-added, then the grid-native Add model card
- * with the in-page three-choice flow), then the independent Brain
- * and Heart LoopLink chain configuration. No paid plan catalog is
- * rendered yet — the plan group below stays mounted but empty until
- * Billing defines the real Magma/Frost/Void entries.
+ * with the in-page three-choice flow), then the side-by-side Brain
+ * and Heart LoopLink rosters. No paid plan catalog is rendered yet —
+ * the plan group below stays mounted but empty until Billing defines
+ * the real Magma/Frost/Void entries.
+ *
+ * Each LoopLink shows the FULL eligible roster (enabled first in
+ * active order, then available in catalog order) with Free-default
+ * actives preconfigured. Toggles enable/disable, the grip drags
+ * enabled rows, and the limit dialog offers switch-or-upgrade at the
+ * entitlement cap.
  *
  * The library derives from the model catalog plus provider source
- * truth — never fake models. Locked plan entries explain their lock
- * on the card and route to Billing; the chain insertion guard refuses
- * them at configuration time so a locked model can never enter a
- * chain. Entries missing from the library render as Unavailable and
- * are kept, so removing a key never strands a dangling reference.
- * Chains start empty by design: built-in models appear in the library
- * but chain membership stays a deliberate user choice (no default
- * assignment exists in the current architecture). Chain order is
- * configuration for the upcoming AI integration pass — STARK does not
- * route inference through these chains yet. No IPC, no network, no
- * storage calls live here; chain state is renderer/session-local and
- * resets on workspace switch (schema stays v19).
+ * truth — never fake models. Locked plan entries stay out of the
+ * roster (with their Billing upgrade route on the library cards);
+ * retained active ids missing from the library render as Unavailable
+ * and are kept, so removing a key never strands a dangling reference.
+ * Roster order is configuration for the upcoming AI integration
+ * pass — STARK does not route inference through these LoopLinks yet.
+ * No IPC, no network, no storage calls live here; chain state is
+ * renderer/session-local and resets on workspace switch (schema
+ * stays v19).
  */
 export function ModelsSettings(props: ModelsSettingsProps): ReactElement {
   const [addOpen, setAddOpen] = useState(false)
@@ -64,16 +68,20 @@ export function ModelsSettings(props: ModelsSettingsProps): ReactElement {
   const userModels = library.filter((entry) => entry.origin === 'api' || entry.origin === 'local')
   const planModels = library.filter((entry) => entry.origin === 'plan')
 
-  function handleChainAdd(chain: 'brain' | 'heart', stableId: string): void {
+  function handleToggle(chain: 'brain' | 'heart', stableId: string, enable: boolean): void {
+    if (!enable) {
+      props.onToggleModel(chain, stableId, false)
+      return
+    }
     const entry = findLibraryModel(library, stableId)
     if (entry === undefined || !canEnterChain(entry)) {
       return
     }
-    props.onChainAdd(chain, stableId)
+    props.onToggleModel(chain, stableId, true)
   }
 
   return (
-    <section aria-label="Models">
+    <section aria-label="Models" className="models-page">
       <p className="settings-section__title">Models</p>
       <p className="settings-section__copy">Model library, Brain Chain and Heart Chain configuration.</p>
       <div className="models-library__head">
@@ -119,24 +127,30 @@ export function ModelsSettings(props: ModelsSettingsProps): ReactElement {
           onClose={() => setAddOpen(false)}
         />
       ) : null}
-      <BrainChain
-        chain={props.brain}
-        library={library}
-        maxModels={props.maxBrainModels}
-        onAdd={(stableId) => handleChainAdd('brain', stableId)}
-        onRemove={(stableId) => props.onChainRemove('brain', stableId)}
-        onMove={(stableId, direction) => props.onChainMove('brain', stableId, direction)}
-      />
-      <HeartChain
-        chain={props.heart}
-        library={library}
-        maxModels={props.maxHeartModels}
-        onAdd={(stableId) => handleChainAdd('heart', stableId)}
-        onRemove={(stableId) => props.onChainRemove('heart', stableId)}
-        onMove={(stableId, direction) => props.onChainMove('heart', stableId, direction)}
-      />
+      <div className="models-looplinks">
+        <BrainChain
+          chain={props.brain}
+          library={library}
+          maxModels={props.maxBrainModels}
+          planLabel={props.planLabel}
+          onToggle={(stableId, enable) => handleToggle('brain', stableId, enable)}
+          onSwap={(outgoingId, incomingId) => props.onSwapModel('brain', outgoingId, incomingId)}
+          onReorder={(stableId, toIndex) => props.onReorderModel('brain', stableId, toIndex)}
+          onNavigateBilling={props.onNavigateBilling}
+        />
+        <HeartChain
+          chain={props.heart}
+          library={library}
+          maxModels={props.maxHeartModels}
+          planLabel={props.planLabel}
+          onToggle={(stableId, enable) => handleToggle('heart', stableId, enable)}
+          onSwap={(outgoingId, incomingId) => props.onSwapModel('heart', outgoingId, incomingId)}
+          onReorder={(stableId, toIndex) => props.onReorderModel('heart', stableId, toIndex)}
+          onNavigateBilling={props.onNavigateBilling}
+        />
+      </div>
       <p className="session__hint" role="note">
-        Chains configure order for the upcoming AI integration. STARK does not route inference through them yet.
+        LoopLinks configure order for the upcoming AI integration. STARK does not route inference through them yet.
       </p>
     </section>
   )

@@ -75,12 +75,19 @@ article.models-card:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  color: var(--stark-text-dim);
-  background: var(--stark-elevated);
-  border: 1px solid var(--stark-border);
-  border-radius: var(--stark-radius-sm);
+  width: 52px;
+  height: 52px;
+  background: transparent;
+  border: none;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.models-card__img {
+  width: 52px;
+  height: 52px;
+  object-fit: cover;
+  border-radius: 12px;
 }
 
 .models-card__provider {
@@ -254,43 +261,102 @@ article.models-card:hover {
   border-left: 2px solid var(--stark-text-dim);
 }
 
-.models-chain__loopwrap {
+/* Chain header: title + LoopLink badge left, count right. */
+.models-chain__head {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: baseline;
+  gap: 8px;
   min-width: 0;
 }
 
-.models-chain__nodes {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: stretch;
-  gap: 8px;
+.models-chain__head .settings-section__title {
   margin: 0;
-  padding: 0;
-  list-style: none;
-  min-width: 0;
 }
 
-.models-chain__node {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  max-width: 100%;
-  padding: 8px 10px;
+.models-chain__looplink {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--stark-magenta);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+  padding: 1px 6px;
+}
+
+.models-chain--heart .models-chain__looplink {
+  color: var(--stark-text-dim);
+}
+
+.models-chain__count {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--stark-text-dim);
+  white-space: nowrap;
+}
+
+/* Ordered routing table: one model per row, full container width. */
+.models-chain__table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
   background: var(--stark-bg);
   border: 1px solid var(--stark-border);
   border-radius: var(--stark-radius-sm);
 }
 
-.models-chain__node + .models-chain__node::before {
-  content: "→";
-  position: absolute;
-  left: -11px;
+.models-chain__thead th {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: left;
   color: var(--stark-text-dim);
-  font-size: 12px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--stark-border);
+}
+
+.models-chain__th--pos {
+  width: 40px;
+}
+
+.models-chain__th--drag {
+  width: 56px;
+}
+
+.models-chain__th--access {
+  width: 92px;
+}
+
+.models-chain__th--actions {
+  width: 108px;
+  text-align: right;
+}
+
+.models-chain__th--enabled {
+  width: 76px;
+  text-align: right;
+}
+
+.models-chain__row {
+  min-height: 48px;
+}
+
+.models-chain__row + .models-chain__row {
+  border-top: 1px solid var(--stark-border);
+}
+
+.models-chain__row:hover {
+  background: var(--stark-elevated);
+}
+
+.models-chain__td {
+  padding: 6px 10px;
+  vertical-align: middle;
+  min-height: 48px;
 }
 
 .models-chain--brain .models-chain__position {
@@ -298,20 +364,37 @@ article.models-card:hover {
 }
 
 .models-chain__position {
-  flex: 0 0 auto;
   font-size: 12px;
   font-weight: 700;
   color: var(--stark-text-dim);
 }
 
+.models-chain__model {
+  min-width: 0;
+}
+
 .models-chain__icon {
-  flex: 0 0 auto;
   display: inline-flex;
-  color: var(--stark-text-dim);
+  align-items: center;
+  justify-content: center;
+  vertical-align: -8px;
+  width: 30px;
+  height: 30px;
+  margin-right: 8px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.models-chain__img {
+  width: 30px;
+  height: 30px;
+  object-fit: cover;
+  border-radius: 8px;
 }
 
 .models-chain__name {
-  min-width: 0;
   font-size: 13px;
   font-weight: 600;
   color: var(--stark-text);
@@ -319,15 +402,19 @@ article.models-card:hover {
 }
 
 .models-chain__status {
-  flex: 0 0 auto;
+  margin-left: 8px;
   font-size: 11px;
   font-weight: 700;
   color: var(--stark-magenta);
 }
 
 .models-chain__actions {
-  display: inline-flex;
-  gap: 4px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.models-chain__actions .models-chain__mini + .models-chain__mini {
+  margin-left: 4px;
 }
 
 .models-chain__mini {
@@ -355,30 +442,20 @@ article.models-card:hover {
   cursor: default;
 }
 
-.models-chain__loop {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-}
-
-.models-chain__loop-line {
-  flex: 1;
-  height: 1px;
-  background: var(--stark-border);
-}
-
-.models-chain__loop-tag {
-  flex: 0 0 auto;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--stark-magenta);
-}
-
-.models-chain--heart .models-chain__loop-tag {
+.models-chain__empty {
+  padding: 14px 10px;
+  font-size: 12px;
   color: var(--stark-text-dim);
+  text-align: center;
+}
+
+.models-chain__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .models-chain__add {
@@ -390,7 +467,8 @@ article.models-card:hover {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 34px;
+  width: 100%;
+  min-height: 40px;
   padding: 6px 14px;
   font-family: var(--stark-font-sans);
   font-size: 13px;
@@ -424,19 +502,242 @@ article.models-card:hover {
   list-style: none;
 }
 
+/* LoopLink roster page: wider canvas so Brain + Heart sit side by side. */
+.settings-page__content > section.models-page {
+  max-width: 1120px;
+}
+
+.models-looplinks {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+  min-width: 0;
+}
+
+@media (max-width: 1180px) {
+  .models-looplinks {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 760px) {
   .models-grid {
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   }
+}
 
-  .models-chain__nodes {
-    flex-direction: column;
-    align-items: stretch;
+/* Roster rows: drag grip, dimmed access badge, switch, sections. */
+.models-chain__drag {
+  white-space: nowrap;
+}
+
+.models-chain__grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 2px;
+  color: var(--stark-text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--stark-radius-sm);
+  cursor: grab;
+  touch-action: none;
+}
+
+.models-chain__grip:hover,
+.models-chain__grip:focus-visible {
+  color: var(--stark-text);
+  border-color: var(--stark-border);
+}
+
+.models-chain__grip:active {
+  cursor: grabbing;
+}
+
+.models-chain__row--on .models-chain__position {
+  margin-left: 4px;
+}
+
+.models-chain__row--off .models-chain__name,
+.models-chain__row--off .models-chain__access {
+  opacity: 0.62;
+}
+
+.models-chain__row--dragging {
+  opacity: 0.55;
+}
+
+.models-chain__row--dropafter {
+  box-shadow: 0 2px 0 var(--stark-lime);
+}
+
+.models-chain__access {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--stark-text-dim);
+  white-space: nowrap;
+}
+
+.models-chain__enabled {
+  text-align: right;
+}
+
+.models-chain__switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  background: var(--stark-bg);
+  border: 1px solid var(--stark-border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.models-chain__switch--on {
+  background: var(--stark-elevated);
+  border-color: var(--stark-lime);
+}
+
+.models-chain__switch:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.models-chain__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--stark-text-dim);
+  transition: left 120ms ease, background 120ms ease;
+}
+
+.models-chain__switch--on .models-chain__knob {
+  left: 18px;
+  background: var(--stark-lime);
+}
+
+.models-chain__section {
+  padding: 8px 10px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--stark-text-dim);
+}
+
+.models-chain__sectionrow:hover {
+  background: transparent;
+}
+
+/* Limit dialog: restrained centered surface over the settings page. */
+.models-chain__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.models-chain__dialog {
+  width: min(440px, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--stark-space-sm);
+  padding: var(--stark-space-md);
+  background: var(--stark-surface);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-md);
+  outline: none;
+}
+
+.models-chain__dialog-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--stark-text);
+}
+
+.models-chain__dialog-copy {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--stark-text-dim);
+}
+
+.models-chain__dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.models-chain__dialog-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.models-chain__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--stark-text);
+  background: transparent;
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  text-align: left;
+}
+
+.models-chain__option--selected {
+  border-color: var(--stark-lime);
+  color: var(--stark-lime);
+}
+
+@media (max-width: 560px) {
+  /* Narrow: header hides, access collapses, rows stay one-per-line. */
+  .models-chain__thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
   }
 
-  .models-chain__node + .models-chain__node::before {
-    content: "↓";
-    left: 12px;
-    top: -12px;
+  .models-chain__table,
+  .models-chain__table tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .models-chain__row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .models-chain__access {
+    display: none;
+  }
+
+  .models-chain__model {
+    flex: 1;
   }
 }

@@ -2236,21 +2236,26 @@ export function SessionPanel({
               heartChain: modelChains.heart,
               maxBrainModels: sponsorProductEntitlements.maxBrainModels,
               maxHeartModels: sponsorProductEntitlements.maxHeartModels,
-              onChainAdd: (chain, stableId) =>
-                modelChainsDispatch({
-                  type: 'chain-add',
-                  workspaceId,
-                  chain,
-                  stableId,
-                  maxModels:
-                    chain === 'brain'
-                      ? sponsorProductEntitlements.maxBrainModels
-                      : sponsorProductEntitlements.maxHeartModels
-                }),
-              onChainRemove: (chain, stableId) =>
-                modelChainsDispatch({ type: 'chain-remove', workspaceId, chain, stableId }),
-              onChainMove: (chain, stableId, direction) =>
-                modelChainsDispatch({ type: 'chain-move', workspaceId, chain, stableId, direction }),
+              planLabel: sponsorProductEntitlements.planLabel,
+              onToggleModel: (chain, stableId, enable) =>
+                modelChainsDispatch(
+                  enable
+                    ? {
+                        type: 'model-enabled',
+                        workspaceId,
+                        chain,
+                        stableId,
+                        maxModels:
+                          chain === 'brain'
+                            ? sponsorProductEntitlements.maxBrainModels
+                            : sponsorProductEntitlements.maxHeartModels
+                      }
+                    : { type: 'model-disabled', workspaceId, chain, stableId }
+                ),
+              onSwapModel: (chain, outgoingId, incomingId) =>
+                modelChainsDispatch({ type: 'model-swapped', workspaceId, chain, outgoingId, incomingId }),
+              onReorderModel: (chain, stableId, toIndex) =>
+                modelChainsDispatch({ type: 'model-reordered', workspaceId, chain, stableId, toIndex }),
               capabilities,
               capabilitiesDispatch,
               onSaveCapabilities: () => void handleSaveCapabilities(),

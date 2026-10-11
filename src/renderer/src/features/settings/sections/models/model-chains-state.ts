@@ -1,5 +1,14 @@
 import { createDefaultFreeBrainChain, createDefaultFreeHeartChain } from './model-library'
-import { addToChain, moveInChain, removeFromChain, type ChainMoveDirection } from './model-chain'
+import {
+  addToChain,
+  disableModel,
+  enableModel,
+  moveInChain,
+  removeFromChain,
+  reorderEnabledModel,
+  swapEnabledModel,
+  type ChainMoveDirection
+} from './model-chain'
 
 /**
  * Renderer-local Brain/Heart chain configuration state (no React
@@ -51,6 +60,29 @@ export type ModelChainsPanelAction =
       readonly stableId: string
       readonly direction: ChainMoveDirection
     }
+  | {
+      readonly type: 'model-enabled'
+      readonly workspaceId: number
+      readonly chain: 'brain' | 'heart'
+      readonly stableId: string
+      /** Entitlement cap (Free default 5). Absent means Free. */
+      readonly maxModels?: number
+    }
+  | { readonly type: 'model-disabled'; readonly workspaceId: number; readonly chain: 'brain' | 'heart'; readonly stableId: string }
+  | {
+      readonly type: 'model-swapped'
+      readonly workspaceId: number
+      readonly chain: 'brain' | 'heart'
+      readonly outgoingId: string
+      readonly incomingId: string
+    }
+  | {
+      readonly type: 'model-reordered'
+      readonly workspaceId: number
+      readonly chain: 'brain' | 'heart'
+      readonly stableId: string
+      readonly toIndex: number
+    }
 
 export function modelChainsPanelReducer(
   state: ModelChainsPanelState,
@@ -85,6 +117,47 @@ export function modelChainsPanelReducer(
       return action.chain === 'brain'
         ? { ...state, brain: moveInChain(state.brain, action.stableId, action.direction) }
         : { ...state, heart: moveInChain(state.heart, action.stableId, action.direction) }
+    }
+    case 'model-enabled': {
+      if (state.workspaceId !== action.workspaceId) {
+        return state
+      }
+      const current = action.chain === 'brain' ? state.brain : state.heart
+      const outcome = enableModel(current, action.stableId, action.maxModels)
+      if (!outcome.applied) {
+        return state
+      }
+      return action.chain === 'brain' ? { ...state, brain: outcome.chain } : { ...state, heart: outcome.chain }
+    }
+    case 'model-disabled': {
+      if (state.workspaceId !== action.workspaceId) {
+        return state
+      }
+      const current = action.chain === 'brain' ? state.brain : state.heart
+      const outcome = disableModel(current, action.stableId)
+      if (!outcome.applied) {
+        return state
+      }
+      return action.chain === 'brain' ? { ...state, brain: outcome.chain } : { ...state, heart: outcome.chain }
+    }
+    case 'model-swapped': {
+      if (state.workspaceId !== action.workspaceId) {
+        return state
+      }
+      const current = action.chain === 'brain' ? state.brain : state.heart
+      const outcome = swapEnabledModel(current, action.outgoingId, action.incomingId)
+      if (!outcome.applied) {
+        return state
+      }
+      return action.chain === 'brain' ? { ...state, brain: outcome.chain } : { ...state, heart: outcome.chain }
+    }
+    case 'model-reordered': {
+      if (state.workspaceId !== action.workspaceId) {
+        return state
+      }
+      return action.chain === 'brain'
+        ? { ...state, brain: reorderEnabledModel(state.brain, action.stableId, action.toIndex) }
+        : { ...state, heart: reorderEnabledModel(state.heart, action.stableId, action.toIndex) }
     }
   }
 }

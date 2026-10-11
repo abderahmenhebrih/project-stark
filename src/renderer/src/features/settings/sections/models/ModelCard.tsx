@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react'
-import { StarkIcon } from '../../../../components/icons/StarkIcon'
 import type { StarkModelIdentity } from './model-library'
+import { MODEL_FALLBACK_ICON, modelIconFor } from './model-icons'
 import { tokenSessionLabel } from './model-library'
 
 interface ModelCardProps {
@@ -11,7 +11,8 @@ interface ModelCardProps {
 
 /**
  * One model in the library grid. Rectangular, substantial,
- * near-black: generic local icon (no remote images, no downloads),
+ * near-black: distinct bundled local icon per model (no remote
+ * images, no downloads; decorative — the name text carries meaning),
  * small origin badge when meaningful, strong model name, dim honest
  * token metadata, availability state.
  *
@@ -31,7 +32,15 @@ export function ModelCard({ model, onUpgrade }: ModelCardProps): ReactElement {
         aria-label={`${model.displayName}, locked. Upgrade your plan`}
       >
         <span className="models-card__icon" aria-hidden="true">
-          <StarkIcon name="extensions" size={20} />
+          <img
+            className="models-card__img"
+            src={modelIconFor(model.stableId)}
+            alt=""
+            draggable={false}
+            onError={(event) => {
+              event.currentTarget.src = MODEL_FALLBACK_ICON
+            }}
+          />
         </span>
         <span className="models-card__badgerow" aria-hidden="true">
           {model.badge !== null ? <span className="models-card__badge">{model.badge}</span> : null}
@@ -46,7 +55,15 @@ export function ModelCard({ model, onUpgrade }: ModelCardProps): ReactElement {
   return (
     <article className="models-card" aria-label={`Model ${model.displayName}`}>
       <span className="models-card__icon" aria-hidden="true">
-        <StarkIcon name="extensions" size={20} />
+        <img
+          className="models-card__img"
+          src={modelIconFor(model.stableId)}
+          alt=""
+          draggable={false}
+          onError={(event) => {
+            event.currentTarget.src = MODEL_FALLBACK_ICON
+          }}
+        />
       </span>
       {model.badge !== null ? (
         <span className="models-card__badgerow" aria-hidden="true">

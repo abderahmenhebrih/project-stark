@@ -44,6 +44,8 @@ export type ImageGenerationPolicy =
  */
 export interface AccountEntitlements {
   readonly basePlan: BasePlan
+  /** Display name for plan-aware copy (e.g. "STARK Free"). Derived centrally. */
+  readonly planLabel: string
   /** Void wallet funds real benefits only while balanceMicros > 0. */
   readonly voidFunded: boolean
   readonly voidActivatedEver: boolean
@@ -101,6 +103,7 @@ export function deriveAccountEntitlements(product: AccountProductState): Account
   }
   return {
     basePlan: product.basePlan,
+    planLabel: product.basePlan === 'free' ? 'STARK Free' : product.basePlan === 'magma' ? 'STARK Magma' : 'STARK Frost',
     voidFunded,
     voidActivatedEver: product.voidWallet.activatedEver,
     includedModelCount: product.basePlan === 'free' ? 15 : product.basePlan === 'magma' ? 25 : 35,

@@ -77,7 +77,7 @@ describe('model chains panel state', () => {
       workspaceId: 7,
       chain: 'brain',
       stableId: last,
-      direction: 'left'
+      direction: 'up'
     })
     const expected = [...ids]
     expected.splice(ids.length - 1, 1)
@@ -100,7 +100,7 @@ describe('model chains panel state', () => {
       workspaceId: 7,
       chain: 'brain',
       stableId: 'builtin:gpt-5.6-luna',
-      direction: 'left'
+      direction: 'up'
     })
     assert.deepEqual(next.brain, [])
   })

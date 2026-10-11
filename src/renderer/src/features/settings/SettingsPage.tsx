@@ -1,6 +1,5 @@
 import { useEffect, useRef, type Dispatch, type ReactElement } from 'react'
 import type { HeartPanelAction, HeartPanelState } from '../sessions/heart-state'
-import type { ChainMoveDirection } from './sections/models/model-chain'
 import type { RecoveryPanelAction, RecoveryPanelState } from '../sessions/recovery-state'
 import type { UsagePanelAction, UsagePanelState } from '../sessions/usage-state'
 import type { CapabilityPanelAction, CapabilityPanelState } from '../sessions/capabilities-state'
@@ -42,9 +41,11 @@ export interface SettingsPageBinding {
   /** Entitlement caps from the central product state (Free default 5). */
   readonly maxBrainModels: number
   readonly maxHeartModels: number
-  readonly onChainAdd: (chain: 'brain' | 'heart', stableId: string) => void
-  readonly onChainRemove: (chain: 'brain' | 'heart', stableId: string) => void
-  readonly onChainMove: (chain: 'brain' | 'heart', stableId: string, direction: ChainMoveDirection) => void
+  /** Plan display name for LoopLink limit copy (defaults to STARK Free). */
+  readonly planLabel: string
+  readonly onToggleModel: (chain: 'brain' | 'heart', stableId: string, enable: boolean) => void
+  readonly onSwapModel: (chain: 'brain' | 'heart', outgoingId: string, incomingId: string) => void
+  readonly onReorderModel: (chain: 'brain' | 'heart', stableId: string, toIndex: number) => void
   readonly capabilities: CapabilityPanelState
   readonly capabilitiesDispatch: Dispatch<CapabilityPanelAction>
   readonly onSaveCapabilities: () => void
@@ -141,9 +142,10 @@ export function SettingsPage({ section, onSectionChange, onBack, binding }: Sett
               heart={binding.heartChain}
               maxBrainModels={binding.maxBrainModels}
               maxHeartModels={binding.maxHeartModels}
-              onChainAdd={binding.onChainAdd}
-              onChainRemove={binding.onChainRemove}
-              onChainMove={binding.onChainMove}
+              planLabel={binding.planLabel}
+              onToggleModel={binding.onToggleModel}
+              onSwapModel={binding.onSwapModel}
+              onReorderModel={binding.onReorderModel}
               onNavigateBilling={() => onSectionChange('billing')}
             />
           )}
