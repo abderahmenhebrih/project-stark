@@ -66,7 +66,7 @@ describe('models V2 library', () => {
     assert.equal(setters.length, 3)
   })
 
-  it('offers no fake providers', () => {
+  it('offers only the locked Free families (no fabricated providers)', () => {
     for (const file of [
       'ModelsSettings.tsx',
       'models/model-library.ts',
@@ -74,9 +74,15 @@ describe('models V2 library', () => {
       'models/ModelCard.tsx'
     ]) {
       const source = codeOnly(readModels(file))
-      for (const fake of ['Anthropic', 'Gemini', 'Claude', 'Mistral', 'Llama']) {
+      for (const fake of ['Llama', 'Ollama', 'LM Studio', 'localhost', '127.0.0.1']) {
         assert.ok(!source.includes(fake), `${file} must not fabricate ${fake}`)
       }
+    }
+    // Provider metadata is catalog identity for the 15 locked Free
+    // entries only — never inference routing, endpoints, or SDKs.
+    const library = codeOnly(readModels('models/model-library.ts'))
+    for (const fake of ['generateText', 'testConnection', 'listModels', 'https://', 'http://']) {
+      assert.ok(!library.includes(fake), `model-library must not contain ${fake}`)
     }
   })
 

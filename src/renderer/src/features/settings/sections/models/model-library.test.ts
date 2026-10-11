@@ -27,12 +27,13 @@ function unconfiguredProvider() {
 }
 
 describe('model library identity', () => {
-  it('shows built-in and locked plan models without API setup (no user models)', () => {
+  it('shows the 15 STARK Free built-ins without API setup (no paid catalog yet)', () => {
     const library = deriveModelLibrary(unconfiguredProvider())
-    assert.deepEqual(
-      library.map((entry) => entry.origin),
-      ['built-in', 'plan']
-    )
+    assert.equal(library.length, 15)
+    assert.ok(library.every((entry) => entry.origin === 'built-in'))
+    assert.ok(library.every((entry) => entry.available && !entry.locked))
+    assert.ok(library.every((entry) => entry.badge === 'FREE'))
+    assert.ok(!library.some((entry) => entry.origin === 'plan'), 'no paid catalog before Billing')
   })
 
   it('derives user models from discovery plus the selected model', () => {
@@ -53,11 +54,11 @@ describe('model library identity', () => {
     }
   })
 
-  it('orders built-in before user-added before plan', () => {
+  it('orders built-in Free catalog before user-added models', () => {
     const library = deriveModelLibrary(configuredProvider(['gpt-4o'], 'gpt-4o'))
     assert.deepEqual(
       library.map((entry) => entry.origin),
-      ['built-in', 'api', 'plan']
+      [...Array<string>(15).fill('built-in'), 'api']
     )
   })
 
@@ -88,22 +89,35 @@ describe('model library identity', () => {
     assert.equal(findLibraryModel(library, 'openai:missing'), undefined)
   })
 
-  it('unlocks the same plan identity through entitlements', () => {
-    const locked = deriveModelLibrary(unconfiguredProvider(), NO_ENTITLEMENTS).find(
-      (entry) => entry.origin === 'plan'
+  it('preserves the plan entitlement seam without a paid catalog yet', () => {
+    // No paid catalog is derived before Billing defines it, but the
+    // origin/lock/entitlement architecture stays intact for synthetic
+    // plan entries (the shape Billing will later derive).
+    assert.deepEqual(
+      deriveModelLibrary(unconfiguredProvider(), NO_ENTITLEMENTS).filter(
+        (entry) => entry.origin === 'plan'
+      ),
+      []
     )
-    assert.ok(locked !== undefined)
-    assert.equal(locked.locked, true)
+    const locked = {
+      stableId: 'plan:future-model',
+      providerId: 'plan',
+      providerLabel: 'Plan',
+      model: 'future-model',
+      displayName: 'Future Plan Model',
+      sourceType: 'remote' as const,
+      origin: 'plan' as const,
+      available: false,
+      locked: true,
+      badge: 'Pro',
+      planRequirement: 'STARK plan'
+    }
     assert.equal(canUseModel(locked), false)
     assert.equal(canEnterChain(locked), false)
     const entitlements = { planModels: [locked.stableId] as readonly string[] }
     assert.equal(isPlanEntitled(locked.stableId, entitlements), true)
-    const unlocked = deriveModelLibrary(unconfiguredProvider(), entitlements).find(
-      (entry) => entry.origin === 'plan'
-    )
-    assert.ok(unlocked !== undefined)
-    assert.equal(unlocked.stableId, locked.stableId)
-    assert.equal(unlocked.locked, false)
+    assert.equal(isPlanEntitled('plan:other', entitlements), false)
+    const unlocked = { ...locked, available: true, locked: false }
     assert.equal(canUseModel(unlocked, entitlements), true)
     assert.equal(canEnterChain(unlocked, entitlements), true)
   })

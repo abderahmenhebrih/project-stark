@@ -33,10 +33,12 @@ interface ModelsSettingsProps {
 }
 
 /**
- * Settings → Models V2: visual Model Library (built-in, then
- * user-added, then plan-exclusive, then the grid-native Add model
- * card with the in-page three-choice flow), then the independent
- * Brain and Heart LoopLink chain configuration.
+ * Settings → Models V2: visual Model Library (the 15 STARK Free
+ * built-ins, then user-added, then the grid-native Add model card
+ * with the in-page three-choice flow), then the independent Brain
+ * and Heart LoopLink chain configuration. No paid plan catalog is
+ * rendered yet — the plan group below stays mounted but empty until
+ * Billing defines the real Magma/Frost/Void entries.
  *
  * The library derives from the model catalog plus provider source
  * truth — never fake models. Locked plan entries explain their lock
@@ -80,7 +82,7 @@ export function ModelsSettings(props: ModelsSettingsProps): ReactElement {
         ) : null}
       </div>
       <div className="models-grid" aria-label="Model library">
-        {builtIn.length > 0 ? <p className="models-grid__label">Included</p> : null}
+        {builtIn.length > 0 ? <p className="models-grid__label">Included with STARK Free</p> : null}
         {builtIn.map((entry) => (
           <ModelCard key={entry.stableId} model={entry} />
         ))}

@@ -9,18 +9,24 @@ import type { ProviderPanelState } from '../../../sessions/provider-state'
  * entries never carry credential material of any form.
  *
  * THREE origins (locked product model):
- * - built-in: STARK's included catalog. Appears automatically, needs
- *   no API setup, is never deletable, and may enter either chain.
- *   Here "built-in" means built into the catalog/configuration — no
- *   weight files are bundled by this pass. Execution runtime for
- *   these entries is a later AI-integration dependency; the page
- *   states plainly that chains do not route yet.
+ * - built-in: the STARK Free catalog (exactly 15 locked entries, see
+ *   FREE_MODEL_DEFINITIONS). Appears automatically, needs no API
+ *   setup, is never deletable, and may enter either chain. Here
+ *   "built-in" means built into the catalog/configuration — no
+ *   weight files are bundled by this pass.
  * - api / local: user-added through Add API key / Link a local model.
  *   Only api exists today (single configured provider); local is the
  *   reserved shape for the future linking runtime.
- * - plan: visible while locked, never insertable until entitled.
- *   Locked-ness derives from entitlements, never from identity, so a
- *   future unlock flips availability without replacing the entry.
+ * - plan: reserved for the future Billing build. Lock derives from
+ *   entitlements, never from identity, so a future unlock flips
+ *   availability without replacing the entry. No paid catalog exists
+ *   yet, so nothing with this origin is rendered.
+ *
+ * CATALOG AVAILABILITY vs INFERENCE RUNTIME: `available` below means
+ * "selectable in Brain/Heart configuration". It does NOT mean a
+ * proven remote inference endpoint exists — execution runtime for
+ * these entries is a later AI-integration dependency, and the page
+ * states plainly that chains do not route yet.
  */
 
 export type ModelOrigin = 'built-in' | 'api' | 'local' | 'plan'
@@ -39,7 +45,7 @@ export interface StarkModelIdentity {
   readonly available: boolean
   /** Plan entry without entitlement. Never insertable while locked. */
   readonly locked: boolean
-  /** Small card badge: Included, API, Local, Pro, else null. */
+  /** Small card badge: FREE, API, Local, else null. */
   readonly badge: string | null
   /** Plan requirement copy for plan entries, else null. */
   readonly planRequirement: string | null
@@ -83,26 +89,45 @@ interface CatalogDefinition {
   readonly sourceType: ModelSourceType
 }
 
-/** STARK's included catalog: present after installation, no setup. */
+/**
+ * STARK Free catalog (product-locked, exactly 15 entries, fixed order).
+ * Present after installation, no setup. Stable ids live under the
+ * `builtin:` namespace via stableModelId; providerId carries the
+ * family identity for presentation only (catalog identity, NOT
+ * inference routing — no backends are implemented by this pass).
+ */
 const BUILT_IN_DEFINITIONS: readonly CatalogDefinition[] = [
-  { providerId: 'stark', providerLabel: 'STARK', model: 'built-in', displayName: 'STARK Built-in', sourceType: 'remote' }
+  { providerId: 'meta', providerLabel: 'Meta', model: 'muse-spark-1.3', displayName: 'Muse Spark 1.3', sourceType: 'remote' },
+  { providerId: 'zai', providerLabel: 'Z.ai', model: 'glm-5.3-flash', displayName: 'GLM-5.3 Flash', sourceType: 'remote' },
+  { providerId: 'deepseek', providerLabel: 'DeepSeek', model: 'deepseek-v4.1-flash', displayName: 'DeepSeek V4.1 Flash', sourceType: 'remote' },
+  { providerId: 'openai', providerLabel: 'OpenAI', model: 'gpt-5.6-luna', displayName: 'GPT 5.6 Luna', sourceType: 'remote' },
+  { providerId: 'google', providerLabel: 'Google', model: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', sourceType: 'remote' },
+  { providerId: 'anthropic', providerLabel: 'Anthropic', model: 'claude-haiku-5.5', displayName: 'Claude Haiku 5.5', sourceType: 'remote' },
+  { providerId: 'minimax', providerLabel: 'MiniMax', model: 'minimax-m3', displayName: 'MiniMax M3', sourceType: 'remote' },
+  { providerId: 'moonshot', providerLabel: 'Moonshot', model: 'kimi-k2.7-code', displayName: 'Kimi K2.7 Code', sourceType: 'remote' },
+  { providerId: 'xiaomi', providerLabel: 'Xiaomi', model: 'mimo-v2.6-pro', displayName: 'MiMo-V2.6-Pro', sourceType: 'remote' },
+  { providerId: 'xiaomi', providerLabel: 'Xiaomi', model: 'mimo-v2.6-flash', displayName: 'MiMo-V2.6-Flash', sourceType: 'remote' },
+  { providerId: 'nvidia', providerLabel: 'NVIDIA', model: 'nemotron-3.5-lightning', displayName: 'Nemotron 3.5 Lightning', sourceType: 'remote' },
+  { providerId: 'deepseek', providerLabel: 'DeepSeek', model: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', sourceType: 'remote' },
+  { providerId: 'meta', providerLabel: 'Meta', model: 'muse-spark-1.2', displayName: 'Muse Spark 1.2', sourceType: 'remote' },
+  { providerId: 'longcat', providerLabel: 'LongCat', model: 'longcat-2.0', displayName: 'LongCat 2.0', sourceType: 'remote' },
+  { providerId: 'mistral', providerLabel: 'Mistral AI', model: 'mistral-large-4', displayName: 'Mistral Large 4', sourceType: 'remote' }
 ]
+
+/** Product-locked Free catalog size. Exactly 15 — never 14, 16, or 15 + placeholder. */
+export const FREE_CATALOG_COUNT = 15
 
 interface PlanDefinition extends CatalogDefinition {
   readonly planRequirement: string
 }
 
-/** Plan-exclusive catalog: visible while locked, no backend yet. */
-const PLAN_DEFINITIONS: readonly PlanDefinition[] = [
-  {
-    providerId: 'stark',
-    providerLabel: 'STARK',
-    model: 'pro',
-    displayName: 'STARK Pro',
-    sourceType: 'remote',
-    planRequirement: 'STARK plan'
-  }
-]
+/**
+ * Paid catalog (Magma/Frost/Void): intentionally empty until Billing
+ * defines the real entries. The plan origin, entitlement seam, lock
+ * derivation, and locked-card upgrade route are preserved below so
+ * Billing can introduce paid models without rewriting the catalog.
+ */
+const PLAN_DEFINITIONS: readonly PlanDefinition[] = []
 
 /** True when entitlements unlock one plan entry. */
 export function isPlanEntitled(stableId: string, entitlements: ModelEntitlements): boolean {
@@ -131,11 +156,13 @@ export function canEnterChain(entry: StarkModelIdentity, entitlements: ModelEnti
 }
 
 /**
- * Derives the usable Model Library in predictable order: built-in,
- * then user-added (sorted), then plan-exclusive. The Add model card
- * renders last at the call site.
+ * Derives the usable Model Library in predictable order: the 15
+ * STARK Free built-ins (fixed product order, never sorted), then
+ * user-added (sorted), then plan-exclusive (empty until Billing
+ * defines the paid catalog). The Add model card renders last at the
+ * call site.
  *
- * - Built-in and locked plan entries appear without any setup.
+ * - Built-in entries appear without any setup.
  * - User entries appear only while their provider is configured
  *   (discovery plus the persisted selected model, deduped).
  * - Lock derives from entitlements so a future unlock keeps identity.
@@ -147,7 +174,7 @@ export function deriveModelLibrary(
   const out: StarkModelIdentity[] = []
   for (const definition of BUILT_IN_DEFINITIONS) {
     out.push({
-      stableId: stableModelId(definition.providerId, definition.model),
+      stableId: stableModelId('builtin', definition.model),
       providerId: definition.providerId,
       providerLabel: definition.providerLabel,
       model: definition.model,
@@ -156,7 +183,7 @@ export function deriveModelLibrary(
       origin: 'built-in',
       available: true,
       locked: false,
-      badge: 'Included',
+      badge: 'FREE',
       planRequirement: null
     })
   }

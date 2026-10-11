@@ -57,6 +57,7 @@
     "src/renderer/src/features/settings/sections/models/model-chain.ts",
     "src/renderer/src/features/settings/sections/models/model-chains-state.ts",
     "src/renderer/src/features/settings/sections/models/model-library.test.ts",
+    "src/renderer/src/features/settings/sections/models/model-free-catalog.test.ts",
     "src/renderer/src/features/settings/sections/models/model-origins.test.ts",
     "src/renderer/src/features/settings/sections/models/model-chain.test.ts",
     "src/renderer/src/features/settings/sections/models/model-chains-state.test.ts",
