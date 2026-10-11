@@ -77,10 +77,12 @@ import { clampSplitPct, splitBounds } from './split-bounds'
 import { subscribeFormatRequests } from '../extensions/format-request-bus'
 import {
   applyDraftChange,
+  canRequestReview,
   createEditorState,
   isEditorDirty,
   markEditorSaveFailed,
   markEditorSaving,
+  rebaseEditorOnExternalWrite,
   type EditorState
 } from './editor-state'
 import { explorerReducer, initialExplorerState, type ExplorerState } from './explorer-state'
@@ -358,6 +360,11 @@ export function Explorer({
     workspaceId: id
   }))
   const gitDiffRequestRef = useRef(0)
+  // Review-handoff ownership: one-shot external navigation (Session →
+  // proposal review) and explicit drill-down share a monotonic
+  // generation so a late/stale fetch can never leave a permanent
+  // spinner or overwrite a newer unrelated selection. No polling.
+  const reviewRequestRef = useRef(0)
   // Human multi-terminal ownership (renderer-local, per workspace).
   // Sessions live in the reducer; live xterm instances register in
   // the map below so PTY output routes to the owning viewport only.
@@ -987,47 +994,87 @@ export function Explorer({
   // Stage 16 review handoff: open the newly proposed transaction in the
   // existing review + DiffEditor and refresh history. Consumed once per
   // id; null clears nothing. Tab switch here is a one-shot external
-  // navigation request, not derived state.
+  // navigation request, not derived state. Generation-guarded: closing
+  // the review or switching requests invalidates the in-flight fetch,
+  // and a response for another workspace resolves to a safe visible
+  // error instead of a stuck spinner (H4).
   useEffect(() => {
     if (externalReviewTransactionId === null) {
       return
     }
     const transactionId = externalReviewTransactionId
+    const targetWorkspaceId = workspaceId
+    const requestId = reviewRequestRef.current + 1
+    reviewRequestRef.current = requestId
     // One-shot external navigation: the Session panel requested review
     // of a newly created proposal transaction. On desktop the session
-    // stays visible and the secondary pane reveals Review.
+    // stays visible and the secondary pane reveals Review. Explicit
+    // review owns the secondary detail: incompatible Git/set selections
+    // are cleared (H5/H6 secondary-pane ownership).
     onActivityChange('explorer')
     onCanvasViewChange('editor')
     secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
+    gitDiffDispatch({ type: 'diff-closed' })
+    changeSetsDispatch({ type: 'set-closed' })
     changesDispatch({ type: 'review-loading', transactionId })
     getChangeTransaction({ transactionId }).then(
-      (transaction) =>
-        changesDispatch({ type: 'review-loaded', workspaceId: transaction.workspaceId, transaction }),
-      (error: unknown) =>
+      (transaction) => {
+        if (reviewRequestRef.current !== requestId) {
+          return
+        }
+        if (transaction.workspaceId !== targetWorkspaceId) {
+          changesDispatch({ type: 'review-failed', message: 'We couldn’t load this review.' })
+          return
+        }
+        changesDispatch({ type: 'review-loaded', workspaceId: transaction.workspaceId, transaction })
+      },
+      (error: unknown) => {
+        if (reviewRequestRef.current !== requestId) {
+          return
+        }
         changesDispatch({ type: 'review-failed', message: normalizeChangeTransactionError(error).message })
+      }
     )
     void refreshHistory()
   }, [workspaceId, externalReviewTransactionId, refreshHistory, onActivityChange, onCanvasViewChange])
 
   // Stage 17 review handoff: open the newly proposed change set in the
   // grouped review and refresh history. Consumed once per id.
+  // Same generation/workspace guards as the transaction handoff (H4).
   useEffect(() => {
     if (externalReviewChangeSetId === null) {
       return
     }
     const changeSetId = externalReviewChangeSetId
+    const targetWorkspaceId = workspaceId
+    const requestId = reviewRequestRef.current + 1
+    reviewRequestRef.current = requestId
     // One-shot external navigation: the Session panel requested review
-    // of a newly created grouped proposal.
+    // of a newly created grouped proposal. Explicit set review owns
+    // the secondary detail (H5/H6).
     onActivityChange('explorer')
     onCanvasViewChange('editor')
     secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
     changesDispatch({ type: 'review-closed' })
+    gitDiffDispatch({ type: 'diff-closed' })
     changeSetsDispatch({ type: 'set-loading', changeSetId })
     getChangeSet({ changeSetId }).then(
-      (changeSet) =>
-        changeSetsDispatch({ type: 'set-loaded', workspaceId: changeSet.workspaceId, changeSet }),
-      (error: unknown) =>
+      (changeSet) => {
+        if (reviewRequestRef.current !== requestId) {
+          return
+        }
+        if (changeSet.workspaceId !== targetWorkspaceId) {
+          changeSetsDispatch({ type: 'set-failed', message: 'We couldn’t load this review.' })
+          return
+        }
+        changeSetsDispatch({ type: 'set-loaded', workspaceId: changeSet.workspaceId, changeSet })
+      },
+      (error: unknown) => {
+        if (reviewRequestRef.current !== requestId) {
+          return
+        }
         changeSetsDispatch({ type: 'set-failed', message: toChangeSetsError(error, 'We couldn’t load change sets.') })
+      }
     )
     void refreshChangeSets()
     void refreshHistory()
@@ -1102,10 +1149,13 @@ export function Explorer({
   }
 
   function handleSelectGitDiff(relativePath: string, target: 'staged' | 'unstaged'): void {
-    if (!confirmDiscardUnsavedDraft()) {
-      return
-    }
+    // Review-pane navigation only: the open file/editor is untouched,
+    // so no discard guard is needed (H7). Explicit Git selection owns
+    // the secondary detail: incompatible transaction/set selections are
+    // cleared (H5/H6).
     changesDispatch({ type: 'review-closed' })
+    changeSetsDispatch({ type: 'set-closed' })
+    reviewRequestRef.current += 1
     const requestId = gitDiffRequestRef.current + 1
     gitDiffRequestRef.current = requestId
     secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
@@ -1270,9 +1320,10 @@ export function Explorer({
    * Standard editor save gesture (Ctrl+S in the open file): opens the
    * EXISTING Review change flow for dirty files — never a direct disk
    * write. Clean files safely no-op without creating a transaction.
+   * Single-flight: an in-flight proposal never double-submits (H9).
    */
   function handleSaveGesture(): void {
-    if (editor === null || !isEditorDirty(editor) || editor.saving) {
+    if (!canRequestReview(editor)) {
       return
     }
     void handleReviewChange()
@@ -1395,26 +1446,73 @@ export function Explorer({
     }
   }
 
+  // Drill-down from a Change Set into one file (the only
+  // transaction-selection path: history lists are not rendered as
+  // selectors). Review-pane navigation only — the open file/editor is
+  // untouched, so no discard guard is needed (H7). The parent set stays
+  // selected for explicit back navigation; an incompatible Git diff is
+  // cleared. Generation-guarded against stale late arrivals (H4).
   function handleSelectTransaction(transactionId: number): void {
-    if (!confirmDiscardUnsavedDraft()) {
-      return
-    }
+    const targetWorkspaceId = workspaceId
+    const requestId = reviewRequestRef.current + 1
+    reviewRequestRef.current = requestId
     secondaryUiDispatch({ type: 'open-tab', tab: 'review' })
     onCanvasViewChange('editor')
+    gitDiffDispatch({ type: 'diff-closed' })
     changesDispatch({ type: 'review-loading', transactionId })
     getChangeTransaction({ transactionId }).then(
-      (transaction) =>
-        changesDispatch({ type: 'review-loaded', workspaceId: transaction.workspaceId, transaction }),
-      (error: unknown) =>
+      (transaction) => {
+        if (reviewRequestRef.current !== requestId) {
+          return
+        }
+        if (transaction.workspaceId !== targetWorkspaceId) {
+          changesDispatch({ type: 'review-failed', message: 'We couldn’t load this review.' })
+          return
+        }
+        changesDispatch({ type: 'review-loaded', workspaceId: transaction.workspaceId, transaction })
+      },
+      (error: unknown) => {
+        if (reviewRequestRef.current !== requestId) {
+          return
+        }
         changesDispatch({ type: 'review-failed', message: normalizeChangeTransactionError(error).message })
+      }
     )
   }
 
+  // Grouped-review freshness (H3): after any per-file mutation the
+  // visible set detail re-resolves authoritatively. Bounded single
+  // fetch, generation-guarded, no polling.
+  async function refreshVisibleSetDetail(): Promise<void> {
+    const selectedSetId = changeSets.selectedSetId
+    if (selectedSetId === null) {
+      return
+    }
+    const targetWorkspaceId = workspaceId
+    const requestId = reviewRequestRef.current + 1
+    reviewRequestRef.current = requestId
+    try {
+      const changeSet = await getChangeSet({ changeSetId: selectedSetId })
+      if (reviewRequestRef.current !== requestId) {
+        return
+      }
+      if (changeSet.workspaceId !== targetWorkspaceId || changeSet.id !== selectedSetId) {
+        return
+      }
+      changeSetsDispatch({ type: 'set-loaded', workspaceId: changeSet.workspaceId, changeSet })
+    } catch {
+      // History/set lists already refreshed; a failed detail refresh
+      // keeps the previous detail rather than blanking review.
+    }
+  }
+
   function handleCloseChangeSet(): void {
+    reviewRequestRef.current += 1
     changeSetsDispatch({ type: 'set-closed' })
   }
 
   function handleCloseReview(): void {
+    reviewRequestRef.current += 1
     changesDispatch({ type: 'review-closed' })
   }
 
@@ -1433,17 +1531,31 @@ export function Explorer({
         // into the editor.
         void loadDirectory(transaction.workspaceId, parentDirectoryOf(file.relativePath))
       } else if (file !== undefined && file.appliedRevision !== null) {
-        dispatch({
-          type: 'file-loaded',
-          workspaceId: transaction.workspaceId,
-          path: file.relativePath,
-          content: file.proposedContent,
-          revision: file.appliedRevision
-        })
+        // Foreground-only refresh (H1/H2): the authoritative post-write
+        // bytes + revision come from the accepted transaction (main is
+        // the write authority; the renderer never fabricates revisions).
+        // A background file keeps the user's current editor untouched.
+        if (previewPathRef.current === file.relativePath) {
+          const acceptedContent = file.proposedContent
+          const acceptedRevision = file.appliedRevision
+          dispatch({
+            type: 'file-loaded',
+            workspaceId: transaction.workspaceId,
+            path: file.relativePath,
+            content: acceptedContent,
+            revision: acceptedRevision
+          })
+          // Rebase the volatile draft onto the accepted bytes: a clean
+          // editor becomes clean on the new bytes; keystrokes typed
+          // during the await are preserved as the draft against the new
+          // base so the late response never destroys newer user input.
+          setEditor((current) => rebaseEditorOnExternalWrite(current, acceptedContent, acceptedRevision))
+        }
       }
       changesDispatch({ type: 'action-succeeded', transaction, notice: 'Change applied' })
       void refreshHistory()
       void refreshChangeSets()
+      void refreshVisibleSetDetail()
     } catch (error: unknown) {
       changesDispatch({ type: 'action-failed', message: normalizeChangeTransactionError(error).message })
     }
@@ -1464,18 +1576,24 @@ export function Explorer({
     try {
       const transaction = await rejectChangeTransaction({ transactionId: detail.id })
       const file = transaction.files[0]
-      if (file !== undefined) {
+      // Reject never mutates disk: only a foreground text file refreshes
+      // its preview (proving the original bytes are untouched); binary
+      // ADD proposals have no on-disk file to re-read (H8), and a
+      // background file never yanks the current editor (H2).
+      if (file !== undefined && file.binaryImport === undefined && previewPathRef.current === file.relativePath) {
         const api = getWorkspaceFilesApi()
         if (api !== undefined) {
           try {
             const current = await api.readTextFile(workspaceId, file.relativePath)
-            dispatch({
-              type: 'file-loaded',
-              workspaceId: current.workspaceId,
-              path: current.relativePath,
-              content: current.content,
-              revision: current.revision
-            })
+            if (previewPathRef.current === file.relativePath) {
+              dispatch({
+                type: 'file-loaded',
+                workspaceId: current.workspaceId,
+                path: current.relativePath,
+                content: current.content,
+                revision: current.revision
+              })
+            }
           } catch {
             // Disk state is unchanged by reject; a failed re-read only
             // leaves the previous preview in place.
@@ -1485,6 +1603,7 @@ export function Explorer({
       changesDispatch({ type: 'action-succeeded', transaction, notice: null })
       void refreshHistory()
       void refreshChangeSets()
+      void refreshVisibleSetDetail()
     } catch (error: unknown) {
       changesDispatch({ type: 'action-failed', message: normalizeChangeTransactionError(error).message })
     }
@@ -1504,17 +1623,26 @@ export function Explorer({
         // exact affected parent directory instead of loading content.
         void loadDirectory(transaction.workspaceId, parentDirectoryOf(file.relativePath))
       } else if (file !== undefined) {
-        dispatch({
-          type: 'file-loaded',
-          workspaceId: transaction.workspaceId,
-          path: file.relativePath,
-          content: file.beforeContent,
-          revision: file.beforeRevision
-        })
+        // Same foreground-only rebase as Accept (H1/H2): rolled-back
+        // bytes become the clean base; in-flight keystrokes are
+        // preserved as draft against the restored base.
+        if (previewPathRef.current === file.relativePath) {
+          const restoredContent = file.beforeContent
+          const restoredRevision = file.beforeRevision
+          dispatch({
+            type: 'file-loaded',
+            workspaceId: transaction.workspaceId,
+            path: file.relativePath,
+            content: restoredContent,
+            revision: restoredRevision
+          })
+          setEditor((current) => rebaseEditorOnExternalWrite(current, restoredContent, restoredRevision))
+        }
       }
       changesDispatch({ type: 'action-succeeded', transaction, notice: 'Change rolled back' })
       void refreshHistory()
       void refreshChangeSets()
+      void refreshVisibleSetDetail()
     } catch (error: unknown) {
       changesDispatch({ type: 'action-failed', message: normalizeChangeTransactionError(error).message })
     }
@@ -1642,51 +1770,13 @@ export function Explorer({
         ? 'file'
         : 'context'
 
+  // Secondary-pane ownership (H5): exactly one detail owns the Review
+  // tab at a time. Explicit selections are mutually exclusive — each
+  // select handler clears the incompatible others — so precedence only
+  // matters for the compatible drill-down (Change Set → file), where
+  // the drilled transaction renders above its parent set. Order:
+  // transaction review, then set review, then Git diff.
   function renderReviewBody(): ReactElement {
-    if (hasGitDiff) {
-      return (
-        <div className="workbench__editor-body">
-          <EditorToolbar
-            path={`Git diff · ${gitDiff.relativePath ?? ''} · ${gitDiff.target === 'staged' ? 'Staged' : 'Working tree'}`}
-            status="Read-only"
-            actions={
-              <>
-                <button className="explorer__secondary" type="button" onClick={() => handleOpenGitFile(gitDiff.relativePath as string)}>
-                  Open file
-                </button>
-                <button className="explorer__secondary" type="button" onClick={handleCloseGitDiff}>
-                  Close
-                </button>
-              </>
-            }
-          />
-          {gitDiff.phase === 'loading' ? (
-            <p className="explorer__status explorer__status--centered" role="status">
-              Loading Git diff…
-            </p>
-          ) : gitDiff.phase === 'error' ? (
-            <p className="explorer__error explorer__status--centered" role="alert">
-              {gitDiff.error ?? 'We couldn’t read this Git diff.'}
-            </p>
-          ) : gitDiff.result !== null ? (
-            gitDiff.result.patch === '' ? (
-              <p className="explorer__status explorer__status--centered">No patch content.</p>
-            ) : (
-              <div className="editor-canvas">
-                <GitDiffViewer
-                  key={`gitdiff:${workspaceId}:${gitDiff.result.relativePath}:${gitDiff.result.target}`}
-                  relativePath={gitDiff.result.relativePath}
-                  target={gitDiff.result.target}
-                  patch={gitDiff.result.patch}
-                />
-              </div>
-            )
-          ) : (
-            <p className="explorer__status explorer__status--centered">Loading Git diff…</p>
-          )}
-        </div>
-      )
-    }
     if (changes.detail !== null) {
       return (
         <TransactionReview
@@ -1731,9 +1821,60 @@ export function Explorer({
         </p>
       )
     }
+    if (changeSets.setDetailError !== null) {
+      return (
+        <p className="explorer__error explorer__status--centered" role="alert">
+          {changeSets.setDetailError}
+        </p>
+      )
+    }
+    if (hasGitDiff) {
+      return (
+        <div className="workbench__editor-body">
+          <EditorToolbar
+            path={`Git diff · ${gitDiff.relativePath ?? ''} · ${gitDiff.target === 'staged' ? 'Staged' : 'Working tree'}`}
+            status="Read-only"
+            actions={
+              <>
+                <button className="explorer__secondary" type="button" onClick={() => handleOpenGitFile(gitDiff.relativePath as string)}>
+                  Open file
+                </button>
+                <button className="explorer__secondary" type="button" onClick={handleCloseGitDiff}>
+                  Close
+                </button>
+              </>
+            }
+          />
+          {gitDiff.phase === 'loading' ? (
+            <p className="explorer__status explorer__status--centered" role="status">
+              Loading Git diff…
+            </p>
+          ) : gitDiff.phase === 'error' ? (
+            <p className="explorer__error explorer__status--centered" role="alert">
+              {gitDiff.error ?? 'We couldn’t read this Git diff.'}
+            </p>
+          ) : gitDiff.result !== null ? (
+            gitDiff.result.patch === '' ? (
+              <p className="explorer__status explorer__status--centered">No patch content.</p>
+            ) : (
+              <div className="editor-canvas">
+                <GitDiffViewer
+                  key={`gitdiff:${workspaceId}:${gitDiff.result.relativePath}:${gitDiff.result.target}`}
+                  relativePath={gitDiff.result.relativePath}
+                  target={gitDiff.result.target}
+                  patch={gitDiff.result.patch}
+                />
+              </div>
+            )
+          ) : (
+            <p className="explorer__status explorer__status--centered">Loading Git diff…</p>
+          )}
+        </div>
+      )
+    }
     return (
       <p className="explorer__error explorer__status--centered" role="alert">
-        {changeSets.setDetailError ?? 'We couldn’t load this review.'}
+        {'We couldn’t load this review.'}
       </p>
     )
   }

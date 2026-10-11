@@ -306,6 +306,31 @@ function printTemporaryAiBuildDiag(): void {
   }
 }
 
+/**
+ * Development-only auth configuration diagnostic. Reports presence
+ * booleans only — never values, keys, or tokens — so a dev launch
+ * shows whether account sign-in can work in this environment.
+ * Skipped entirely in packaged builds; failures are swallowed so
+ * startup can never break on diagnostics.
+ */
+function printAuthConfigDiag(): void {
+  if (app.isPackaged) {
+    return
+  }
+  try {
+    const urlConfigured = (process.env['SUPABASE_URL'] ?? '') !== ''
+    const anonConfigured =
+      (process.env['SUPABASE_ANON_KEY'] ?? process.env['SUPABASE_PUBLISHABLE_KEY'] ?? '') !== ''
+    console.log(
+      '[STARK AUTH DIAG] ' +
+        `supabaseUrl=${urlConfigured ? 'configured' : 'missing'} ` +
+        `publicAnonKey=${anonConfigured ? 'configured' : 'missing'}`
+    )
+  } catch {
+    // Diagnostics must never break startup.
+  }
+}
+
 void app.whenReady().then(() => {
   // Release smoke mode (test packaging only): isolated userdata,
   // full migrations, one bounded ready marker, clean quit. No
@@ -661,6 +686,7 @@ void app.whenReady().then(() => {
     )
   }
   printTemporaryAiBuildDiag()
+  printAuthConfigDiag()
   createMainWindow()
   // STARK startup never blocks on authentication: the window is already
   // created above; the single bounded session restore runs detached and

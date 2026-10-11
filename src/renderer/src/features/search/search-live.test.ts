@@ -6,10 +6,15 @@ import { describe, it } from 'node:test'
 /**
  * STARK STAGE 31 MANUAL REVIEW FIX 06 — live workspace search.
  *
- * Static renderer guarantees for the Search surface only: no case
- * toggle, no manual submit, 250ms debounced live search that is always
- * case-insensitive, stale-safe, grouped by file, safely highlighted,
- * with attach/open flows preserved. Backend (Stage 7) untouched.
+ * Static renderer guarantees for the Search surface only: an honored
+ * Match-case toggle (default off), no manual submit, 250ms debounced
+ * live search, stale-safe, grouped by file, safely highlighted, with
+ * attach/open flows preserved. Backend (Stage 7) untouched.
+ *
+ * Hackathon stabilization (H10): the toggle is wired straight through
+ * to the bridge — the earlier no-toggle revision left a dead
+ * caseSensitive state, so the toggle was reintroduced as a real
+ * control, never decoration.
  */
 function readSource(...parts: string[]): string {
   const file = join(process.cwd(), ...parts)
@@ -22,14 +27,18 @@ function readRenderer(relative: string): string {
 }
 
 describe('D06 live workspace search', () => {
-  it('Case sensitive control no longer exists', () => {
+  it('Match-case toggle exists and is honored (never decorative)', () => {
     const panel = readRenderer('features/search/SearchPanel.tsx')
-    assert.ok(!panel.includes('Case sensitive'), 'visible Case sensitive toggle must be gone')
-    assert.ok(!panel.includes('caseSensitive, setCaseSensitive'), 'case toggle state must be gone')
-    assert.ok(!panel.includes('search__case'), 'case toggle markup must be gone')
-    assert.ok(!panel.includes('type="checkbox"'), 'no checkbox may remain on the search surface')
+    assert.ok(panel.includes('aria-label="Match case"'), 'an accessible Match-case toggle must exist')
+    assert.ok(panel.includes('caseSensitive, setCaseSensitive'), 'toggle state must exist')
+    assert.ok(panel.includes('search__case'), 'toggle markup must exist')
+    assert.ok(panel.includes('type="checkbox"'), 'toggle must be a checkbox control')
+    assert.ok(
+      panel.includes('caseSensitive: submittedCaseSensitive'),
+      'the submitted toggle value must reach dispatch and the bridge'
+    )
     const css = readRenderer('features/search/SearchPanel.css')
-    assert.ok(!css.includes('.search__case'), 'dead case-toggle CSS must be removed')
+    assert.ok(css.includes('.search__case'), 'toggle CSS must exist')
   })
 
   it('Search button no longer exists; search is live', () => {
@@ -41,11 +50,14 @@ describe('D06 live workspace search', () => {
     assert.ok(!css.includes('.search__submit'), 'dead submit-button CSS must be removed')
   })
 
-  it('search is always case-insensitive literal', () => {
+  it('search honors the submitted sensitivity (literal match)', () => {
     const panel = readRenderer('features/search/SearchPanel.tsx')
-    assert.ok(panel.includes('caseSensitive: false'), 'renderer must call the existing API with caseSensitive: false')
-    assert.ok(!panel.includes('submittedCase'), 'no per-submit case option may remain')
-    assert.ok(!panel.includes('toLowerCase') || panel.includes('highlightPreview'), 'only highlighting may fold case')
+    assert.ok(
+      panel.includes('caseSensitive: submittedCaseSensitive'),
+      'renderer must call the existing API with the submitted sensitivity'
+    )
+    assert.ok(!panel.includes('caseSensitive: false'), 'no hardcoded sensitivity may reach dispatch or the bridge')
+    assert.ok(panel.includes('highlightPreview'), 'highlighting must follow the submitted sensitivity')
   })
 
   it('query automatically searches after a bounded 250ms debounce', () => {
@@ -139,7 +151,7 @@ describe('D06 live workspace search', () => {
     const panel = readRenderer('features/search/SearchPanel.tsx')
     assert.ok(panel.includes('{match.line}:{match.column}'), 'rows must show line:column')
     assert.ok(panel.includes('search__result-location'), 'location must be styled muted monospace')
-    assert.ok(panel.includes('highlightPreview(match.preview, state.query)'), 'snippets must highlight the literal query')
+    assert.ok(panel.includes('highlightPreview(match.preview, state.query, state.caseSensitive)'), 'snippets must highlight with the submitted sensitivity')
     assert.ok(panel.includes('<mark'), 'highlighting must use safe React spans')
     assert.ok(!panel.includes('dangerouslySetInnerHTML'), 'highlighting must never use HTML sinks')
     const css = readRenderer('features/search/SearchPanel.css')

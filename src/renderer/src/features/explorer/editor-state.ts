@@ -83,3 +83,39 @@ export function markEditorReloaded(content: string, revision: string): EditorSta
     conflict: false
   }
 }
+
+/**
+ * Whether a Ctrl+S-style gesture may open the Review flow: dirty,
+ * idle, and present. Clean or in-flight editors safely no-op instead
+ * of creating duplicate proposals (H9 single-flight).
+ */
+export function canRequestReview(state: EditorState | null): boolean {
+  return state !== null && !state.saving && state.draftContent !== state.originalContent
+}
+
+/**
+ * Rebase after an authoritative external write (Accept/Rollback, H1):
+ * the accepted/rolled-back bytes + revision become the clean base. A
+ * clean editor stays clean on the new bytes; keystrokes typed while
+ * the write was in flight are preserved as the draft against the new
+ * base so a late response never destroys newer user input. Null stays
+ * null (read-only previews never gain an editable draft here).
+ */
+export function rebaseEditorOnExternalWrite(
+  current: EditorState | null,
+  content: string,
+  revision: string
+): EditorState | null {
+  if (current === null) {
+    return current
+  }
+  const dirty = current.draftContent !== current.originalContent
+  return {
+    originalContent: content,
+    draftContent: dirty ? current.draftContent : content,
+    revision,
+    saving: false,
+    saveError: null,
+    conflict: false
+  }
+}

@@ -4,6 +4,7 @@ import { APP_NAME } from '../../shared/constants'
 import { RENDERER_DEV_URL, RENDERER_ENTRY, RENDERER_DIR, devServerOrigin } from '../security/app-urls'
 import { isAllowedExternalUrl, isAllowedMainFrameNavigation } from '../security/external-url'
 import { configureMicrophonePermissions } from './voice-permissions'
+import { configureAppZoom } from './app-zoom'
 
 function logRendererLoadError(error: unknown): void {
   console.error(`[${APP_NAME}] failed to load renderer:`, error)
@@ -51,6 +52,12 @@ export function createAppWindow(): BrowserWindow {
   // only, never background listening). Camera and every other
   // permission fail closed.
   configureMicrophonePermissions(window)
+
+  // Application zoom shortcuts (Ctrl+=/+/Add in, Ctrl+-/Subtract out,
+  // Ctrl+0 reset): main-owned via before-input-event so the shifted
+  // "+" path works on Windows and review/editor/terminal input is
+  // never intercepted. No IPC, no preload change.
+  configureAppZoom(window)
 
   window.once('ready-to-show', () => {
     window.show()

@@ -155,7 +155,7 @@ export function SettingsPage({ section, onSectionChange, onBack, binding }: Sett
               onSaveCapabilities={binding.onSaveCapabilities}
             />
           )}
-          {section === 'account' && <AccountSettings />}
+          {section === 'account' && <AccountSettings onNavigateBilling={() => onSectionChange('billing')} />}
           {section === 'billing' && <BillingSettings onNavigateAccount={() => onSectionChange('account')} />}
           {section === 'styles' && <StylesSettings />}
           {section === 'about' && <AboutSettings />}

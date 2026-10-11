@@ -1,4 +1,4 @@
-import { useEffect, useReducer, type ReactElement } from 'react'
+import { useEffect, useReducer, useState, type ReactElement } from 'react'
 import type { StarkAuthProvider } from '../../../../shared/cloud-account/types'
 import {
   cancelAccountSignIn,
@@ -20,6 +20,9 @@ import { accountPanelReducer, accountProviderLabel, initialAccountPanelState } f
  */
 export function AccountSection(): ReactElement {
   const [state, dispatch] = useReducer(accountPanelReducer, undefined, initialAccountPanelState)
+  // Provider of the in-flight/failed attempt, for provider-specific
+  // sanitized error copy. Never a token, code, or URL — label only.
+  const [attemptedProvider, setAttemptedProvider] = useState<StarkAuthProvider | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -51,10 +54,12 @@ export function AccountSection(): ReactElement {
     if (state.acting) {
       return
     }
+    setAttemptedProvider(provider)
     dispatch({ type: 'action-started' })
     try {
       await startAccountSignIn(provider)
       const status = await getAccountStatus()
+      setAttemptedProvider(null)
       dispatch({ type: 'action-succeeded', status, notice: null })
     } catch (error: unknown) {
       dispatch({
@@ -71,6 +76,7 @@ export function AccountSection(): ReactElement {
     dispatch({ type: 'action-started' })
     try {
       const status = await cancelAccountSignIn()
+      setAttemptedProvider(null)
       dispatch({ type: 'action-succeeded', status, notice: null })
     } catch (error: unknown) {
       dispatch({
@@ -78,6 +84,20 @@ export function AccountSection(): ReactElement {
         message: normalizeAccountError(error, ACCOUNT_GENERIC_MESSAGE).message
       })
     }
+  }
+
+  /** Provider-specific failure line; detail is always sanitized display copy. */
+  function signInError(): ReactElement | null {
+    if (state.actionError === null) {
+      return null
+    }
+    const label = attemptedProvider === null ? null : accountProviderLabel(attemptedProvider)
+    return (
+      <div role="alert">
+        {label !== null ? <p>{label} sign-in could not be completed.</p> : null}
+        <p>{state.actionError}</p>
+      </div>
+    )
   }
 
   async function handleSignOut(): Promise<void> {
@@ -100,7 +120,7 @@ export function AccountSection(): ReactElement {
     return (
       <section aria-label="STARK Account">
         <h2>STARK Account</h2>
-        <p role="status">Loading account…</p>
+        <p role="status">Checking account…</p>
       </section>
     )
   }
@@ -119,7 +139,7 @@ export function AccountSection(): ReactElement {
     return (
       <section aria-label="STARK Account">
         <h2>STARK Account</h2>
-        <p role="status">Loading account…</p>
+        <p role="status">Checking account…</p>
       </section>
     )
   }
@@ -128,9 +148,21 @@ export function AccountSection(): ReactElement {
     return (
       <section aria-label="STARK Account">
         <h2>STARK Account</h2>
-        <p>Cloud account features are unavailable in this build.</p>
-        <p>Account sign-in is not configured.</p>
-        <p>Your projects and local STARK data remain on this device.</p>
+        <p>Sign in to your STARK account.</p>
+        <div className="account-providers">
+          <button className="account-provider" type="button" disabled aria-label="Continue with Google (unavailable)">
+            <GoogleMark />
+            Continue with Google
+          </button>
+          <button className="account-provider" type="button" disabled aria-label="Continue with GitHub (unavailable)">
+            <GitHubMark />
+            Continue with GitHub
+          </button>
+        </div>
+        <p className="account-notice" role="note">
+          Account sign-in is not configured for this build.
+        </p>
+        <p className="account-note">Your projects and local STARK data remain on this device.</p>
       </section>
     )
   }
@@ -139,17 +171,20 @@ export function AccountSection(): ReactElement {
     return (
       <section aria-label="STARK Account">
         <h2>STARK Account</h2>
+        <p>Sign in to your STARK account.</p>
         <p>Sign in to sync your STARK account and manage subscriptions.</p>
-        <p>Optional. Your projects and local STARK data remain on this device.</p>
-        {state.actionError !== null ? <p role="alert">{state.actionError}</p> : null}
-        <button className="stark-btn stark-btn--primary" type="button" disabled={state.acting} onClick={() => void handleStart('google')}>
-          <GoogleMark />
-          Continue with Google
-        </button>
-        <button className="stark-btn stark-btn--secondary" type="button" disabled={state.acting} onClick={() => void handleStart('github')}>
-          <GitHubMark />
-          Continue with GitHub
-        </button>
+        {signInError()}
+        <div className="account-providers">
+          <button className="account-provider" type="button" disabled={state.acting} onClick={() => void handleStart('google')}>
+            <GoogleMark />
+            Continue with Google
+          </button>
+          <button className="account-provider" type="button" disabled={state.acting} onClick={() => void handleStart('github')}>
+            <GitHubMark />
+            Continue with GitHub
+          </button>
+        </div>
+        <p className="account-note">Your projects and local STARK data remain on this device.</p>
       </section>
     )
   }
@@ -160,7 +195,7 @@ export function AccountSection(): ReactElement {
         <h2>STARK Account</h2>
         <p role="status">Finish signing in in your browser.</p>
         <p>Provider: {accountProviderLabel(status.provider)}</p>
-        {state.actionError !== null ? <p role="alert">{state.actionError}</p> : null}
+        {signInError()}
         <button className="stark-btn stark-btn--ghost" type="button" disabled={state.acting} onClick={() => void handleCancel()}>
           Cancel
         </button>

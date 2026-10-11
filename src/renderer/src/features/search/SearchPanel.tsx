@@ -53,15 +53,16 @@ function toErrorMessage(error: unknown): string {
 
 /**
  * Safe literal highlighter: segments the snippet into React text nodes
- * with the case-insensitive literal query wrapped in <mark>. No HTML
- * parsing, no HTML sinks — hostile preview text stays inert.
+ * with the literal query wrapped in <mark>. No HTML parsing, no HTML
+ * sinks — hostile preview text stays inert. Case sensitivity follows
+ * the submitted search so highlighted hits match actual hits.
  */
-function highlightPreview(preview: string, query: string): readonly ReactNode[] {
+function highlightPreview(preview: string, query: string, caseSensitive: boolean): readonly ReactNode[] {
   if (query === '') {
     return [preview]
   }
-  const haystack = preview.toLowerCase()
-  const needle = query.toLowerCase()
+  const haystack = caseSensitive ? preview : preview.toLowerCase()
+  const needle = caseSensitive ? query : query.toLowerCase()
   const parts: ReactNode[] = []
   let cursor = 0
   let key = 0
@@ -84,12 +85,13 @@ function highlightPreview(preview: string, query: string): readonly ReactNode[] 
 }
 
 /**
- * Live workspace search panel. No case toggle (always case-insensitive
- * literal), no manual submit — typing debounces 250ms into the existing
- * workspace.search bridge with caseSensitive: false. Stale responses
- * never overwrite newer ones (monotonic request ids, renderer-only).
- * Results group by relativePath using the existing vscode-icons mapping;
- * clicking a match reuses the Stage 6 safe open flow via onSelectResult.
+ * Live workspace search panel. Literal matching with an explicit
+ * case-sensitive toggle (default off) wired straight through to the
+ * workspace.search bridge — the toggle is honored, never decorative
+ * (H10). Typing debounces 250ms; stale responses never overwrite newer
+ * ones (monotonic request ids, renderer-only). Results group by
+ * relativePath using the existing vscode-icons mapping; clicking a
+ * match reuses the Stage 6 safe open flow via onSelectResult.
  */
 export function SearchPanel({ workspaceId, onSelectResult, onAttachResult }: SearchPanelProps): ReactElement {
   const cached = liveSearchCache.get(workspaceId)
@@ -102,6 +104,9 @@ export function SearchPanel({ workspaceId, onSelectResult, onAttachResult }: Sea
     submitted: cached?.submitted ?? false
   }))
   const [input, setInput] = useState(cached?.input ?? '')
+  // Honored case-sensitivity toggle (H10): part of the submitted
+  // request and the highlight, reset per workspace via remount key.
+  const [caseSensitive, setCaseSensitive] = useState(false)
   const requestIdRef = useRef(0)
   const stateRef = useRef(state)
 
@@ -123,14 +128,15 @@ export function SearchPanel({ workspaceId, onSelectResult, onAttachResult }: Sea
       requestIdRef.current = requestId
       const submittedWorkspaceId = workspaceId
       const submittedQuery = input
+      const submittedCaseSensitive = caseSensitive
       dispatch({
         type: 'search-started',
         workspaceId: submittedWorkspaceId,
         query: submittedQuery,
-        caseSensitive: false,
+        caseSensitive: submittedCaseSensitive,
         requestId
       })
-      searchWorkspace({ workspaceId: submittedWorkspaceId, query: submittedQuery, caseSensitive: false }).then(
+      searchWorkspace({ workspaceId: submittedWorkspaceId, query: submittedQuery, caseSensitive: submittedCaseSensitive }).then(
         (result) => {
           if (requestIdRef.current !== requestId) {
             return
@@ -148,7 +154,7 @@ export function SearchPanel({ workspaceId, onSelectResult, onAttachResult }: Sea
     return () => {
       clearTimeout(timer)
     }
-  }, [input, workspaceId])
+  }, [input, workspaceId, caseSensitive])
 
   useEffect(() => {
     if (state.submitted && !state.loading && state.error === null) {
@@ -212,6 +218,15 @@ export function SearchPanel({ workspaceId, onSelectResult, onAttachResult }: Sea
             <StarkIcon name="close" size={14} />
           </button>
         )}
+        <label className="search__case" title="Match case">
+          <input
+            type="checkbox"
+            checked={caseSensitive}
+            onChange={(event) => setCaseSensitive(event.target.checked)}
+            aria-label="Match case"
+          />
+          <span aria-hidden="true">Aa</span>
+        </label>
         {state.loading && (
           <span className="search__spinner" role="status" aria-label="Searching">
             Searching…
@@ -268,7 +283,7 @@ export function SearchPanel({ workspaceId, onSelectResult, onAttachResult }: Sea
                       <span className="search__result-location">
                         {match.line}:{match.column}
                       </span>
-                      <span className="search__result-preview">{highlightPreview(match.preview, state.query)}</span>
+                      <span className="search__result-preview">{highlightPreview(match.preview, state.query, state.caseSensitive)}</span>
                     </button>
                     {onAttachResult !== undefined && (
                       <button

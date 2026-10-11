@@ -117,6 +117,80 @@ const BUILT_IN_DEFINITIONS: readonly CatalogDefinition[] = [
 /** Product-locked Free catalog size. Exactly 15 — never 14, 16, or 15 + placeholder. */
 export const FREE_CATALOG_COUNT = 15
 
+/**
+ * Default STARK Free Brain Chain (product configuration, fixed order):
+ * planning-first orchestration defaults. Entries are catalog `model`
+ * slugs — stable ids derive via `stableModelId('builtin', …)` so the
+ * catalog stays the single source of truth. Unknown slugs (catalog
+ * drift) are dropped, never phantom-inserted; order is preserved and
+ * the result never exceeds the Free cap of 5.
+ */
+const DEFAULT_FREE_BRAIN_MODELS: readonly string[] = [
+  'gpt-5.6-luna',
+  'deepseek-v4.1-flash',
+  'gemini-2.5-flash',
+  'claude-haiku-5.5',
+  'glm-5.3-flash'
+]
+
+/**
+ * Default STARK Free Heart Chain (product configuration, fixed order):
+ * execution/code-first defaults. Same derivation and safety rules as
+ * the Brain defaults. Cross-chain duplicates (GPT 5.6 Luna, DeepSeek
+ * V4.1 Flash) are intentional and allowed — only same-chain
+ * duplicates are forbidden (see model-chain.ts).
+ */
+const DEFAULT_FREE_HEART_MODELS: readonly string[] = [
+  'kimi-k2.7-code',
+  'gpt-5.6-luna',
+  'deepseek-v4.1-flash',
+  'mimo-v2.6-pro',
+  'muse-spark-1.3'
+]
+
+/** Known catalog slugs under the `builtin:` namespace (validation set for defaults). */
+function freeBuiltinModels(): ReadonlySet<string> {
+  return new Set(BUILT_IN_DEFINITIONS.map((definition) => stableModelId('builtin', definition.model)))
+}
+
+/**
+ * Builds one validated default chain: catalog-membership checked,
+ * order-preserving, de-duplicated, capped at 5. Never invents ids —
+ * a slug missing from the locked catalog is dropped.
+ */
+function buildDefaultChain(models: readonly string[]): readonly string[] {
+  const known = freeBuiltinModels()
+  const out: string[] = []
+  for (const model of models) {
+    const stableId = stableModelId('builtin', model)
+    if (!known.has(stableId) || out.includes(stableId)) {
+      continue
+    }
+    out.push(stableId)
+    if (out.length >= 5) {
+      break
+    }
+  }
+  return out
+}
+
+/**
+ * Fresh-configuration Brain defaults: exactly the five ordered
+ * planning-first Free models. Configuration/presentation only — chain
+ * entries never imply inference routing (see the module header).
+ */
+export function createDefaultFreeBrainChain(): readonly string[] {
+  return buildDefaultChain(DEFAULT_FREE_BRAIN_MODELS)
+}
+
+/**
+ * Fresh-configuration Heart defaults: exactly the five ordered
+ * execution-first Free models. Same non-routing caveat as Brain.
+ */
+export function createDefaultFreeHeartChain(): readonly string[] {
+  return buildDefaultChain(DEFAULT_FREE_HEART_MODELS)
+}
+
 interface PlanDefinition extends CatalogDefinition {
   readonly planRequirement: string
 }

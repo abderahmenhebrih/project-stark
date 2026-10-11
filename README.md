@@ -8,7 +8,7 @@ models, copying prompts, or losing coding context. It targets both
 nontechnical users and developers on Windows, macOS, and Linux.
 
 > **Current stage: v1 Release Candidate — Acceptance Complete, Public Release Blocked**
-> (Stages 1–31, schema v18, RC STARK-v0.1.0-RC1+2870399).
+> (Stages 1–31, schema v19, RC STARK-v0.1.0-RC1+2870399).
 > This repository contains the Electron + React + TypeScript application
 > with local SQLite persistence and all Stage 1–30 domains (Settings,
 > local-profile, Workspace, Explorer, Search, Editing, Change
@@ -22,7 +22,8 @@ nontechnical users and developers on Windows, macOS, and Linux.
 > 0 FAIL · 0 N/A — BLOCKED items are prerequisite-bound human/backend/
 > installer passes, not software failures), 4 tooling/documentation
 > defects fixed and retested, final `npm run release:check` green
-> (281 suites / 1824 tests / 0 failures). Public release remains
+> (0 failures; suite counts grow with coverage — see the release:check
+> output, not this line). Public release remains
 > **BLOCKED** on external prerequisites (code signing, icon assets,
 > OAuth backend, provider-key smoke, target-platform installers, human
 > GUI confirmation pass). See docs/RELEASE_ACCEPTANCE_V1.md,

@@ -8,7 +8,7 @@ import { describe, it } from 'node:test'
  * automatically and are never deletable, user entries stay
  * distinguishable, plan entries are visible while locked and refuse
  * chain insertion with a Billing route, the Add card stays last, and
- * chains still start empty. Runs against repository source.
+ *   chains start with the Free defaults. Runs against repository source.
  */
 function readSource(...parts: string[]): string {
   const file = join(process.cwd(), ...parts)
@@ -76,10 +76,12 @@ describe('model origin classes', () => {
     assert.ok(page.indexOf('<AddModelCard') > page.lastIndexOf('<ModelCard'), 'Add model must follow all groups')
   })
 
-  it('chains still start empty: built-in presence never auto-configures them', () => {
+  it('chains start with the Free defaults (presence still never implies routing)', () => {
     const state = codeOnly(readModels('models/model-chains-state.ts'))
-    assert.ok(state.includes('brain: []'), 'brain must start empty')
-    assert.ok(state.includes('heart: []'), 'heart must start empty')
+    assert.ok(state.includes('createDefaultFreeBrainChain()'), 'brain must start with the Free defaults')
+    assert.ok(state.includes('createDefaultFreeHeartChain()'), 'heart must start with the Free defaults')
+    const page = codeOnly(readModels('ModelsSettings.tsx'))
+    assert.ok(page.includes('does not route'), 'defaults must keep the non-routing honesty copy')
   })
 
   it('origin surfaces carry no pricing, backends, or secrets', () => {

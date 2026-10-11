@@ -1,3 +1,4 @@
+import { createDefaultFreeBrainChain, createDefaultFreeHeartChain } from './model-library'
 import { addToChain, moveInChain, removeFromChain, type ChainMoveDirection } from './model-chain'
 
 /**
@@ -7,12 +8,19 @@ import { addToChain, moveInChain, removeFromChain, type ChainMoveDirection } fro
  * switches reset both chains; stale/cross-workspace actions are
  * rejected.
  *
+ * Fresh state starts with the product Free defaults (best-5 Brain +
+ * best-5 Heart from the locked catalog) — never empty on first sight.
+ * Defaults apply ONLY at initialization: every later user action
+ * (add/remove/move) operates on live state and never re-applies them,
+ * so reorders, removals, and even an intentionally emptied chain are
+ * preserved for the life of the workspace session.
+ *
  * Persistence is intentionally session-local: there is no chain
  * storage in schema v19 and this pass adds no migration and no IPC.
  * Configuration survives while the workspace session lives and resets
- * on workspace switch — reported as the known limitation until the AI
- * integration pass owns chain persistence. No secrets ever enter this
- * state (stable model ids only).
+ * (to defaults) on workspace switch — reported as the known limitation
+ * until the AI integration pass owns chain persistence. No secrets ever
+ * enter this state (stable model ids only).
  */
 
 export interface ModelChainsPanelState {
@@ -22,7 +30,7 @@ export interface ModelChainsPanelState {
 }
 
 export function initialModelChainsPanelState(): ModelChainsPanelState {
-  return { workspaceId: null, brain: [], heart: [] }
+  return { workspaceId: null, brain: createDefaultFreeBrainChain(), heart: createDefaultFreeHeartChain() }
 }
 
 export type ModelChainsPanelAction =

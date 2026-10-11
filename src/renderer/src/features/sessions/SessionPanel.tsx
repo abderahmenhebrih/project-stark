@@ -143,6 +143,8 @@ interface SessionPanelProps {
   readonly settingsSection: SettingsSection
   readonly onSettingsSectionChange: (section: SettingsSection) => void
   readonly onCloseSettings: () => void
+  /** Opens the shell settings surface (e.g. no-provider guidance → Models). Optional for tests. */
+  readonly onOpenSettings?: (section: SettingsSection) => void
   /** Workarea portal target for the full-page Settings surface (owned by the shell). */
   readonly settingsHost: HTMLDivElement | null
   /** Reveal the secondary Context tab (owned by the Explorer). */
@@ -318,6 +320,7 @@ export function SessionPanel({
   settingsSection,
   onSettingsSectionChange,
   onCloseSettings,
+  onOpenSettings,
   settingsHost,
   onOpenContext,
   onSessionChrome
@@ -2166,7 +2169,26 @@ export function SessionPanel({
         </p>
       )}
       <p className="session__notice" role="status">
-        {aiReady ? `OpenAI · ${provider.selectedModel ?? ''}` : 'Local session — AI provider not connected yet.'}
+        {aiReady ? (
+          `OpenAI · ${provider.selectedModel ?? ''}`
+        ) : (
+          <>
+            {'Local session — AI provider not connected yet.'}
+            {onOpenSettings !== undefined && (
+              <>
+                {' '}
+                <button
+                  className="explorer__secondary"
+                  type="button"
+                  onClick={() => onOpenSettings('models')}
+                  aria-label="Connect AI provider"
+                >
+                  Connect AI
+                </button>
+              </>
+            )}
+          </>
+        )}
       </p>
       {tabLimitNotice !== null && (
         <p className="session__notice session__notice--limit" role="status">
@@ -2281,6 +2303,21 @@ export function SessionPanel({
                 aria-hidden="true"
                 draggable={false}
               />
+            )}
+            {conversationEmpty && !aiReady && state.selectedSessionId !== null && (
+              <div className="session__empty-ai" role="status" aria-label="Connect an AI provider">
+                <p className="session__empty-ai-text">Connect an AI provider to use Ask and Work.</p>
+                {onOpenSettings !== undefined && (
+                  <button
+                    className="explorer__secondary"
+                    type="button"
+                    onClick={() => onOpenSettings('models')}
+                    aria-label="Add OpenAI key"
+                  >
+                    Add OpenAI key
+                  </button>
+                )}
+              </div>
             )}
             {state.hasMore && (
               <button

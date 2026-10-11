@@ -274,6 +274,7 @@ export function HomePage(): ReactElement {
               settingsSection={settingsSection}
               onSettingsSectionChange={setSettingsSection}
               onCloseSettings={handleCloseSettings}
+              onOpenSettings={handleOpenSettings}
               onOpenContext={handleOpenContext}
               onSessionChrome={handleSessionChrome}
               onReviewTransaction={(transactionId) => {

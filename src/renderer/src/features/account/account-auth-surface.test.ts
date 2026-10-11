@@ -64,7 +64,7 @@ describe('account auth surface (Google/GitHub only)', () => {
 
   it('fails safely when sign-in is not configured', () => {
     const panel = codeOnly(readRenderer('features/account/AccountSection.tsx'))
-    assert.ok(panel.includes('Account sign-in is not configured.'), 'unconfigured auth must say so plainly')
+    assert.ok(panel.includes('Account sign-in is not configured for this build.'), 'unconfigured auth must say so plainly')
   })
 
   it('renderer identity types carry no token fields', () => {
