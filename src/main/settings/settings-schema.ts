@@ -1,5 +1,5 @@
 import { DEFAULT_SETTINGS } from '../../shared/settings/constants'
-import type { AppearanceMode, StarkSettings } from '../../shared/settings/types'
+import type { AppearanceMode, BrandStyleId, StarkSettings } from '../../shared/settings/types'
 import { CorruptSettingsError, InvalidSettingsError } from './errors'
 
 /**
@@ -17,8 +17,11 @@ export const SETTINGS_STORAGE_KEY = 'stark.settings'
 const KNOWN_SETTINGS_KEYS: readonly (keyof StarkSettings)[] = [
   'appearance',
   'reduceMotion',
-  'confirmBeforeDestructiveActions'
+  'confirmBeforeDestructiveActions',
+  'brandStyle'
 ]
+
+const KNOWN_BRAND_STYLES: readonly BrandStyleId[] = ['free', 'magma', 'frost', 'void']
 
 /** Deep copy so canonical defaults are never handed out by reference. */
 export function cloneSettings(settings: StarkSettings): StarkSettings {
@@ -47,6 +50,13 @@ function parseBooleanField(field: string, value: unknown): boolean {
   throw new InvalidSettingsError(`${field} must be a boolean`)
 }
 
+function parseBrandStyle(value: unknown): BrandStyleId {
+  if (typeof value === 'string' && (KNOWN_BRAND_STYLES as readonly string[]).includes(value)) {
+    return value as BrandStyleId
+  }
+  throw new InvalidSettingsError('brandStyle must be a known style')
+}
+
 /**
  * Validates stored settings. Unknown fields are ignored (forward
  * compatibility); known fields with invalid values fail loudly.
@@ -65,7 +75,9 @@ export function parseStoredSettings(raw: unknown): StarkSettings {
       confirmBeforeDestructiveActions:
         raw['confirmBeforeDestructiveActions'] === undefined
           ? DEFAULT_SETTINGS.confirmBeforeDestructiveActions
-          : parseBooleanField('confirmBeforeDestructiveActions', raw['confirmBeforeDestructiveActions'])
+          : parseBooleanField('confirmBeforeDestructiveActions', raw['confirmBeforeDestructiveActions']),
+      brandStyle:
+        raw['brandStyle'] === undefined ? DEFAULT_SETTINGS.brandStyle : parseBrandStyle(raw['brandStyle'])
     }
   } catch (error) {
     if (error instanceof InvalidSettingsError) {
@@ -87,6 +99,7 @@ export function parseUpdatePatch(raw: unknown): Partial<StarkSettings> {
     appearance?: AppearanceMode
     reduceMotion?: boolean
     confirmBeforeDestructiveActions?: boolean
+    brandStyle?: BrandStyleId
   } = {}
   for (const key of Object.keys(raw)) {
     if (!(KNOWN_SETTINGS_KEYS as readonly string[]).includes(key)) {
@@ -96,6 +109,8 @@ export function parseUpdatePatch(raw: unknown): Partial<StarkSettings> {
       patch.appearance = parseAppearance(raw[key])
     } else if (key === 'reduceMotion') {
       patch.reduceMotion = parseBooleanField('reduceMotion', raw[key])
+    } else if (key === 'brandStyle') {
+      patch.brandStyle = parseBrandStyle(raw[key])
     } else {
       patch.confirmBeforeDestructiveActions = parseBooleanField(
         'confirmBeforeDestructiveActions',

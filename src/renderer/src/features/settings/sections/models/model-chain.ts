@@ -5,16 +5,18 @@
  * runner. Chains are ordered lists of stable model ids (see
  * model-library.ts). No secrets, no provider config, no inference.
  *
- * LOCKED rules:
- * - 1..5 entries when configured (fewer than 5 allowed, never 0 via
+ * LOCKED rules (Free defaults; paid tiers raise the cap through the
+ * central entitlements — see billing/entitlements.ts):
+ * - 1..max entries when configured (fewer allowed, never 0 via
  *   add-path; empty renders as configuration-required).
  * - The same model may NOT appear twice inside one chain.
  * - The same model MAY appear in both chains (enforced by keeping the
  *   two lists independent — no cross-chain check lives here).
  * - Removal collapses positions (no holes); reorder preserves ids.
- * - A sixth insertion is rejected by state logic, not CSS.
+ * - Insertions past the cap are rejected by state logic, not CSS.
  */
 
+/** Free-tier chain cap. Paid entitlements pass a higher max explicitly. */
 export const MAX_CHAIN_MODELS = 5
 
 export const MIN_CHAIN_MODELS = 1
@@ -36,16 +38,21 @@ export interface ChainAddOutcome {
 
 /**
  * Attempts to append one model to a chain. Rejects same-chain
- * duplicates and insertions past five. Never reorders, never replaces.
+ * duplicates and insertions past the entitlement cap (Free default 5;
+ * paid tiers pass their max explicitly). Never reorders, never replaces.
  */
-export function addToChain(chain: readonly string[], stableId: string): ChainAddOutcome {
+export function addToChain(
+  chain: readonly string[],
+  stableId: string,
+  maxModels: number = MAX_CHAIN_MODELS
+): ChainAddOutcome {
   if (stableId === '') {
     return { applied: false, chain, reason: 'empty-id' }
   }
   if (chain.includes(stableId)) {
     return { applied: false, chain, reason: 'duplicate-in-chain' }
   }
-  if (chain.length >= MAX_CHAIN_MODELS) {
+  if (chain.length >= maxModels) {
     return { applied: false, chain, reason: 'chain-full' }
   }
   return { applied: true, chain: [...chain, stableId], reason: 'added' }
@@ -90,9 +97,9 @@ export function moveInChain(
   return out
 }
 
-/** True when no further insertion is allowed (exactly five). */
-export function isChainFull(chain: readonly string[]): boolean {
-  return chain.length >= MAX_CHAIN_MODELS
+/** True when no further insertion is allowed (at the entitlement cap). */
+export function isChainFull(chain: readonly string[], maxModels: number = MAX_CHAIN_MODELS): boolean {
+  return chain.length >= maxModels
 }
 
 /**

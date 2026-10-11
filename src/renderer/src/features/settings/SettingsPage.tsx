@@ -11,6 +11,7 @@ import { ModelsSettings } from './sections/ModelsSettings'
 import { PermissionsSettings } from './sections/PermissionsSettings'
 import { AccountSettings } from './sections/AccountSettings'
 import { BillingSettings } from './sections/BillingSettings'
+import { StylesSettings } from './sections/StylesSettings'
 import { AboutSettings } from './sections/AboutSettings'
 import { StarkIcon } from '../../components/icons/StarkIcon'
 import './SettingsPage.css'
@@ -38,6 +39,9 @@ export interface SettingsPageBinding {
    */
   readonly brainChain: readonly string[]
   readonly heartChain: readonly string[]
+  /** Entitlement caps from the central product state (Free default 5). */
+  readonly maxBrainModels: number
+  readonly maxHeartModels: number
   readonly onChainAdd: (chain: 'brain' | 'heart', stableId: string) => void
   readonly onChainRemove: (chain: 'brain' | 'heart', stableId: string) => void
   readonly onChainMove: (chain: 'brain' | 'heart', stableId: string, direction: ChainMoveDirection) => void
@@ -135,6 +139,8 @@ export function SettingsPage({ section, onSectionChange, onBack, binding }: Sett
               onUseModel={binding.onUseModel}
               brain={binding.brainChain}
               heart={binding.heartChain}
+              maxBrainModels={binding.maxBrainModels}
+              maxHeartModels={binding.maxHeartModels}
               onChainAdd={binding.onChainAdd}
               onChainRemove={binding.onChainRemove}
               onChainMove={binding.onChainMove}
@@ -150,7 +156,8 @@ export function SettingsPage({ section, onSectionChange, onBack, binding }: Sett
             />
           )}
           {section === 'account' && <AccountSettings />}
-          {section === 'billing' && <BillingSettings />}
+          {section === 'billing' && <BillingSettings onNavigateAccount={() => onSectionChange('account')} />}
+          {section === 'styles' && <StylesSettings />}
           {section === 'about' && <AboutSettings />}
         </div>
       </div>

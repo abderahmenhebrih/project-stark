@@ -45,6 +45,7 @@ const SETTINGS_FILES = [
   'features/settings/sections/PermissionsSettings.tsx',
   'features/settings/sections/AccountSettings.tsx',
   'features/settings/sections/BillingSettings.tsx',
+  'features/settings/sections/StylesSettings.tsx',
   'features/settings/sections/AboutSettings.tsx'
 ]
 
@@ -76,13 +77,13 @@ describe('settings V2 full-page surface', () => {
     assert.ok(panel.includes('createPortal'), 'settings page must portal into the workarea host')
   })
 
-  it('navigates exactly Models/Permissions/Account/Billing/About defaulting to Models', () => {
+  it('navigates exactly Models/Permissions/Account/Billing/Styles/About defaulting to Models', () => {
     assert.deepEqual(
       SETTINGS_SECTIONS.map((entry) => entry.kind),
-      ['models', 'permissions', 'account', 'billing', 'about']
+      ['models', 'permissions', 'account', 'billing', 'styles', 'about']
     )
     const meta = readRenderer('features/settings/settings-section.ts')
-    for (const label of ['Models', 'Permissions', 'Account', 'Billing', 'About']) {
+    for (const label of ['Models', 'Permissions', 'Account', 'Billing', 'Styles', 'About']) {
       assert.ok(meta.includes(label), `section metadata must offer ${label}`)
     }
     const nav = readRenderer('features/settings/SettingsNav.tsx')
@@ -119,11 +120,13 @@ describe('settings V2 full-page surface', () => {
       '<PermissionsSettings',
       '<AccountSettings',
       '<BillingSettings',
+      '<StylesSettings',
       '<AboutSettings'
     ]) {
       assert.ok(page.includes(section), `page must render ${section}`)
     }
     assert.ok(page.includes("section === 'models'"), 'models must be a first-class section')
+    assert.ok(page.includes("section === 'styles'"), 'styles must be a first-class section')
   })
 
   it('leaving settings returns via Back, never a modal X', () => {
@@ -133,12 +136,16 @@ describe('settings V2 full-page surface', () => {
     assert.ok(page.includes('onBack'), 'back control must return to the workbench')
   })
 
-  it('Billing is an honest nonfunctional placeholder', () => {
+  it('Billing is a real product surface with honest payment boundaries', () => {
     const billing = codeOnly(readRenderer('features/settings/sections/BillingSettings.tsx'))
-    assert.ok(billing.includes('Billing controls will appear here'), 'billing must say plainly it is unavailable')
-    assert.ok(!billing.includes('<button'), 'billing must offer no controls')
-    assert.ok(!billing.includes('$'), 'billing must show no prices')
-    for (const backend of ['Stripe', 'checkout', 'invoice', 'fetch(', '.invoke(']) {
+    for (const card of ['STARK Free', 'STARK Magma', 'STARK Frost', 'STARK Void']) {
+      assert.ok(billing.includes(card), `billing must render the ${card} card`)
+    }
+    assert.ok(billing.includes('CURRENT'), 'Free must be marked current until real billing exists')
+    assert.ok(billing.includes('Sign in to upgrade'), 'paid actions must route through Account')
+    assert.ok(billing.includes('Checkout coming next'), 'payment absence must be stated honestly')
+    assert.ok(!billing.includes('Billing controls will appear here'), 'placeholder copy must be retired')
+    for (const backend of ['Stripe', 'checkout(', 'invoice', 'fetch(', '.invoke(']) {
       assert.ok(!billing.includes(backend), `billing must not contain ${backend}`)
     }
   })

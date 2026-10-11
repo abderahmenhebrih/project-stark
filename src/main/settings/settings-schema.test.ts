@@ -34,6 +34,14 @@ describe('settings schema', () => {
     assert.throws(() => parseStoredSettings('dark'), CorruptSettingsError)
     assert.throws(() => parseStoredSettings([1]), CorruptSettingsError)
   })
+
+  it('brandStyle defaults to free and validates known styles only', () => {
+    assert.equal(parseStoredSettings({}).brandStyle, 'free')
+    assert.equal(parseStoredSettings({ brandStyle: 'void' }).brandStyle, 'void')
+    assert.throws(() => parseStoredSettings({ brandStyle: 'ultra' }), CorruptSettingsError)
+    assert.deepEqual(parseUpdatePatch({ brandStyle: 'magma' }), { brandStyle: 'magma' })
+    assert.throws(() => parseUpdatePatch({ brandStyle: 'ultra' }), InvalidSettingsError)
+  })
 })
 
 describe('settings public errors', () => {

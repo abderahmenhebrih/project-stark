@@ -10,6 +10,8 @@ interface ModelChainProps {
   readonly copy: string
   readonly chain: readonly string[]
   readonly library: readonly StarkModelIdentity[]
+  /** Entitlement cap for this chain (Free default 5). */
+  readonly maxModels?: number
   readonly onAdd: (stableId: string) => void
   readonly onRemove: (stableId: string) => void
   readonly onMove: (stableId: string, direction: 'left' | 'right') => void
@@ -38,11 +40,11 @@ function displayNameFor(chainId: string, library: readonly StarkModelIdentity[])
  * accessible label.
  */
 export function ModelChain(props: ModelChainProps): ReactElement {
-  const { kind, chain, library } = props
+  const { kind, chain, library, maxModels = MAX_CHAIN_MODELS } = props
   const label = chainLabel(kind)
   const libraryIds = new Set(library.map((entry) => entry.stableId))
   const [pickerOpen, setPickerOpen] = useState(false)
-  const full = isChainFull(chain)
+  const full = isChainFull(chain, maxModels)
 
   return (
     <section className={`models-chain models-chain--${kind}`} aria-label={label}>
@@ -175,7 +177,7 @@ export function ModelChain(props: ModelChainProps): ReactElement {
         </div>
       )}
       <p className="session__hint" role="note">
-        {chain.length} of {MAX_CHAIN_MODELS} models
+        {chain.length} of {maxModels} models
         {full ? ' · chain is full' : ''}
       </p>
     </section>

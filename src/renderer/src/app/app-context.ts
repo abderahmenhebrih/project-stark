@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
 import type { LocalProfile } from '../../../shared/profile/types'
+import type { BrandStyleId } from '../../../shared/settings/types'
 import type { Workspace } from '../../../shared/workspace/types'
 import type { BootState } from './boot-state'
 
@@ -15,6 +16,15 @@ export interface WorkspaceSlice {
   readonly refreshWorkspaces: () => Promise<void>
 }
 
+export interface BrandStyleSlice {
+  /** Currently applied global brand style. Defaults to Free. */
+  readonly style: BrandStyleId
+  /** Styles unlocked right now (subscription + permanent Void unlocks). */
+  readonly unlocked: readonly BrandStyleId[]
+  /** Applies an unlocked style immediately (no reload, no state loss). */
+  readonly setStyle: (style: BrandStyleId) => Promise<void>
+}
+
 export interface AppContextValue {
   readonly boot: BootState
   readonly profile: LocalProfile | null
@@ -22,6 +32,7 @@ export interface AppContextValue {
   readonly refreshProfile: () => Promise<void>
   readonly retryBoot: () => void
   readonly workspace: WorkspaceSlice
+  readonly brandStyle: BrandStyleSlice
 }
 
 export const AppContext = createContext<AppContextValue | null>(null)

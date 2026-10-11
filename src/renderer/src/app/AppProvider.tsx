@@ -7,9 +7,13 @@ import {
   type ReactNode
 } from 'react'
 import type { LocalProfile } from '../../../shared/profile/types'
+import type { BrandStyleId } from '../../../shared/settings/types'
 import type { Workspace, WorkspaceApi } from '../../../shared/workspace/types'
-import { getProfileApi, getWorkspaceApi } from '../lib/stark-api'
-import { AppContext, type AppContextValue, type WorkspaceSlice } from './app-context'
+import { productionEntitlements } from '../features/billing/entitlements'
+import { isDevelopmentBuild } from '../features/styles/style-assets'
+import { resolveDevStyleUnlock } from '../features/styles/style-registry'
+import { getProfileApi, getSettingsApi, getWorkspaceApi } from '../lib/stark-api'
+import { AppContext, type AppContextValue, type BrandStyleSlice, type WorkspaceSlice } from './app-context'
 import { resolveBootState } from './boot-state'
 
 interface AppProviderProps {
@@ -32,10 +36,23 @@ function toWorkspaceMessage(error: unknown, fallback: string): string {
 }
 
 /**
- * Minimal application state owner: local profile plus boot status, plus
- * the workspace slice (current/recent workspaces and the actions that
- * change them). Workspace state loads once the profile is known and
- * refreshes after every choose/open — no reload, no external store.
+ * Styles unlocked in production today (Free only; paid unlocks arrive
+ * with Billing). The dev preview flag is consulted only through the
+ * real build flag, which is statically `false` in packaged builds.
+ */
+function productionUnlockedStyles(): readonly BrandStyleId[] {
+  const devUnlock = resolveDevStyleUnlock({ dev: isDevelopmentBuild() })
+  if (devUnlock !== null) {
+    return devUnlock
+  }
+  return productionEntitlements().unlockedStyles
+}
+
+/**
+ * Minimal application state owner: local profile plus boot status, the
+ * workspace slice, and the global brand-style slice. Style applies via
+ * a document attribute (no reload, no state loss) and persists through
+ * the existing main-owned settings store.
  */
 export function AppProvider({ children }: AppProviderProps): ReactElement {
   const bridgeAvailable = getProfileApi() !== undefined
@@ -43,6 +60,65 @@ export function AppProvider({ children }: AppProviderProps): ReactElement {
   const [loading, setLoading] = useState(bridgeAvailable)
   const [loadError, setLoadError] = useState(!bridgeAvailable)
   const [attempt, setAttempt] = useState(0)
+
+  const [brandStyleId, setBrandStyleId] = useState<BrandStyleId>('free')
+  const unlockedStyles = useMemo<readonly BrandStyleId[]>(() => productionUnlockedStyles(), [])
+
+  // Restore the persisted style once; fall back to the highest entitled
+  // style when the stored value is no longer unlocked. Bounded, fail-safe.
+  useEffect(() => {
+    const api = getSettingsApi()
+    if (api === undefined) {
+      return
+    }
+    let cancelled = false
+    api
+      .get()
+      .then((settings) => {
+        if (!cancelled) {
+          const restored = settings.brandStyle
+          const unlocked =
+            resolveDevStyleUnlock({ dev: isDevelopmentBuild() }) ?? productionEntitlements().unlockedStyles
+          setBrandStyleId(unlocked.includes(restored) ? restored : 'free')
+        }
+      })
+      .catch(() => {
+        // Best effort: Free stays applied when preferences are unreadable.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Whole-app brand presentation. Attribute-only: no reload, no unmount,
+  // no session/editor/terminal state loss.
+  useEffect(() => {
+    try {
+      document.documentElement.dataset['starkStyle'] = brandStyleId
+    } catch {
+      // Non-DOM test runtimes: style state still resolves; no crash.
+    }
+  }, [brandStyleId])
+
+  const setBrandStyle = useCallback(
+    async (style: BrandStyleId): Promise<void> => {
+      if (!unlockedStyles.includes(style)) {
+        return
+      }
+      const previous = brandStyleId
+      setBrandStyleId(style)
+      const api = getSettingsApi()
+      if (api === undefined) {
+        return
+      }
+      try {
+        await api.update({ brandStyle: style })
+      } catch {
+        setBrandStyleId(previous)
+      }
+    },
+    [brandStyleId, unlockedStyles]
+  )
 
   const [currentWorkspace, setCurrentWorkspace] = useState<Workspace | null>(null)
   const [recentWorkspaces, setRecentWorkspaces] = useState<readonly Workspace[]>([])
@@ -232,6 +308,11 @@ export function AppProvider({ children }: AppProviderProps): ReactElement {
     ]
   )
 
+  const brandStyle = useMemo<BrandStyleSlice>(
+    () => ({ style: brandStyleId, unlocked: unlockedStyles, setStyle: setBrandStyle }),
+    [brandStyleId, unlockedStyles, setBrandStyle]
+  )
+
   const value = useMemo<AppContextValue>(
     () => ({
       boot: resolveBootState({ loading, profile, loadError }),
@@ -239,9 +320,10 @@ export function AppProvider({ children }: AppProviderProps): ReactElement {
       completeOnboarding,
       refreshProfile,
       retryBoot,
-      workspace
+      workspace,
+      brandStyle
     }),
-    [loading, profile, loadError, completeOnboarding, refreshProfile, retryBoot, workspace]
+    [loading, profile, loadError, completeOnboarding, refreshProfile, retryBoot, workspace, brandStyle]
   )
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

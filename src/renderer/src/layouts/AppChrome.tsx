@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import { StarkMark } from '../components/StarkMark'
-import { STARK_WORDMARK_URL } from '../components/brandAssets'
+import { useBrandAssets } from '../features/styles/use-brand-assets'
 import { StarkIcon } from '../components/icons/StarkIcon'
 import type { SessionChromeSession } from '../features/sessions/SessionPanel'
 import './AppChrome.css'
@@ -228,6 +228,9 @@ export function AppChrome({
   onSwitchWorkspace
 }: AppChromeProps): ReactElement {
   const [menuOpen, setMenuOpen] = useState(false)
+  // Style-aware brand assets (Settings → Styles). Same 26px geometry —
+  // only the asset family changes with the selected style.
+  const brand = useBrandAssets()
   const optionsButtonRef = useRef<HTMLButtonElement | null>(null)
   const [anchor, setAnchor] = useState<{ readonly left: number; readonly bottom: number; readonly top: number } | null>(null)
 
@@ -262,8 +265,8 @@ export function AppChrome({
         <StarkIcon name="menu" size={22} />
       </button>
       <span className="app-chrome__brand" aria-label="STARK">
-        <StarkMark size="bar" />
-        <img className="app-chrome__wordmark" src={STARK_WORDMARK_URL} alt="STARK" />
+        <StarkMark size="bar" src={brand.iconUrl} />
+        <img className="app-chrome__wordmark" src={brand.wordmarkUrl} alt="STARK" />
       </span>
       <span className="app-chrome__divider" aria-hidden="true" />
       <button

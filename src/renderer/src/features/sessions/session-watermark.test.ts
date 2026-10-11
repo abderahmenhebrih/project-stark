@@ -29,7 +29,7 @@ describe('official wordmark reuse', () => {
     assert.ok(assets.includes('starkword.png'), 'official wordmark asset must exist')
     assert.ok(assets.includes('STARK_WORDMARK_URL'), 'wordmark URL export must exist')
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('STARK_WORDMARK_URL'), 'empty state must reuse the official wordmark')
+    assert.ok(panel.includes('brandWordmarkUrl'), 'empty state must reuse the style-aware official wordmark')
     assert.ok(panel.includes('className="session__watermark"'), 'watermark must carry its own class')
     const imgAt = panel.indexOf('session__watermark')
     const imgBlock = panel.slice(Math.max(0, imgAt - 200), imgAt + 300)
@@ -43,7 +43,7 @@ describe('official wordmark reuse', () => {
 
   it('matches the asset AppChrome already uses', () => {
     const chrome = readRenderer('layouts/AppChrome.tsx')
-    assert.ok(chrome.includes('STARK_WORDMARK_URL'), 'AppChrome must use the same official wordmark')
+    assert.ok(chrome.includes('brand.wordmarkUrl'), 'AppChrome must use the same style-aware wordmark')
   })
 })
 

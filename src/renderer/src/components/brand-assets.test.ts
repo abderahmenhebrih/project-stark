@@ -69,7 +69,8 @@ describe('D05 official STARK brand assets', () => {
   it('AppChrome uses icon + wordmark and fits the existing bar height', () => {
     const chrome = readRenderer('layouts/AppChrome.tsx')
     assert.ok(chrome.includes('<StarkMark'), 'chrome must keep the StarkMark emblem slot (now the real icon)')
-    assert.ok(chrome.includes('STARK_WORDMARK_URL'), 'chrome must render the official starkword asset')
+    assert.ok(chrome.includes('useBrandAssets'), 'chrome must follow the selected brand style')
+    assert.ok(chrome.includes('brand.wordmarkUrl'), 'chrome must render the style-aware wordmark asset')
     assert.ok(!chrome.includes('<span className="app-chrome__wordmark">STARK</span>'), 'plain-text wordmark must be replaced by the branded image')
     assert.ok(chrome.includes('app-chrome__tab-dot'), 'session tab keeps its small magenta identity dot')
     assert.ok(!chrome.includes('fullstark') && !chrome.includes('STARK_FULL_LOGO_URL'), 'full logo must not be forced into the compact tab or top bar')
@@ -101,7 +102,7 @@ describe('D05 official STARK brand assets', () => {
   it('empty/welcome state uses official assets, never the CSS fallback', () => {
     const explorer = readRenderer('features/explorer/Explorer.tsx')
     assert.ok(explorer.includes('<StarkMark size="hero"'), 'empty state emblem must use the real starkicon')
-    assert.ok(explorer.includes('STARK_WORDMARK_URL'), 'empty state must show the official wordmark instead of plain text')
+    assert.ok(explorer.includes('brand.wordmarkUrl'), 'empty state must show the style-aware wordmark instead of plain text')
     assert.ok(!explorer.includes('editor-empty__brand'), 'temporary text-brand placeholder must be gone')
     const editorCss = readRenderer('features/editor/editor.css')
     assert.ok(!editorCss.includes('.editor-empty__brand'), 'dead empty-brand text CSS must be removed')

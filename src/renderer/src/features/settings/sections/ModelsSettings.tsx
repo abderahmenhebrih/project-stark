@@ -26,6 +26,9 @@ interface ModelsSettingsProps {
   readonly onUseModel: () => void
   readonly brain: readonly string[]
   readonly heart: readonly string[]
+  /** Entitlement caps from the central product state (Free default 5). */
+  readonly maxBrainModels?: number
+  readonly maxHeartModels?: number
   readonly onChainAdd: (chain: 'brain' | 'heart', stableId: string) => void
   readonly onChainRemove: (chain: 'brain' | 'heart', stableId: string) => void
   readonly onChainMove: (chain: 'brain' | 'heart', stableId: string, direction: ChainMoveDirection) => void
@@ -119,6 +122,7 @@ export function ModelsSettings(props: ModelsSettingsProps): ReactElement {
       <BrainChain
         chain={props.brain}
         library={library}
+        maxModels={props.maxBrainModels}
         onAdd={(stableId) => handleChainAdd('brain', stableId)}
         onRemove={(stableId) => props.onChainRemove('brain', stableId)}
         onMove={(stableId, direction) => props.onChainMove('brain', stableId, direction)}
@@ -126,6 +130,7 @@ export function ModelsSettings(props: ModelsSettingsProps): ReactElement {
       <HeartChain
         chain={props.heart}
         library={library}
+        maxModels={props.maxHeartModels}
         onAdd={(stableId) => handleChainAdd('heart', stableId)}
         onRemove={(stableId) => props.onChainRemove('heart', stableId)}
         onMove={(stableId, direction) => props.onChainMove('heart', stableId, direction)}

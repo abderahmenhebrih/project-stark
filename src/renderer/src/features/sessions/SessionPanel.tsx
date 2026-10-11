@@ -12,7 +12,6 @@ import {
 import { SponsoredWorkingSlot } from '../monetization/sponsored-working/SponsoredWorkingSlot'
 import { NullSponsorProvider } from '../monetization/sponsored-working/sponsor-provider'
 import { buildAiRunId, deriveAiRunState } from '../monetization/sponsored-working/sponsor-lifecycle'
-import { resolveMonetizationEntitlement } from '../monetization/sponsored-working/sponsor-policy'
 import type { CodingMessage } from '../../../../shared/sessions/types'
 import type { SessionContextDraft } from '../../../../shared/context/types'
 import type { ChatAttachment } from '../../../../shared/chat-attachments/types'
@@ -128,7 +127,8 @@ import {
   TAB_LIMIT_NOTICE,
   type SessionTabDraft
 } from './session-tabs'
-import { STARK_WORDMARK_URL } from '../../components/brandAssets'
+import { productionEntitlements, toSponsorEntitlement } from '../billing/entitlements'
+import { useBrandAssets } from '../styles/use-brand-assets'
 import './session.css'
 
 interface SessionPanelProps {
@@ -2071,7 +2071,15 @@ export function SessionPanel({
       }),
     [workspaceId, state.selectedSessionId, state.generationRequestId]
   )
-  const sponsorEntitlement = useMemo(() => resolveMonetizationEntitlement('free'), [])
+  // Central product entitlements drive the sponsor gate and the
+  // LoopLink caps (Free today; paid/funded states arrive with the
+  // billing backend). Sponsor lifecycle/viewability/privacy logic is
+  // untouched.
+  const sponsorProductEntitlements = useMemo(() => productionEntitlements(), [])
+  const sponsorEntitlement = useMemo(() => toSponsorEntitlement(sponsorProductEntitlements), [sponsorProductEntitlements])
+  // Style-aware empty-session watermark (Settings → Styles). Same
+  // opacity/layout — only the asset family changes.
+  const { wordmarkUrl: brandWordmarkUrl } = useBrandAssets()
   const latestMessage = state.messages[state.messages.length - 1] ?? null
   const showRetry =
     latestMessage !== null &&
@@ -2204,7 +2212,19 @@ export function SessionPanel({
               onUseModel: () => void handleUseModel(),
               brainChain: modelChains.brain,
               heartChain: modelChains.heart,
-              onChainAdd: (chain, stableId) => modelChainsDispatch({ type: 'chain-add', workspaceId, chain, stableId }),
+              maxBrainModels: sponsorProductEntitlements.maxBrainModels,
+              maxHeartModels: sponsorProductEntitlements.maxHeartModels,
+              onChainAdd: (chain, stableId) =>
+                modelChainsDispatch({
+                  type: 'chain-add',
+                  workspaceId,
+                  chain,
+                  stableId,
+                  maxModels:
+                    chain === 'brain'
+                      ? sponsorProductEntitlements.maxBrainModels
+                      : sponsorProductEntitlements.maxHeartModels
+                }),
               onChainRemove: (chain, stableId) =>
                 modelChainsDispatch({ type: 'chain-remove', workspaceId, chain, stableId }),
               onChainMove: (chain, stableId, direction) =>
@@ -2256,7 +2276,7 @@ export function SessionPanel({
             {conversationEmpty && (
               <img
                 className="session__watermark"
-                src={STARK_WORDMARK_URL}
+                src={brandWordmarkUrl}
                 alt=""
                 aria-hidden="true"
                 draggable={false}

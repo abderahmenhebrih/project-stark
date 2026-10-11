@@ -10,11 +10,21 @@
 /** Visual mode. Only 'dark' renders today; 'system' is reserved. */
 export type AppearanceMode = 'dark' | 'system'
 
+/**
+ * Global STARK brand style. Persisted as a main-owned application
+ * preference (same settings record, no migration): 'free' is the
+ * default; paid styles apply only while entitled (see the styles
+ * registry — applying a locked style falls back to the highest
+ * entitled one).
+ */
+export type BrandStyleId = 'free' | 'magma' | 'frost' | 'void'
+
 /** Complete, validated application settings. Always whole, never partial. */
 export interface StarkSettings {
   readonly appearance: AppearanceMode
   readonly reduceMotion: boolean
   readonly confirmBeforeDestructiveActions: boolean
+  readonly brandStyle: BrandStyleId
 }
 
 /**
@@ -25,6 +35,7 @@ export interface SettingsUpdatePatch {
   readonly appearance?: AppearanceMode
   readonly reduceMotion?: boolean
   readonly confirmBeforeDestructiveActions?: boolean
+  readonly brandStyle?: BrandStyleId
 }
 
 /** Settings slice of the preload bridge (see StarkApi in shared/types). */

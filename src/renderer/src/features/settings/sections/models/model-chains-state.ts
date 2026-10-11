@@ -27,7 +27,14 @@ export function initialModelChainsPanelState(): ModelChainsPanelState {
 
 export type ModelChainsPanelAction =
   | { readonly type: 'workspace-changed'; readonly workspaceId: number }
-  | { readonly type: 'chain-add'; readonly workspaceId: number; readonly chain: 'brain' | 'heart'; readonly stableId: string }
+  | {
+      readonly type: 'chain-add'
+      readonly workspaceId: number
+      readonly chain: 'brain' | 'heart'
+      readonly stableId: string
+      /** Entitlement cap (Free default 5). Absent means Free. */
+      readonly maxModels?: number
+    }
   | { readonly type: 'chain-remove'; readonly workspaceId: number; readonly chain: 'brain' | 'heart'; readonly stableId: string }
   | {
       readonly type: 'chain-move'
@@ -49,7 +56,7 @@ export function modelChainsPanelReducer(
         return state
       }
       const current = action.chain === 'brain' ? state.brain : state.heart
-      const outcome = addToChain(current, action.stableId)
+      const outcome = addToChain(current, action.stableId, action.maxModels)
       if (!outcome.applied) {
         return state
       }

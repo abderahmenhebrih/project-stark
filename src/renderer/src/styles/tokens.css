@@ -59,3 +59,36 @@
   --stark-radius-lg: 16px;
   --stark-radius-pill: 999px;
 }
+
+/**
+ * Brand style overrides (Settings → Styles). The base :root tokens
+ * above are the Free style and never change; each tier re-points the
+ * existing primary/accent token names only. Magenta (secondary/AI
+ * accent) and all semantic colors are identical across styles.
+ */
+:root[data-stark-style='magma'] {
+  --stark-lime: #ff6a00;
+  --stark-lime-dim: rgba(255, 106, 0, 0.12);
+  --stark-lime-text: #0a0c0a;
+  --stark-accent: #ff6a00;
+  --stark-accent-dim: rgba(255, 106, 0, 0.12);
+  --stark-accent-text: #0a0c0a;
+}
+
+:root[data-stark-style='frost'] {
+  --stark-lime: #cfe9ff;
+  --stark-lime-dim: rgba(207, 233, 255, 0.14);
+  --stark-lime-text: #0a0c0a;
+  --stark-accent: #cfe9ff;
+  --stark-accent-dim: rgba(207, 233, 255, 0.14);
+  --stark-accent-text: #0a0c0a;
+}
+
+:root[data-stark-style='void'] {
+  --stark-lime: #f4f4f5;
+  --stark-lime-dim: rgba(244, 244, 245, 0.12);
+  --stark-lime-text: #0a0c0a;
+  --stark-accent: #f4f4f5;
+  --stark-accent-dim: rgba(244, 244, 245, 0.12);
+  --stark-accent-text: #0a0c0a;
+}

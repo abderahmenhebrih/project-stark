@@ -20,7 +20,8 @@ function openService(): { db: DatabaseSync; service: SettingsService } {
 const CANONICAL_DEFAULTS = {
   appearance: 'dark',
   reduceMotion: false,
-  confirmBeforeDestructiveActions: true
+  confirmBeforeDestructiveActions: true,
+  brandStyle: 'free'
 } as const
 
 describe('SettingsService', () => {
@@ -40,7 +41,8 @@ describe('SettingsService', () => {
       assert.deepEqual(await service.getSettings(), {
         appearance: 'system',
         reduceMotion: false,
-        confirmBeforeDestructiveActions: false
+        confirmBeforeDestructiveActions: false,
+        brandStyle: 'free'
       })
     } finally {
       db.close()
@@ -66,7 +68,8 @@ describe('SettingsService', () => {
       assert.deepEqual(updated, {
         appearance: 'system',
         reduceMotion: true,
-        confirmBeforeDestructiveActions: true
+        confirmBeforeDestructiveActions: true,
+        brandStyle: 'free'
       })
     } finally {
       db.close()
@@ -155,7 +158,8 @@ describe('SettingsService', () => {
       assert.deepEqual(await service.getSettings(), {
         appearance: 'dark',
         reduceMotion: true,
-        confirmBeforeDestructiveActions: true
+        confirmBeforeDestructiveActions: true,
+        brandStyle: 'free'
       })
     } finally {
       db.close()

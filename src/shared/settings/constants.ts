@@ -8,5 +8,6 @@ import type { StarkSettings } from './types'
 export const DEFAULT_SETTINGS: StarkSettings = Object.freeze({
   appearance: 'dark',
   reduceMotion: false,
-  confirmBeforeDestructiveActions: true
+  confirmBeforeDestructiveActions: true,
+  brandStyle: 'free'
 })

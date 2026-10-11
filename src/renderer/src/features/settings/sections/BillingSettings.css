@@ -1,0 +1,134 @@
+/* Settings → Billing: four substantial product cards. */
+
+.billing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: var(--stark-space-md);
+  margin-top: var(--stark-space-md);
+}
+
+@media (max-width: 700px) {
+  .billing-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.billing-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--stark-space-xs);
+  min-height: 420px;
+  padding: var(--stark-space-md);
+  background: var(--stark-surface);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-md);
+}
+
+.billing-card--upgrade {
+  border-color: var(--stark-text-dim);
+}
+
+.billing-card--best {
+  border-color: var(--stark-lime);
+}
+
+.billing-card--wallet {
+  border-style: dashed;
+}
+
+.billing-card__flag {
+  position: absolute;
+  top: -11px;
+  right: var(--stark-space-md);
+  margin: 0;
+  padding: 2px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--stark-lime-text);
+  background: var(--stark-lime);
+  border-radius: var(--stark-radius-pill);
+}
+
+.billing-card__flag--wallet {
+  color: var(--stark-text);
+  background: var(--stark-elevated);
+  border: 1px solid var(--stark-border);
+}
+
+.billing-card__logo {
+  width: 100%;
+  max-width: 190px;
+  height: 48px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.billing-card__name {
+  margin: var(--stark-space-xs) 0 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--stark-text);
+}
+
+.billing-card__price {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--stark-lime);
+}
+
+.billing-card__type {
+  margin: 0;
+  font-size: 12px;
+  color: var(--stark-text-dim);
+}
+
+.billing-card__facts {
+  margin: var(--stark-space-xs) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--stark-text);
+}
+
+.billing-card__models {
+  margin-top: var(--stark-space-xs);
+  font-size: 12px;
+  color: var(--stark-text-dim);
+}
+
+.billing-card__models > summary {
+  cursor: pointer;
+  color: var(--stark-text);
+}
+
+.billing-card__models ul {
+  margin: var(--stark-space-xs) 0 0;
+  padding-left: var(--stark-space-md);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.billing-card__action {
+  margin-top: auto;
+  padding-top: var(--stark-space-sm);
+}
+
+.billing-card__current {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--stark-lime);
+}
+
+.billing-card__action .explorer__secondary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}

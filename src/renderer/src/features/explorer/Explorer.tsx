@@ -22,9 +22,9 @@ import { normalizeFormatterError } from '../../lib/format-error'
 import type { WorkspaceSearchMatch } from '../../../../shared/workspace-search/types'
 import type { SessionContextDraft } from '../../../../shared/context/types'
 import { PluginsPanel } from '../plugins/PluginsPanel'
+import { useBrandAssets } from '../styles/use-brand-assets'
 import type { ActivityKind } from './ActivityRail'
 import { StarkMark } from '../../components/StarkMark'
-import { STARK_WORDMARK_URL } from '../../components/brandAssets'
 import { StarkIcon } from '../../components/icons/StarkIcon'
 import { WorkspaceToolsDrawer } from '../../layouts/WorkspaceToolsDrawer'
 import { WorkspaceSecondaryPane, type SecondaryTabKind } from '../workspace/WorkspaceSecondaryPane'
@@ -273,6 +273,8 @@ interface ExplorerProps {
   readonly onToggleTerminal: () => void
   /** Session workspace rendered as the primary pane (always mounted on desktop). */
   readonly sessionNode: ReactNode
+  /** Route to Settings → Billing (shell-owned; plugins upgrade path). */
+  readonly onNavigateBilling?: () => void
 }
 
 /**
@@ -323,8 +325,12 @@ export function Explorer({
   onOpenSidebar,
   terminalOpen,
   onToggleTerminal,
-  sessionNode
+  sessionNode,
+  onNavigateBilling
 }: ExplorerProps): ReactElement {
+  // Style-aware empty-state brand (Settings → Styles). Same geometry —
+  // only the asset family changes with the selected style.
+  const brand = useBrandAssets()
   const [state, dispatch] = useReducer(explorerReducer, workspaceId, (id) => ({
     ...initialExplorerState(),
     workspaceId: id
@@ -1736,8 +1742,8 @@ export function Explorer({
     if (state.preview === null) {
       return (
         <div className="editor-empty" role="status" aria-label="No file selected">
-          <StarkMark size="hero" />
-          <img className="editor-empty__wordmark" src={STARK_WORDMARK_URL} alt="STARK" />
+          <StarkMark size="hero" src={brand.iconUrl} />
+          <img className="editor-empty__wordmark" src={brand.wordmarkUrl} alt="STARK" />
           <p className="editor-empty__title">Select a file to open</p>
           <p className="editor-empty__hint">Open a file from the Explorer · attach context · ask STARK on the right</p>
         </div>
@@ -1909,7 +1915,7 @@ export function Explorer({
               onKill={(sessionId) => void handleKillTerminal(sessionId)}
             />
           ) : activity === 'plugins' ? (
-            <PluginsPanel />
+            <PluginsPanel onNavigateBilling={onNavigateBilling} />
           ) : null}
         </div>
       </WorkspaceToolsDrawer>

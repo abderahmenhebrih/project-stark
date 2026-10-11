@@ -244,7 +244,8 @@ describe('settings IPC bindings', () => {
       assert.deepEqual(await get.invoke(), {
         appearance: 'dark',
         reduceMotion: true,
-        confirmBeforeDestructiveActions: true
+        confirmBeforeDestructiveActions: true,
+        brandStyle: 'free'
       })
     } finally {
       db.close()
@@ -263,7 +264,8 @@ describe('settings IPC bindings', () => {
       assert.deepEqual(await service.getSettings(), {
         appearance: 'system',
         reduceMotion: false,
-        confirmBeforeDestructiveActions: true
+        confirmBeforeDestructiveActions: true,
+        brandStyle: 'free'
       })
     } finally {
       db.close()
@@ -280,7 +282,8 @@ describe('settings IPC bindings', () => {
       assert.deepEqual(await reset.invoke(), {
         appearance: 'dark',
         reduceMotion: false,
-        confirmBeforeDestructiveActions: true
+        confirmBeforeDestructiveActions: true,
+        brandStyle: 'free'
       })
     } finally {
       db.close()

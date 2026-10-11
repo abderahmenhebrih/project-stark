@@ -1,0 +1,72 @@
+/* Settings → Styles: four substantial brand-style cards. */
+
+.styles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: var(--stark-space-md);
+  margin-top: var(--stark-space-md);
+}
+
+.styles-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--stark-space-xs);
+  min-height: 220px;
+  padding: var(--stark-space-md);
+  background: var(--stark-surface);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-md);
+}
+
+.styles-card--active {
+  border-color: var(--stark-lime);
+}
+
+.styles-card__logo {
+  width: 100%;
+  max-width: 200px;
+  height: 56px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.styles-card__name {
+  margin: var(--stark-space-xs) 0 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--stark-text);
+}
+
+.styles-card__colors {
+  margin: 0;
+  font-size: 12px;
+  color: var(--stark-text-dim);
+}
+
+.styles-card__state {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--stark-text-dim);
+}
+
+.styles-card--active .styles-card__state {
+  color: var(--stark-lime);
+}
+
+.styles-card__requirement {
+  margin: 0;
+  font-size: 12px;
+  color: var(--stark-text-dim);
+}
+
+.styles-card .explorer__secondary {
+  margin-top: auto;
+}
+
+.styles-card .explorer__secondary:disabled {
+  opacity: 0.45;
+}

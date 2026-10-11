@@ -262,6 +262,7 @@ export function HomePage(): ReactElement {
           onOpenSidebar={handleOpenSidebar}
           terminalOpen={terminalOpen}
           onToggleTerminal={handleToggleTerminal}
+          onNavigateBilling={() => handleOpenSettings('billing')}
           sessionNode={
             <SessionPanel
               key={active.id}

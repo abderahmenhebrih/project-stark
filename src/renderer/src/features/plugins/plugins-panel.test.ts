@@ -55,24 +55,37 @@ describe('plugins activity replaces changes', () => {
     assert.ok(icons.includes("'plugins'"), 'icon set must define the plug glyph')
   })
 
-  it('selecting Plugins opens the PLUGINS drawer with placeholder copy', () => {
+  it('selecting Plugins opens the PLUGINS drawer with entitlement copy', () => {
     const drawer = readRenderer('layouts/WorkspaceToolsDrawer.tsx')
     assert.ok(drawer.includes("plugins: 'PLUGINS'"), 'drawer must title the plugins activity')
     const explorer = readRenderer('features/explorer/Explorer.tsx')
     assert.ok(explorer.includes("activity === 'plugins'"), 'drawer must branch on the plugins activity')
-    assert.ok(explorer.includes('<PluginsPanel'), 'plugins branch must render the placeholder panel')
+    assert.ok(explorer.includes('<PluginsPanel'), 'plugins branch must render the panel')
     const panel = readRenderer('features/plugins/PluginsPanel.tsx')
-    assert.ok(panel.includes('Connect STARK to your apps and accounts.'), 'placeholder must state the future purpose')
-    assert.ok(panel.includes('Coming later.'), 'placeholder must mark the surface as reserved')
+    assert.ok(
+      panel.includes('Plugins are available with STARK Magma, Frost, or funded Void.'),
+      'Free must see the upgrade path'
+    )
+    assert.ok(panel.includes('Connect STARK to your apps and accounts.'), 'paid states keep the future purpose')
+    assert.ok(panel.includes('Coming later.'), 'paid states mark the surface as reserved')
     assert.ok(panel.includes('aria-label="Plugins"'), 'placeholder must stay accessible')
+  })
+
+  it('Free upgrade routes to Billing while paid states stay control-free', () => {
+    const explorer = codeOnly(readRenderer('features/explorer/Explorer.tsx'))
+    assert.ok(explorer.includes('onNavigateBilling'), 'drawer must thread the Billing route to the panel')
+    const home = codeOnly(readRenderer('pages/HomePage.tsx'))
+    assert.ok(home.includes("handleOpenSettings('billing')"), 'Billing route must open Settings → Billing')
+    const panel = codeOnly(readRenderer('features/plugins/PluginsPanel.tsx'))
+    assert.ok(panel.includes('View Billing'), 'Free upgrade must offer the Billing route')
+    assert.ok(panel.includes('productionEntitlements'), 'panel must derive the central Free default')
   })
 
   it('placeholder carries no fake provider surface', () => {
     const panel = codeOnly(readRenderer('features/plugins/PluginsPanel.tsx'))
-    for (const fake of ['GitHub', 'Google', 'Slack', 'Discord', 'Notion', 'OAuth', 'API key', '>Connect<']) {
+    for (const fake of ['Slack', 'Discord', 'Notion', 'OAuth', 'API key', '>Connect<']) {
       assert.ok(!panel.includes(fake), `placeholder must not contain ${fake}`)
     }
-    assert.ok(!panel.includes('<button'), 'placeholder must offer no controls at all')
     assert.ok(!panel.includes('.invoke('), 'placeholder must add no IPC')
     assert.ok(!panel.includes('fetch('), 'placeholder must make no network requests')
   })
