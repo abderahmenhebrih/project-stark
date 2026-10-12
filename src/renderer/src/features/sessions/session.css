@@ -559,6 +559,39 @@
   color: var(--stark-text);
 }
 
+/* Agent-target pill: STARK reads brand lime, external reads neutral
+   until selected. Effort pill stays neutral; the checked menu item
+   carries the accent. Disabled Kilo rows show the honest reason. */
+.session__modepill--target {
+  color: var(--stark-lime);
+  border-color: var(--stark-lime);
+  background: var(--stark-lime-dim);
+}
+
+.session__modepill--effort {
+  color: var(--stark-text-dim);
+  border-color: var(--stark-border);
+  background: var(--stark-elevated);
+}
+
+.session__modemenu-item:disabled {
+  opacity: 0.75;
+  cursor: default;
+}
+
+.session__modemenu-item:disabled:hover {
+  color: var(--stark-text-dim);
+  background: transparent;
+}
+
+.session__modemenu-reason {
+  display: block;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--stark-text-dim);
+  white-space: normal;
+}
+
 .session__send {
   min-height: 34px;
   padding: 8px 18px;

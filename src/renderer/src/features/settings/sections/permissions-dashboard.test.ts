@@ -13,11 +13,13 @@ import {
 } from '../../sessions/capabilities-state'
 
 /**
- * Permissions dashboard redesign (visual/layout only): global card,
- * grouped 2-column grid, segmented single-choice policies. Behavior
- * runs through the untouched reducer; structure asserted against
- * source. Security semantics pinned: same 9 ids, same legal modes,
- * same default-deny, same explicit save, no schema/IPC changes.
+ * Permissions LoopLink-style table with real switches (presentation
+ * only): one shared container, Capability/Description/Mode columns,
+ * group section rows, one switch per row (OFF = ask, ON = allow where
+ * legal), fixed ask-only rows, legacy deny shown as a tiny note until
+ * the user flips the switch. Behavior runs through the untouched
+ * reducer; structure asserted against source. Deny stays a first-class
+ * runtime mode — only its button is gone.
  */
 function readSource(...parts: string[]): string {
   const file = join(process.cwd(), ...parts)
@@ -33,96 +35,130 @@ function bound(): CapabilityPanelState {
   return { ...initialCapabilityPanelState(), workspaceId: 7 }
 }
 
-describe('permissions dashboard structure', () => {
-  it('global Agent Permissions card exists with a single switch', () => {
+describe('permissions switch table structure', () => {
+  it('renders one shared table with Capability / Description / Mode columns', () => {
     const page = readRenderer('features/settings/sections/PermissionsSettings.tsx')
-    assert.ok(page.includes('Agent Permissions'), 'global card must exist')
-    assert.ok(page.includes('permissions-global'), 'global card must be one horizontal surface')
-    assert.ok(page.includes('Disabled') && page.includes('Enabled'), 'switch must offer Disabled/Enabled')
+    assert.ok(!page.includes('permissions-card'), 'no card surfaces may remain')
+    assert.ok(page.includes('permissions-table'), 'one shared table container must exist')
+    assert.ok(page.includes('<table'), 'capabilities must render as a real table')
+    for (const header of ['Capability', 'Description', 'Mode']) {
+      assert.ok(page.includes(header), `column ${header} must exist`)
+    }
   })
 
-  it('capability cards render from source truth in three groups', () => {
+  it('master switch lives in the container header', () => {
     const page = readRenderer('features/settings/sections/PermissionsSettings.tsx')
+    assert.ok(page.includes('permissions-master'), 'master must sit in the table header')
+    assert.ok(page.includes('Enable all permissions'), 'master must offer enabling all')
+    assert.ok(page.includes('Agent permissions {enabled ?'), 'plain status line must remain')
+  })
+
+  it('9 capability rows render in 5 + 2 + 2 group sections', () => {
+    const page = readRenderer('features/settings/sections/PermissionsSettings.tsx')
+    assert.ok(page.includes('CAPABILITY_ORDER'), 'rows must derive from the canonical order')
     for (const group of ['Read & inspect', 'Change & import', 'Execute & generate']) {
       assert.ok(page.includes(group), `group ${group} must exist`)
     }
-    assert.ok(page.includes('CAPABILITY_ORDER'), 'cards must derive from the canonical order')
-    const css = readRenderer('features/settings/sections/PermissionsSettings.css')
-    assert.ok(css.includes('.permissions-grid'), 'cards must sit in a grid')
+    assert.deepEqual(CAPABILITY_ORDER.length, 9)
   })
 
-  it('desktop grid uses 2 columns and stacks narrow', () => {
-    const css = readRenderer('features/settings/sections/PermissionsSettings.css')
-    const grid = css.match(/\.permissions-grid\s*\{[^}]*\}/)
-    assert.ok(grid !== null && grid[0].includes('repeat(2,'), 'desktop grid must be 2 columns')
-    assert.ok(css.includes('@media'), 'narrow layout must stack to one column')
-  })
-
-  it('policies render as one segmented single-choice control', () => {
+  it('policies render as one real switch, not segmented buttons', () => {
     const page = readRenderer('features/settings/sections/PermissionsSettings.tsx')
-    assert.ok(page.includes('role="radiogroup"'), 'policy must use single-choice semantics')
-    assert.ok(page.includes('role="radio"'), 'options must be radios, not unrelated toggles')
-    assert.ok(page.includes('aria-checked'), 'selection must be exposed')
-    assert.ok(page.includes('permissions-segment'), 'options must read as one control')
+    assert.ok(page.includes('role="switch"'), 'policies must be real switches')
+    assert.ok(page.includes('permissions-switch'), 'switch styling must exist')
+    assert.ok(!page.includes('role="radiogroup"'), 'no segmented button groups may remain')
+    assert.ok(!page.includes('>Always ask</button>'), 'no Always-ask buttons may remain')
+    assert.ok(page.includes('Always ask') && page.includes('Allow'), 'switch flanking labels must exist')
   })
 
-  it('restricted capabilities still offer no Allow', () => {
+  it('switch maps OFF to ask and ON to allow where legal', () => {
+    const page = readRenderer('features/settings/sections/PermissionsSettings.tsx')
+    assert.ok(page.includes('aria-checked={checked}'), 'checked state must reflect the policy')
+    assert.ok(page.includes('const checked = mode === '), 'checked must derive from allow')
+    assert.ok(page.includes("mode: checked ? 'ask' : 'allow'"), 'OFF flip must set ask, ON flip must set allow')
+  })
+
+  it('ask-only rows render a disabled OFF switch with no Allow path', () => {
     assert.deepEqual(legalModesFor('terminal.execute'), ['deny', 'ask'])
     assert.deepEqual(legalModesFor('attachment.import'), ['deny', 'ask'])
     assert.deepEqual(legalModesFor('image.generate'), ['deny', 'ask'])
-    assert.deepEqual(legalModesFor('workspace.read'), ['deny', 'ask', 'allow'])
     const page = readRenderer('features/settings/sections/PermissionsSettings.tsx')
-    assert.ok(page.includes('legalModesFor(capability).map'), 'options must come from legal modes only')
+    assert.ok(page.includes('aria-disabled={!allowLegal}'), 'ask-only must expose its locked state')
+    assert.ok(page.includes('Always ask is required for this capability.'), 'ask-only must explain itself')
   })
 
-  it('only execution-effect capabilities carry the Sensitive flag', () => {
+  it('no normal visible Deny selection exists', () => {
     const page = readRenderer('features/settings/sections/PermissionsSettings.tsx')
-    assert.ok(page.includes('Sensitive'), 'sensitive capabilities must stand out')
-    assert.ok(page.includes("'terminal.execute', 'image.generate'"), 'exactly terminal + image generation qualify')
+    assert.ok(!page.includes("'Deny'") && !page.includes('>Deny<'), 'no Deny button may render')
   })
 
-  it('descriptions stay security-honest with the human-review warning', () => {
+  it('legacy deny renders as a tiny note until the user flips the switch', () => {
     const page = readRenderer('features/settings/sections/PermissionsSettings.tsx')
-    assert.ok(page.includes('Terminal execution always requires approval for the exact command.'))
-    assert.ok(page.includes('Allowing proposals does not allow STARK to apply them.'))
+    assert.ok(page.includes("mode === 'deny'"), 'note must derive from the stored mode')
+    assert.ok(page.includes('Blocked'), 'stored deny must surface honestly but quietly')
+    assert.ok(!page.includes('permissions-blocked'), 'no large Blocked badge may remain')
+  })
+
+  it('switches carry accessible names and focus states', () => {
+    const page = readRenderer('features/settings/sections/PermissionsSettings.tsx')
+    assert.ok(page.includes('Allow ${name} without asking'), 'switch must name its capability')
+    assert.ok(page.includes('aria-label="Enable Agent Permissions"'), 'master switch must be labelled')
+    const css = readRenderer('features/settings/sections/PermissionsSettings.css')
+    assert.ok(css.includes(':focus-visible'), 'switches must show focus')
+    assert.ok(css.includes('@media'), 'narrow layout must stack without cards')
+  })
+
+  it('safety note and save flow are preserved', () => {
+    const page = readRenderer('features/settings/sections/PermissionsSettings.tsx')
     assert.ok(page.includes('Permissions only control whether future STARK Worker tools may request an action.'))
-  })
-
-  it('icons come from the existing local set (no new dependencies)', () => {
-    const page = readRenderer('features/settings/sections/PermissionsSettings.tsx')
-    assert.ok(page.includes('StarkIcon'), 'cards must use the local glyph set')
-    assert.ok(!page.includes('.invoke('), 'dashboard must add no IPC')
+    assert.ok(page.includes('Save permissions'))
+    assert.ok(!page.includes('.invoke('), 'table must add no IPC')
   })
 })
 
-describe('permissions dashboard behavior (untouched reducer)', () => {
-  it('covers exactly the 9 source-truth capabilities in canonical order', () => {
-    assert.deepEqual([...CAPABILITY_ORDER], [
-      'workspace.read', 'workspace.search', 'git.read', 'change.propose', 'attachment.import',
-      'image.generate', 'terminal.execute', 'runtime.observe', 'preview.inspect'
-    ])
+describe('permissions switch behavior (untouched reducer)', () => {
+  it('underlying deny mode still exists in runtime/state', () => {
+    let state = bound()
+    state = capabilityPanelReducer(state, { type: 'mode-selected', workspaceId: 7, capability: 'workspace.read', mode: 'deny' })
+    assert.equal(state.draft.modes['workspace.read'], 'deny')
+    assert.deepEqual(legalModesFor('workspace.read'), ['deny', 'ask', 'allow'])
   })
 
-  it('global Disabled preserves configured policies (nothing erased, nothing reset)', () => {
+  it('persisted deny survives until an explicit switch flip', () => {
+    let state = bound()
+    state = capabilityPanelReducer(state, { type: 'mode-selected', workspaceId: 7, capability: 'workspace.read', mode: 'deny' })
+    state = capabilityPanelReducer(state, { type: 'enabled-toggled', workspaceId: 7, enabled: false })
+    assert.equal(state.draft.modes['workspace.read'], 'deny')
+    state = capabilityPanelReducer(state, { type: 'mode-selected', workspaceId: 7, capability: 'workspace.read', mode: 'ask' })
+    assert.equal(state.draft.modes['workspace.read'], 'ask')
+    state = capabilityPanelReducer(state, { type: 'mode-selected', workspaceId: 7, capability: 'workspace.read', mode: 'allow' })
+    assert.equal(state.draft.modes['workspace.read'], 'allow')
+  })
+
+  it('master Off/On preserves configured policies', () => {
     let state = bound()
     state = capabilityPanelReducer(state, { type: 'mode-selected', workspaceId: 7, capability: 'workspace.read', mode: 'allow' })
     state = capabilityPanelReducer(state, { type: 'enabled-toggled', workspaceId: 7, enabled: false })
     assert.equal(state.draft.enabled, false)
     assert.equal(state.draft.modes['workspace.read'], 'allow')
-  })
-
-  it('enabling mutates no individual policy values', () => {
-    let state = bound()
-    const before = { ...state.draft.modes }
     state = capabilityPanelReducer(state, { type: 'enabled-toggled', workspaceId: 7, enabled: true })
-    assert.deepEqual({ ...state.draft.modes }, before)
+    assert.equal(state.draft.modes['workspace.read'], 'allow')
   })
 
-  it('draft edits stay explicit-save (no autosave surface)', () => {
-    const draft = emptyCapabilityDraft()
-    assert.equal(draft.enabled, false)
+  it('restricted allow stays rejected and defaults stay deny-everywhere', () => {
+    let state = bound()
+    state = capabilityPanelReducer(state, { type: 'mode-selected', workspaceId: 7, capability: 'terminal.execute', mode: 'allow' })
+    assert.equal(state.draft.modes['terminal.execute'], 'deny')
+    const fresh = emptyCapabilityDraft()
+    assert.ok(Object.values(fresh.modes).every((mode) => mode === 'deny'))
     const loaded = capabilityDraftFromConfig({ workspaceId: 7, enabled: true, policies: [] })
-    assert.equal(loaded.enabled, true)
     assert.equal(loaded.modes['git.read'], 'deny')
+  })
+
+  it('capability IDs are unchanged (exactly the 9 source-truth ids)', () => {
+    assert.deepEqual([...CAPABILITY_ORDER], [
+      'workspace.read', 'workspace.search', 'git.read', 'change.propose', 'attachment.import',
+      'image.generate', 'terminal.execute', 'runtime.observe', 'preview.inspect'
+    ])
   })
 })

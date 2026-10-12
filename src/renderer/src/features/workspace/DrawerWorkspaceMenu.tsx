@@ -1,6 +1,6 @@
 import { useState, type ReactElement } from 'react'
 import { useApp } from '../../app/app-context'
-import { StarkIcon } from '../../components/icons/StarkIcon'
+import { UiIcon } from '../../components/icons/UiIcon'
 import { chooseWorkspaceWithGuards, openWorkspaceWithGuards } from './workspace-switch'
 
 /**
@@ -37,7 +37,7 @@ export function DrawerWorkspaceMenu(): ReactElement {
         aria-label="Workspace actions"
         title="Workspace actions"
       >
-        <StarkIcon name="more" size={16} />
+        <UiIcon name="more" size={16} />
       </button>
       {menuOpen && (
         <div

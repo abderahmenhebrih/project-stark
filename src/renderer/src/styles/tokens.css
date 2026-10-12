@@ -31,6 +31,20 @@
   --stark-accent-dim: rgba(200, 255, 0, 0.12);
   --stark-accent-text: #0a0c0a;
 
+  /*
+   * Central brand-primary aliases (composer hardening): every
+   * brand-primary surface may consume these instead of the lime
+   * names. They always equal the active style's primary — Free =
+   * lime, Magma = volcano orange, Frost/Void per registry. Semantic
+   * success/warning/error colors are separate and never aliased here.
+   */
+  --stark-primary: #c8ff00;
+  --stark-primary-hover: #c8ff00;
+  --stark-primary-soft: rgba(200, 255, 0, 0.12);
+  --stark-primary-border: #c8ff00;
+  --stark-primary-glow: rgba(200, 255, 0, 0.12);
+  --stark-primary-rgb: 200, 255, 0;
+
   /* Secondary brand accent: neon magenta (AI/Brain/assistant identity) */
   --stark-magenta: #ff2ea6;
   --stark-magenta-dim: rgba(255, 46, 166, 0.12);
@@ -73,6 +87,12 @@
   --stark-accent: #ff6a00;
   --stark-accent-dim: rgba(255, 106, 0, 0.12);
   --stark-accent-text: #0a0c0a;
+  --stark-primary: #ff6a00;
+  --stark-primary-hover: #ff6a00;
+  --stark-primary-soft: rgba(255, 106, 0, 0.12);
+  --stark-primary-border: #ff6a00;
+  --stark-primary-glow: rgba(255, 106, 0, 0.12);
+  --stark-primary-rgb: 255, 106, 0;
 }
 
 :root[data-stark-style='frost'] {
@@ -82,6 +102,12 @@
   --stark-accent: #cfe9ff;
   --stark-accent-dim: rgba(207, 233, 255, 0.14);
   --stark-accent-text: #0a0c0a;
+  --stark-primary: #cfe9ff;
+  --stark-primary-hover: #cfe9ff;
+  --stark-primary-soft: rgba(207, 233, 255, 0.14);
+  --stark-primary-border: #cfe9ff;
+  --stark-primary-glow: rgba(207, 233, 255, 0.14);
+  --stark-primary-rgb: 207, 233, 255;
 }
 
 :root[data-stark-style='void'] {
@@ -91,4 +117,10 @@
   --stark-accent: #f4f4f5;
   --stark-accent-dim: rgba(244, 244, 245, 0.12);
   --stark-accent-text: #0a0c0a;
+  --stark-primary: #f4f4f5;
+  --stark-primary-hover: #f4f4f5;
+  --stark-primary-soft: rgba(244, 244, 245, 0.12);
+  --stark-primary-border: #f4f4f5;
+  --stark-primary-glow: rgba(244, 244, 245, 0.12);
+  --stark-primary-rgb: 244, 244, 245;
 }

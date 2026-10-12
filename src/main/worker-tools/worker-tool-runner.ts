@@ -7,6 +7,8 @@ import type { OrchestrationRepository } from '../database/repositories/orchestra
 import type { HeartService } from '../heart/heart-service'
 import type { AiProviderService } from '../ai/ai-provider-service'
 import { AiOperationGuard } from '../ai/ai-operation-guard'
+import { deriveStarkRunPolicy, STARK_POLICY_ABSOLUTE_CAPS } from '../ai/stark-run-policy'
+import { isStarkEffort, type StarkEffort } from '../../shared/agent-target/types'
 import type { LooplinkRepository } from '../looplink/looplink-repository'
 import type { LooplinkService } from '../looplink/looplink-service'
 import { formatProviderContext } from '../session-context/session-context-service'
@@ -415,7 +417,7 @@ export class WorkerToolRunner {
   }
 
   async runToolWork(payload: unknown): Promise<WorkRecoveryResult> {
-    const { workspaceId, sessionId } = this.parseScope(payload)
+    const { workspaceId, sessionId, effort } = this.parseScope(payload)
     this.requireOwnership(workspaceId, sessionId)
     if (this.deps.tools.hasPending(sessionId)) {
       throw new PendingApprovalBlockedError()
@@ -425,7 +427,7 @@ export class WorkerToolRunner {
     }
     this.deps.guard.acquire(sessionId)
     try {
-      return await this.runInner(workspaceId, sessionId)
+      return await this.runInner(workspaceId, sessionId, effort)
     } finally {
       if (!this.deps.guard.isActive(sessionId)) {
         // Already released on the waiting path.
@@ -467,8 +469,10 @@ export class WorkerToolRunner {
     }
   }
 
-  private parseScope(payload: unknown): { workspaceId: number; sessionId: number } {
-    if (!hasStrictShape(payload, ['workspaceId', 'sessionId'])) {
+  private parseScope(payload: unknown): { workspaceId: number; sessionId: number; effort: StarkEffort } {
+    // 'effort' is optional (Regular baseline when absent); a
+    // present-but-invalid value is rejected, never defaulted silently.
+    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort'])) {
       throw new InvalidBrainRequestError('brain request is invalid')
     }
     const record = payload as Record<string, unknown>
@@ -476,7 +480,14 @@ export class WorkerToolRunner {
     if (!isValidId(workspaceId) || !isValidId(sessionId)) {
       throw new InvalidBrainRequestError('session reference is invalid')
     }
-    return { workspaceId, sessionId }
+    let effort: StarkEffort = 'regular'
+    if ('effort' in record && record['effort'] !== undefined) {
+      if (!isStarkEffort(record['effort'])) {
+        throw new InvalidBrainRequestError('effort is invalid')
+      }
+      effort = record['effort']
+    }
+    return { workspaceId, sessionId, effort }
   }
 
   private parseDecision(payload: unknown): { workspaceId: number; sessionId: number; approvalId: number } {
@@ -736,7 +747,7 @@ export class WorkerToolRunner {
     return [...base.slice(0, -1), { role: 'user' as const, content: block }, trailing]
   }
 
-  private async runInner(workspaceId: number, sessionId: number): Promise<WorkRecoveryResult> {
+  private async runInner(workspaceId: number, sessionId: number, effort: StarkEffort = 'regular'): Promise<WorkRecoveryResult> {
     const latest = this.deps.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
     if (latest === undefined || latest.role !== 'user') {
       throw new BrainNothingToAnswerError()
@@ -747,7 +758,14 @@ export class WorkerToolRunner {
     if (trailing === undefined) {
       throw new BrainNothingToAnswerError()
     }
-    const deadline = this.now() + MAX_ORCHESTRATION_RUN_MS
+    // Effort policy: deadline plus the Worker tool-round budget come
+    // from the ONE central policy (Regular reproduces the baseline:
+    // 150s deadline, 4 tool calls, 5 turns). Model-gated reasoning
+    // resolves per call below; budgets apply regardless of provider.
+    const effortPolicy = deriveStarkRunPolicy(effort, '')
+    const deadline = this.now() + effortPolicy.orchestrationTimeoutMs
+    const maxToolCalls = Math.min(effortPolicy.maxWorkerToolRounds, STARK_POLICY_ABSOLUTE_CAPS.maxWorkerToolRounds)
+    const maxTurns = Math.min(maxToolCalls + 1, STARK_POLICY_ABSOLUTE_CAPS.maxWorkerToolRounds + 1)
     const routing = this.deps.heart.snapshot()
     // Stage 28 frozen usage snapshot: captured once here over the
     // Brain assignment plus every configured Worker assignment. Later
@@ -804,6 +822,9 @@ export class WorkerToolRunner {
       // narrowed function type (narrowing is lost inside closures).
       // Bound to preserve adapter `this`.
       const generateStructured = brainAdapter.generateStructured.bind(brainAdapter)
+      // Effort policy for the plan call (Regular = baseline tokens,
+      // no reasoning parameter).
+      const planPolicy = deriveStarkRunPolicy(effort, brainModel)
       const planSection = this.planChatSection(latest.id, brainResolved.adapter.id, brainModel)
       const planBase =
         persisted.length === 0
@@ -825,7 +846,8 @@ export class WorkerToolRunner {
             model: brainModel,
             instructions: STAGE_18_FIXED_BRAIN_PLANNING_INSTRUCTIONS,
             messages: planMessages,
-            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+            maxOutputTokens: planPolicy.maxOutputTokens,
+            ...(planPolicy.providerReasoningEffort !== null ? { reasoningEffort: planPolicy.providerReasoningEffort } : {}),
             schemaName: BRAIN_PLAN_SCHEMA_NAME,
             schema: BRAIN_PLAN_JSON_SCHEMA,
             ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {})
@@ -888,7 +910,10 @@ export class WorkerToolRunner {
       const contextMessages = context
       const continuityBlock = loop?.block ?? null
       const looplinkId = loop?.looplinkId ?? null
-      for (let turn = 0; turn < MAX_WORKER_TURNS; turn += 1) {
+      // Explicit bounded Worker tool loop: effort policy sets the
+      // turn/tool caps (Regular reproduces the 5-turn / 4-tool
+      // baseline); the absolute caps keep every level bounded.
+      for (let turn = 0; turn < maxTurns; turn += 1) {
         this.requireDeadline(deadline)
         let turnResult: { kind: 'tool_request'; tool: string; args: unknown } | { kind: 'final_text'; text: string }
         try {
@@ -908,7 +933,7 @@ export class WorkerToolRunner {
           break
         }
         // Single tool request (multiples already rejected in workerTurn).
-        if (toolCallCount >= MAX_WORKER_TOOL_CALLS) {
+        if (toolCallCount >= maxToolCalls) {
           this.deps.runs.failRun(runId, toPublicBrainError('run', new InvalidBrainPlanError()).message, this.now())
           throw new WorkerToolLimitError()
         }
@@ -1446,7 +1471,9 @@ export class WorkerToolRunner {
       const workerResolved = await this.deps.providerService.resolveExplicitAssignment(state.workerProviderId, state.workerModel)
       const brainResolved = await this.deps.providerService.resolveExplicitAssignment(state.brainProviderId, state.brainModel)
       try {
-        for (let turn = 0; turn < MAX_WORKER_TURNS; turn += 1) {
+      // Approval-resume loop keeps the fixed baseline bounds (5 turns):
+      // effort budgets applied at run start; resume never widens them.
+      for (let turn = 0; turn < MAX_WORKER_TURNS; turn += 1) {
           this.requireDeadline(deadline)
           const turnResult = await this.workerTurnFromState({ workspaceId, sessionId, runId, state: { ...state, history }, workerResolved })
           if (turnResult.kind === 'final_text') {

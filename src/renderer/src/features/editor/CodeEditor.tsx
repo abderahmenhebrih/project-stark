@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactElement } from 'react'
 import type { editor } from 'monaco-editor/editor/editor.api'
 import type { EditorFocus } from './editor-focus'
 import type { EditorEol } from './editor-document'
-import { STARK_EDITOR_THEME_NAME, registerStarkTheme, starkEditorConstructionOptions } from './editor-theme'
+import { STARK_EDITOR_THEME_NAME, refreshStarkThemeForDocumentStyle, registerStarkTheme, starkEditorConstructionOptions } from './editor-theme'
 import { loadMonaco, type Monaco } from './editor-setup'
 import './editor.css'
 
@@ -159,6 +159,30 @@ export function CodeEditor({
       )
     }
     window.addEventListener('stark:editor-theme-changed', onEditorThemeChanged)
+    // Live brand-style tint (Free ↔ Magma ↔ Frost ↔ Void): re-resolves
+    // the STARK caret/selection colors with no remount, then lets any
+    // active extension theme re-apply over it (best effort, same as
+    // the extension-theme handler above).
+    let styleObserver: MutationObserver | null = null
+    try {
+      if (typeof MutationObserver !== 'undefined' && typeof document !== 'undefined') {
+        styleObserver = new MutationObserver(() => {
+          const ready = instanceRef.current
+          if (ready === null) {
+            return
+          }
+          try {
+            refreshStarkThemeForDocumentStyle(ready.monaco)
+          } catch {
+            // Best effort; the editor keeps its current theme.
+          }
+          onEditorThemeChanged()
+        })
+        styleObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-stark-style'] })
+      }
+    } catch {
+      styleObserver = null
+    }
     loadMonaco().then(
       async (monaco) => {
         if (cancelled || containerRef.current === null) {
@@ -166,6 +190,10 @@ export function CodeEditor({
         }
         try {
           registerStarkTheme(monaco)
+          // Tinted to the live brand style (Magma reads orange): runs
+          // once at mount and again on every style switch below, with
+          // no editor remount and no model loss.
+          refreshStarkThemeForDocumentStyle(monaco)
           const model = monaco.editor.createModel(
             mountProps.initialValue,
             mountProps.language,
@@ -284,6 +312,11 @@ export function CodeEditor({
       cancelled = true
       instanceRef.current = null
       window.removeEventListener('stark:editor-theme-changed', onEditorThemeChanged)
+      try {
+        styleObserver?.disconnect()
+      } catch {
+        // Best effort during teardown.
+      }
       try {
         extensionProviders?.dispose()
       } catch {

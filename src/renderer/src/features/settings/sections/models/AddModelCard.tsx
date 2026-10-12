@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { StarkIcon } from '../../../../components/icons/StarkIcon'
+import { UiIcon } from '../../../../components/icons/UiIcon'
 
 interface AddModelCardProps {
   readonly onOpen: () => void
@@ -14,7 +14,7 @@ export function AddModelCard({ onOpen }: AddModelCardProps): ReactElement {
   return (
     <button className="models-card models-card--add" type="button" onClick={onOpen} aria-label="Add model">
       <span className="models-card__icon" aria-hidden="true">
-        <StarkIcon name="plus" size={22} />
+        <UiIcon name="plus" size={22} />
       </span>
       <span className="models-card__name">Add model</span>
     </button>

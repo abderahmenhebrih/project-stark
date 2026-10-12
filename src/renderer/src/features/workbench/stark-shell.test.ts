@@ -102,11 +102,14 @@ describe('stage 31 D05 shell proof', () => {
     assert.ok(account.includes('<ProfileSection'), 'profile presentation must be absorbed into Account')
   })
 
-  it('12. composer contains Ask, Work, Propose, and Send', () => {
+  it('12. composer contains the agent target, effort, and Send', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    for (const feature of ['Ask', 'Work', 'Propose change', 'Send', 'Composer mode', 'Message composer']) {
+    for (const feature of ['Agent target', 'STARK', 'KILO_DISPLAY_NAME', 'STARK effort', 'Send', 'Message composer']) {
       assert.ok(panel.includes(feature), `composer must contain ${feature}`)
     }
+    // Ask/Work/Propose survive as explicit slash overrides behind the
+    // unified STARK send (primary dropdown replaced by Agent Target).
+    assert.ok(panel.includes('resolveStarkSendMode'), 'composer must resolve sends through the override parser')
   })
 
   it('13. pending approval is adjacent to the composer', () => {
@@ -129,7 +132,7 @@ describe('stage 31 D05 shell proof', () => {
       assert.ok(explorer.includes(feature), `explorer must keep ${feature}`)
     }
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    for (const feature of ['handleNew', 'handleSelect', 'handleSend', 'handleProposalMode', 'handleOpenPreview', 'handleStopRuntime', 'handleApprovalDecision']) {
+    for (const feature of ['handleNew', 'handleSelect', 'handleSend', 'selectAgentTarget', 'selectEffort', 'handleOpenPreview', 'handleStopRuntime', 'handleApprovalDecision']) {
       assert.ok(panel.includes(feature), `session must keep ${feature}`)
     }
     const models = readRenderer('features/settings/sections/ModelsSettings.tsx')

@@ -18,6 +18,31 @@ interface TerminalInstanceViewProps {
 }
 
 /**
+ * Brand cursor theme derived LIVE from the active style tokens
+ * (Settings → Styles). The xterm canvas cannot consume CSS vars
+ * directly, so the computed `--stark-lime` / `--stark-primary-rgb`
+ * values are read at mount and on every style switch — Free reads
+ * lime, Magma reads volcano orange. Semantic colors are untouched.
+ */
+function brandTerminalTheme(): { cursor: string; selectionBackground: string } {
+  const fallback = { cursor: '#c8ff00', selectionBackground: 'rgba(200, 255, 0, 0.25)' }
+  try {
+    if (typeof document === 'undefined' || typeof getComputedStyle === 'undefined') {
+      return fallback
+    }
+    const styles = getComputedStyle(document.documentElement)
+    const cursor = styles.getPropertyValue('--stark-lime').trim()
+    const rgb = styles.getPropertyValue('--stark-primary-rgb').trim()
+    return {
+      cursor: cursor !== '' ? cursor : fallback.cursor,
+      selectionBackground: rgb !== '' ? `rgba(${rgb}, 0.25)` : fallback.selectionBackground
+    }
+  } catch {
+    return fallback
+  }
+}
+
+/**
  * One owned xterm instance bound to exactly one PTY session.
  *
  * The component stays mounted while its session lives — including
@@ -68,8 +93,7 @@ export function TerminalInstanceView({
         theme: {
           background: '#0a0c0a',
           foreground: '#e9f1ea',
-          cursor: '#c8ff00',
-          selectionBackground: 'rgba(200, 255, 0, 0.25)'
+          ...brandTerminalTheme()
         }
       })
       const fit = new FitAddon()
@@ -107,6 +131,38 @@ export function TerminalInstanceView({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
+
+  // Live brand-style cursor: style switches (Free ↔ Magma ↔ Frost
+  // ↔ Void) re-tint the caret/selection with no PTY remount, no
+  // buffer loss, no resize. Observes the style dataset attribute only.
+  useEffect(() => {
+    if (typeof MutationObserver === 'undefined') {
+      return
+    }
+    const root =
+      typeof document !== 'undefined' ? document.documentElement : null
+    if (root === null) {
+      return
+    }
+    const observer = new MutationObserver(() => {
+      const term = terminalRef.current
+      if (term === null) {
+        return
+      }
+      try {
+        const next = brandTerminalTheme()
+        term.options.theme = {
+          ...(term.options.theme as Record<string, string>),
+          cursor: next.cursor,
+          selectionBackground: next.selectionBackground
+        }
+      } catch {
+        // Best effort; the terminal keeps its current theme.
+      }
+    })
+    observer.observe(root, { attributes: true, attributeFilter: ['data-stark-style'] })
+    return () => observer.disconnect()
   }, [sessionId])
 
   function fitAndReport(): void {

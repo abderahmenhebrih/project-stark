@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, type ReactElement } from 'react'
 import type { GitFileStatus } from '../../../../shared/git/types'
-import { StarkIcon } from '../../components/icons/StarkIcon'
+import { UiIcon } from '../../components/icons/UiIcon'
 import { getGitStatus } from '../../lib/git-api'
 import { FILE_ICON_URLS } from '../explorer/fileIconAssets'
 import { getFileIconKind } from '../explorer/fileIconForName'
@@ -44,7 +44,7 @@ function GitHeader({ loading, onRefresh }: { readonly loading: boolean; readonly
         aria-label="Refresh Git status"
         title="Refresh Git status"
       >
-        <StarkIcon name="refresh" size={15} />
+        <UiIcon name="refresh" size={15} />
       </button>
     </div>
   )
@@ -236,7 +236,7 @@ export function GitPanel({ workspaceId, onSelectDiff, onOpenFile }: GitPanelProp
       <GitHeader loading={false} onRefresh={handleRefresh} />
       <div className="git-panel__branch-row">
         <span className="git-panel__branch-icon" aria-hidden="true">
-          <StarkIcon name="git" size={14} />
+          <UiIcon name="git" size={14} />
         </span>
         <span className="git-panel__branch-name" title={branchLabel}>
           {branchLabel}
@@ -248,7 +248,7 @@ export function GitPanel({ workspaceId, onSelectDiff, onOpenFile }: GitPanelProp
       {data.clean ? (
         <p className="git-panel__clean" role="status">
           <span className="git-panel__clean-icon" aria-hidden="true">
-            <StarkIcon name="review" size={16} />
+            <UiIcon name="review" size={16} />
           </span>
           Working tree clean
         </p>

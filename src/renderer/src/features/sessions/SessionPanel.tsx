@@ -61,16 +61,34 @@ import { ContextCard } from './ContextCard'
 import { createPortal } from 'react-dom'
 import { SettingsPage } from '../settings/SettingsPage'
 import type { SettingsSection } from '../settings/settings-section'
-import { StarkIcon } from '../../components/icons/StarkIcon'
+import { UiIcon } from '../../components/icons/UiIcon'
 import { StarkMark } from '../../components/StarkMark'
+import {
+  KILO_DISPLAY_NAME,
+  STARK_EFFORT_LABELS,
+  STARK_EFFORT_TOOLTIPS,
+  STARK_EFFORTS,
+  type AgentTarget,
+  type KiloAvailability,
+  type StarkEffort
+} from '../../../../shared/agent-target/types'
+import {
+  canSelectKilo,
+  DEFAULT_AGENT_TARGET,
+  DEFAULT_STARK_EFFORT,
+  effortVisibleFor,
+  isTargetSwitchBlocked,
+  resolveStarkSendMode
+} from './agent-target-state'
+import { getKiloAvailability } from '../../lib/kilo-api'
+import type { UsageSummary } from '../../../../shared/usage/types'
 import { initialProviderPanelState, providerPanelReducer } from './provider-state'
 import { initialSessionPanelState, sessionPanelReducer } from './session-state'
 import type { SessionContextDraftAction } from './session-context-state'
 import {
   initialProposalState,
   proposalEligibility,
-  proposalReducer,
-  type ProposalMode
+  proposalReducer
 } from './proposal-state'
 import { initialWorkPanelState, workPanelReducer } from './work-state'
 import {
@@ -176,6 +194,22 @@ export interface SessionChromeSnapshot {
   readonly sendBusy: boolean
   /** A creation is in flight: the shell disables + (one creation at a time). */
   readonly creatingSession: boolean
+  /** Composer agent target (STARK default; Kilo only when available). */
+  readonly agentTarget: AgentTarget
+  /** STARK effort selector (applies to STARK runs only). */
+  readonly effort: StarkEffort
+  /** Honest Kilo availability for the target menu + Usage Status. */
+  readonly kilo: KiloAvailability
+  /** Provider truth for Usage Status (configured/not configured). */
+  readonly providerConfigured: boolean
+  /** Actual current model id, or null when none is selected. */
+  readonly providerModel: string | null
+  /** Product plan label for Usage Status (e.g. "STARK Free"). */
+  readonly planLabel: string
+  /** Real local 24h usage summary, or null while unloaded. */
+  readonly usageSummary: UsageSummary | null
+  /** Known managed-runtime preview URL for Live Review, or null. */
+  readonly runtimePreviewUrl: string | null
 }
 
 /** Existing session actions forwarded to the shell unchanged. */
@@ -429,12 +463,27 @@ export function SessionPanel({
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRef = useRef(false)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
-  // Floating-composer mode menu (presentation only): which Ask/Work/
-  // Propose-change mode the existing proposal state runs in. The menu
-  // is transient; the mode itself stays in proposal state.
-  const [modeMenuOpen, setModeMenuOpen] = useState(false)
-  const modeButtonRef = useRef<HTMLButtonElement | null>(null)
-  const modeMenuRef = useRef<HTMLDivElement | null>(null)
+  // Composer agent target + STARK effort (presentation only, per
+  // session inside the existing tab-draft stash — renderer memory
+  // only, never web storage, never the DB, so schema stays v19 with
+  // no migration; the panel remounts per workspace so nothing leaks
+  // across projects). Target switches never touch the draft: the
+  // composer text and staged attachments survive unchanged, and a
+  // switch during an active run is blocked with calm copy.
+  const [agentTarget, setAgentTarget] = useState<AgentTarget>(() => ({ ...DEFAULT_AGENT_TARGET }))
+  const [effort, setEffort] = useState<StarkEffort>(() => DEFAULT_STARK_EFFORT)
+  const [kilo, setKilo] = useState<KiloAvailability>({
+    status: 'unavailable',
+    reason: 'Kilo bridge not available',
+    version: null
+  })
+  const [targetMenuOpen, setTargetMenuOpen] = useState(false)
+  const [effortMenuOpen, setEffortMenuOpen] = useState(false)
+  const [targetBlockedNotice, setTargetBlockedNotice] = useState<string | null>(null)
+  const targetButtonRef = useRef<HTMLButtonElement | null>(null)
+  const targetMenuRef = useRef<HTMLDivElement | null>(null)
+  const effortButtonRef = useRef<HTMLButtonElement | null>(null)
+  const effortMenuRef = useRef<HTMLDivElement | null>(null)
 
   /** Composer textarea auto-grow: 52px floor, 240px cap, then scroll. */
   useEffect(() => {
@@ -446,17 +495,24 @@ export function SessionPanel({
     element.style.height = `${Math.min(element.scrollHeight, 240)}px`
   }, [composer])
 
-  // Mode menu dismissal: Escape closes (focus back on the trigger),
-  // outside pointer-down closes. Listeners live only while open.
+  // Target/effort menu dismissal: Escape closes (focus back on the
+  // trigger), outside pointer-down closes. Listeners live only while
+  // a menu is open.
   useEffect(() => {
-    if (!modeMenuOpen) {
+    if (!targetMenuOpen && !effortMenuOpen) {
       return
     }
     function onKeyDown(event: globalThis.KeyboardEvent): void {
       if (event.key === 'Escape') {
         event.preventDefault()
-        setModeMenuOpen(false)
-        modeButtonRef.current?.focus()
+        const returnToEffort = effortMenuOpen
+        setTargetMenuOpen(false)
+        setEffortMenuOpen(false)
+        if (returnToEffort) {
+          effortButtonRef.current?.focus()
+        } else {
+          targetButtonRef.current?.focus()
+        }
       }
     }
     function onPointerDown(event: PointerEvent): void {
@@ -464,10 +520,16 @@ export function SessionPanel({
       if (!(target instanceof Node)) {
         return
       }
-      if (modeMenuRef.current?.contains(target) === true || modeButtonRef.current?.contains(target) === true) {
+      if (
+        targetMenuRef.current?.contains(target) === true ||
+        targetButtonRef.current?.contains(target) === true ||
+        effortMenuRef.current?.contains(target) === true ||
+        effortButtonRef.current?.contains(target) === true
+      ) {
         return
       }
-      setModeMenuOpen(false)
+      setTargetMenuOpen(false)
+      setEffortMenuOpen(false)
     }
     document.addEventListener('keydown', onKeyDown)
     document.addEventListener('pointerdown', onPointerDown)
@@ -475,7 +537,7 @@ export function SessionPanel({
       document.removeEventListener('keydown', onKeyDown)
       document.removeEventListener('pointerdown', onPointerDown)
     }
-  }, [modeMenuOpen])
+  }, [targetMenuOpen, effortMenuOpen])
 
   const aiReady = provider.configured && provider.selectedModel !== null
 
@@ -767,6 +829,13 @@ export function SessionPanel({
       }
     )
     refreshProviderState()
+    // Real Kilo availability: explicit single probe per workspace
+    // through the existing installed-extension bridge. No polling,
+    // no timers — the menu reflects exactly what is installed.
+    void getKiloAvailability().then(
+      (found) => setKilo(found),
+      () => setKilo({ status: 'unavailable', reason: 'Kilo bridge not available', version: null })
+    )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId])
 
@@ -848,7 +917,9 @@ export function SessionPanel({
       return
     }
     if (prev !== null && prev !== selectedSessionId && openSessionIds.includes(prev)) {
-      const stashed: SessionTabDraft = { composer, attachments, mode: proposal.mode }
+      // The previous tab's live draft is stashed (switching never
+      // discards unsent text, staged attachments, target, or effort).
+      const stashed: SessionTabDraft = { composer, attachments, mode: proposal.mode, target: agentTarget, effort }
       setTabDrafts((drafts) => stashSessionDraft(drafts, prev, stashed))
     }
     if (!openSessionIds.includes(selectedSessionId)) {
@@ -870,6 +941,10 @@ export function SessionPanel({
     const incoming = tabDrafts[selectedSessionId] ?? emptySessionTabDraft(proposal.mode)
     setComposer(incoming.composer)
     setAttachments(incoming.attachments)
+    // Per-session target + effort restore (absent means the
+    // STARK/Regular defaults for fresh tabs).
+    setAgentTarget(incoming.target ?? { kind: 'stark' })
+    setEffort(incoming.effort ?? DEFAULT_STARK_EFFORT)
     if (incoming.mode !== proposal.mode) {
       proposalDispatch({ type: 'mode-changed', workspaceId, mode: incoming.mode })
     }
@@ -900,7 +975,7 @@ export function SessionPanel({
     generationRequestRef.current = requestId
     dispatch({ type: 'generate-started', workspaceId, sessionId, requestId })
     try {
-      const outcome = await generateAssistantResponseRaw({ workspaceId, sessionId })
+      const outcome = await generateAssistantResponseRaw({ workspaceId, sessionId, effort })
       if (generationRequestRef.current !== requestId) {
         return
       }
@@ -1045,7 +1120,7 @@ export function SessionPanel({
 
   /** Live composer draft snapshot for stash/close decisions. */
   function liveDraft(): SessionTabDraft {
-    return { composer, attachments, mode: proposal.mode }
+    return { composer, attachments, mode: proposal.mode, target: agentTarget, effort }
   }
 
   /**
@@ -1157,22 +1232,49 @@ export function SessionPanel({
     if ((isComposerEmpty(content) && attachments.length === 0) || composerByteLength(content) > COMPOSER_MAX_BYTES) {
       return
     }
+    // External targets never send through STARK: Kilo stays
+    // unselectable while its bridge is unavailable, so this is a
+    // fail-closed net with honest copy (never fake Kilo output).
+    if (agentTarget.kind === 'external') {
+      dispatch({
+        type: 'send-failed',
+        workspaceId,
+        sessionId,
+        message: kilo.reason ?? 'Kilo bridge not available.'
+      })
+      return
+    }
+    // Unified STARK send: the Work path handles both questions and
+    // coding tasks (Brain answers directly when no tools are needed).
+    // /ask, /work, /propose are explicit internal overrides reusing
+    // the preserved runtime paths — no classifier, no new model.
+    const resolved = resolveStarkSendMode(content)
+    const sendContent = resolved.content
+    if (resolved.mode !== proposal.mode) {
+      proposalDispatch({ type: 'mode-changed', workspaceId, mode: resolved.mode })
+      if (resolved.mode === 'work') {
+        void loadLatestWorkRun(sessionId)
+      }
+    }
     // Ownership snapshot: the clear step must remove exactly these
     // attachments from the session that sent them, even if the user
     // switched tabs while the send was in flight.
     const sentAttachmentIds = attachments.map((entry) => entry.id)
-    if (proposal.mode === 'propose') {
-      await handleProposeSend(sessionId, content)
+    if (resolved.mode === 'propose') {
+      await handleProposeSend(sessionId, sendContent)
       return
     }
-    if (proposal.mode === 'work') {
-      await handleWorkSend(sessionId, content)
+    if (resolved.mode === 'work') {
+      await handleWorkSend(sessionId, sendContent)
       return
     }
     const generateAfterSend = aiReady
     dispatch({ type: 'send-started', workspaceId, sessionId })
     try {
-      const result = await sendSessionUserMessage(messageSendPayload(sessionId, content))
+      // The persisted message carries the slash-stripped content; the
+      // composer clear below still matches the full typed text so no
+      // keystrokes are ever stranded.
+      const result = await sendSessionUserMessage(messageSendPayload(sessionId, sendContent))
       stickToBottomRef.current = true
       dispatch({ type: 'send-succeeded', workspaceId, session: result.session, message: result.message })
       // Clear only the sent text: keystrokes typed during the send are
@@ -1234,7 +1336,7 @@ export function SessionPanel({
     proposalDispatch({ type: 'proposal-started', workspaceId, sessionId, kind })
     if (kind === 'multi') {
       try {
-        const outcome = await proposeAiChangeSet({ workspaceId, sessionId })
+        const outcome = await proposeAiChangeSet({ workspaceId, sessionId, effort })
         proposalDispatch({
           type: 'change-set-succeeded',
           workspaceId,
@@ -1252,7 +1354,7 @@ export function SessionPanel({
       return
     }
     try {
-      const outcome = await proposeAiFileChange({ workspaceId, sessionId })
+      const outcome = await proposeAiFileChange({ workspaceId, sessionId, effort })
       proposalDispatch({
         type: 'proposal-succeeded',
         workspaceId,
@@ -1278,7 +1380,7 @@ export function SessionPanel({
     proposalDispatch({ type: 'proposal-retried', workspaceId, sessionId })
     if ((proposal.activeKind ?? 'single') === 'multi') {
       try {
-        const outcome = await proposeAiChangeSet({ workspaceId, sessionId })
+        const outcome = await proposeAiChangeSet({ workspaceId, sessionId, effort })
         proposalDispatch({
           type: 'change-set-succeeded',
           workspaceId,
@@ -1296,7 +1398,7 @@ export function SessionPanel({
       return
     }
     try {
-      const outcome = await proposeAiFileChange({ workspaceId, sessionId })
+      const outcome = await proposeAiFileChange({ workspaceId, sessionId, effort })
       proposalDispatch({
         type: 'proposal-succeeded',
         workspaceId,
@@ -1313,36 +1415,51 @@ export function SessionPanel({
     }
   }
 
-  function handleProposalMode(mode: ProposalMode): void {
-    if (mode === proposal.mode) {
+  /**
+   * Agent-target selection: STARK is always selectable; Kilo is
+   * refused while its bridge is unavailable (menu item disabled).
+   * A switch during an active run is blocked with calm copy — the
+   * draft (composer text + staged attachments) always survives.
+   */
+  function selectAgentTarget(next: AgentTarget): void {
+    setTargetMenuOpen(false)
+    if (next.kind === 'external' && !canSelectKilo(kilo)) {
+      composerRef.current?.focus()
       return
     }
-    proposalDispatch({ type: 'mode-changed', workspaceId, mode })
-    if (mode === 'work' && state.selectedSessionId !== null) {
-      void loadLatestWorkRun(state.selectedSessionId)
+    if (
+      isTargetSwitchBlocked({
+        sending: state.sending,
+        generating: state.generating,
+        proposalPreparing: proposal.preparing,
+        workPreparing: work.preparing,
+        kiloRunning: false
+      })
+    ) {
+      setTargetBlockedNotice('Finish the current run before switching agents.')
+      composerRef.current?.focus()
+      return
     }
+    setTargetBlockedNotice(null)
+    setAgentTarget(next)
+    composerRef.current?.focus()
   }
 
-  /** Mode-menu option labels (presentation; state stays in proposal). */
-  const MODE_OPTIONS: readonly { readonly mode: ProposalMode; readonly label: string }[] = [
-    { mode: 'ask', label: 'Ask' },
-    { mode: 'work', label: 'Work' },
-    { mode: 'propose', label: 'Propose change' }
-  ]
-
-  /** Menu selection: same state change as the old tabs, then back to typing. */
-  function selectProposalMode(mode: ProposalMode): void {
-    setModeMenuOpen(false)
-    handleProposalMode(mode)
+  /** STARK effort selection (STARK target only; hidden otherwise). */
+  function selectEffort(next: StarkEffort): void {
+    setEffortMenuOpen(false)
+    setEffort(next)
     composerRef.current?.focus()
   }
 
   /** Arrow-key navigation between menu items (Tab/Enter stay native). */
-  function handleModeMenuKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+  function handleTargetEffortMenuKeyDown(
+    event: KeyboardEvent<HTMLDivElement>,
+    menu: HTMLDivElement | null
+  ): void {
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {
       return
     }
-    const menu = modeMenuRef.current
     if (menu === null) {
       return
     }
@@ -1684,7 +1801,7 @@ export function SessionPanel({
     }
     workDispatch({ type: 'run-started', workspaceId, sessionId })
     try {
-      const outcome = await runBrainWorkRaw({ workspaceId, sessionId })
+      const outcome = await runBrainWorkRaw({ workspaceId, sessionId, effort })
       if (!('kind' in outcome)) {
         const legacy = outcome as { run: never; session: never; message: never }
         stickToBottomRef.current = true
@@ -1743,7 +1860,7 @@ export function SessionPanel({
     const sessionId = state.selectedSessionId
     workDispatch({ type: 'run-retried', workspaceId, sessionId })
     try {
-      const outcome = await runBrainWorkRaw({ workspaceId, sessionId })
+      const outcome = await runBrainWorkRaw({ workspaceId, sessionId, effort })
       if (!('kind' in outcome)) {
         const legacy = outcome as { run: never; session: never; message: never }
         stickToBottomRef.current = true
@@ -2040,12 +2157,13 @@ export function SessionPanel({
   const empty = isComposerEmpty(composer) && attachments.length === 0
   const overLimit = composerByteLength(composer) > COMPOSER_MAX_BYTES
   const eligibility = proposalEligibility(contextDrafts)
-  const proposeMode = proposal.mode === 'propose'
+  // Live slash resolution for gating: a `/propose` draft without
+  // eligible whole-file context disables send with guidance copy.
+  const resolvedComposerMode = resolveStarkSendMode(composer).mode
+  const proposeGated = resolvedComposerMode === 'propose' && !eligibility.eligible
   // loadingMessages gates sending: a latest page in flight must settle
   // first, otherwise its replace-on-arrive could drop a just-appended
   // message. Older-page loads only prepend, so they never clobber.
-  // Propose mode additionally requires exactly one whole-file context;
-  // Ask mode behavior is unchanged.
   const sendDisabled =
     state.selectedSessionId === null ||
     empty ||
@@ -2054,7 +2172,7 @@ export function SessionPanel({
     state.loadingMessages ||
     proposal.preparing ||
     work.preparing ||
-    (proposeMode && !eligibility.eligible)
+    proposeGated
   // Sponsored-working narrow binding: observational AI-run state only.
   // Never delays, gates, or alters sends, generations, proposals, work
   // runs, streaming, cancellation, navigation, Settings, or terminal.
@@ -2136,7 +2254,15 @@ export function SessionPanel({
         sessionsLoading: state.loadingSessions,
         looplinkActing: looplink.acting,
         sendBusy: state.sending,
-        creatingSession
+        creatingSession,
+        agentTarget,
+        effort,
+        kilo,
+        providerConfigured: provider.configured,
+        providerModel: provider.selectedModel,
+        planLabel: sponsorProductEntitlements.planLabel,
+        usageSummary: usage.summary,
+        runtimePreviewUrl: runtime.active?.previewUrl ?? null
       },
       {
         newSession: () => void handleNew(),
@@ -2157,7 +2283,15 @@ export function SessionPanel({
     creatingSession,
     composer,
     attachments,
-    looplink.acting
+    looplink.acting,
+    agentTarget,
+    effort,
+    kilo,
+    provider.configured,
+    provider.selectedModel,
+    sponsorProductEntitlements.planLabel,
+    usage.summary,
+    runtime.active
   ])
   /* eslint-enable react-hooks/exhaustive-deps */
 
@@ -2882,7 +3016,7 @@ export function SessionPanel({
                       aria-label={`Remove ${draft.label}`}
                       title={`Remove ${draft.label}`}
                     >
-                      <StarkIcon name="close" size={12} />
+                      <UiIcon name="close" size={12} />
                     </button>
                   </span>
                 ))}
@@ -2927,7 +3061,7 @@ export function SessionPanel({
                       aria-label={`Remove ${attachment.name}`}
                       title={`Remove ${attachment.name}`}
                     >
-                      <StarkIcon name="close" size={12} />
+                      <UiIcon name="close" size={12} />
                     </button>
                   </span>
                 ))}
@@ -2970,51 +3104,116 @@ export function SessionPanel({
                   aria-label="Attach files"
                   title="Attach files"
                 >
-                  <StarkIcon name="plus" size={16} />
+                  <UiIcon name="plus" size={16} />
                 </button>
-                <div className="session__moderail" role="group" aria-label="Composer mode">
+                <div className="session__moderail" role="group" aria-label="Agent target">
                   <button
-                    ref={modeButtonRef}
-                    className={`session__modepill session__modepill--${proposal.mode}`}
+                    ref={targetButtonRef}
+                    className={`session__modepill session__modepill--target session__modepill--${agentTarget.kind === 'stark' ? 'ask' : 'propose'}`}
                     type="button"
-                    onClick={() => setModeMenuOpen((open) => !open)}
+                    onClick={() => {
+                      setEffortMenuOpen(false)
+                      setTargetMenuOpen((open) => !open)
+                    }}
                     disabled={proposal.preparing || work.preparing}
                     aria-haspopup="menu"
-                    aria-expanded={modeMenuOpen}
-                    aria-label="Choose message mode"
-                    title="Choose message mode"
+                    aria-expanded={targetMenuOpen}
+                    aria-label="Choose agent target"
+                    title="Choose agent target"
                   >
                     <span className="session__modepill-label">
-                      {MODE_OPTIONS.find((option) => option.mode === proposal.mode)?.label ?? 'Ask'}
+                      {agentTarget.kind === 'stark' ? 'STARK' : KILO_DISPLAY_NAME}
                     </span>
-                    <StarkIcon name="chevron-down" size={12} />
+                    <UiIcon name="chevron-down" size={12} />
                   </button>
-                  {modeMenuOpen && (
+                  {targetMenuOpen && (
                     <div
-                      ref={modeMenuRef}
+                      ref={targetMenuRef}
                       className="session__modemenu"
                       role="menu"
-                      aria-label="Choose message mode"
-                      onKeyDown={handleModeMenuKeyDown}
+                      aria-label="Choose agent target"
+                      onKeyDown={(event) => handleTargetEffortMenuKeyDown(event, targetMenuRef.current)}
                     >
-                      {MODE_OPTIONS.map((option) => (
-                        <button
-                          key={option.mode}
-                          className={`session__modemenu-item session__modemenu-item--${option.mode}${
-                            proposal.mode === option.mode ? ' session__modemenu-item--checked' : ''
-                          }`}
-                          type="button"
-                          role="menuitemradio"
-                          aria-checked={proposal.mode === option.mode}
-                          onClick={() => selectProposalMode(option.mode)}
-                        >
-                          <span className="session__modemenu-dot" aria-hidden="true" />
-                          {option.label}
-                        </button>
-                      ))}
+                      <button
+                        className={`session__modemenu-item session__modemenu-item--ask${
+                          agentTarget.kind === 'stark' ? ' session__modemenu-item--checked' : ''
+                        }`}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={agentTarget.kind === 'stark'}
+                        onClick={() => selectAgentTarget({ kind: 'stark' })}
+                      >
+                        <span className="session__modemenu-dot" aria-hidden="true" />
+                        STARK
+                      </button>
+                      <button
+                        className="session__modemenu-item session__modemenu-item--propose"
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={false}
+                        disabled={!canSelectKilo(kilo)}
+                        title={kilo.reason ?? KILO_DISPLAY_NAME}
+                        aria-label={
+                          canSelectKilo(kilo) ? `Use ${KILO_DISPLAY_NAME}` : `${KILO_DISPLAY_NAME} — ${kilo.reason ?? 'unavailable'}`
+                        }
+                        onClick={() => selectAgentTarget({ kind: 'external', adapterId: 'kilo-code' })}
+                      >
+                        <span className="session__modemenu-dot" aria-hidden="true" />
+                        {KILO_DISPLAY_NAME}
+                        {!canSelectKilo(kilo) && (
+                          <span className="session__modemenu-reason">{kilo.reason ?? 'unavailable'}</span>
+                        )}
+                      </button>
                     </div>
                   )}
                 </div>
+                {effortVisibleFor(agentTarget) && (
+                  <div className="session__moderail" role="group" aria-label="STARK effort">
+                    <button
+                      ref={effortButtonRef}
+                      className="session__modepill session__modepill--effort"
+                      type="button"
+                      onClick={() => {
+                        setTargetMenuOpen(false)
+                        setEffortMenuOpen((open) => !open)
+                      }}
+                      disabled={proposal.preparing || work.preparing}
+                      aria-haspopup="menu"
+                      aria-expanded={effortMenuOpen}
+                      aria-label="Choose STARK effort"
+                      title={STARK_EFFORT_TOOLTIPS[effort]}
+                    >
+                      <span className="session__modepill-label">{STARK_EFFORT_LABELS[effort]}</span>
+                      <UiIcon name="chevron-down" size={12} />
+                    </button>
+                    {effortMenuOpen && (
+                      <div
+                        ref={effortMenuRef}
+                        className="session__modemenu"
+                        role="menu"
+                        aria-label="Choose STARK effort"
+                        onKeyDown={(event) => handleTargetEffortMenuKeyDown(event, effortMenuRef.current)}
+                      >
+                        {STARK_EFFORTS.map((level) => (
+                          <button
+                            key={level}
+                            className={`session__modemenu-item${
+                              effort === level ? ' session__modemenu-item--checked' : ''
+                            }`}
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={effort === level}
+                            title={STARK_EFFORT_TOOLTIPS[level]}
+                            onClick={() => selectEffort(level)}
+                          >
+                            <span className="session__modemenu-dot" aria-hidden="true" />
+                            {STARK_EFFORT_LABELS[level]}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="session__rail-group">
                 <VoiceInputButton
@@ -3031,11 +3230,16 @@ export function SessionPanel({
                   aria-label="Send message"
                   title="Send message"
                 >
-                  <StarkIcon name="arrow-up" size={18} />
+                  <UiIcon name="arrow-up" size={18} />
                 </button>
               </div>
             </div>
-            {proposeMode && !eligibility.eligible && (
+            {targetBlockedNotice !== null && (
+              <p className="session__hint" role="status">
+                {targetBlockedNotice}
+              </p>
+            )}
+            {proposeGated && (
               <p className="session__hint" role="status">
                 {eligibility.reason ?? 'Attach one or more whole files to propose code changes.'}
               </p>

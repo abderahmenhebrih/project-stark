@@ -30,7 +30,7 @@ import {
 import { getWorkspaceFilesApi } from '../../lib/stark-api'
 import { createFileChange } from '../../lib/changes-api'
 import type { ExtensionHostState } from '../../../../shared/extension-host/types'
-import { StarkIcon } from '../../components/icons/StarkIcon'
+import { UiIcon } from '../../components/icons/UiIcon'
 import { requestExtensionTrust } from './extension-trust-bus'
 import { notifyEditorThemeChanged } from './extension-language-bridge'
 import { applyProposalEdits, groupProposalEditsByUri, relativePathFromProposalUri } from './extension-proposals'
@@ -83,7 +83,7 @@ function ExtensionIcon({ iconUrl }: { readonly iconUrl: string | null }): ReactE
   if (iconUrl === null || failed) {
     return (
       <span className="extensions__icon-fallback" aria-hidden="true">
-        <StarkIcon name="extensions" size={20} />
+        <UiIcon name="extensions" size={20} />
       </span>
     )
   }
@@ -894,7 +894,7 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
               aria-label={`More actions for ${item.displayName}`}
               title="More actions"
             >
-              <StarkIcon name="more" size={16} />
+              <UiIcon name="more" size={16} />
             </button>
             {menuOpenKey === key && (
               <div
@@ -1181,7 +1181,7 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
         <>
           <div className="extensions__field">
             <span className="extensions__field-icon" aria-hidden="true">
-              <StarkIcon name="search" size={16} />
+              <UiIcon name="search" size={16} />
             </span>
             <input
               className="extensions__input"

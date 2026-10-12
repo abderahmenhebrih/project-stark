@@ -25,11 +25,12 @@ describe('capability renderer safety', () => {
     assert.ok(!panel.includes('Execute'))
   })
 
-  it('terminal never renders Allow and shows exact-command copy', () => {
+  it('terminal never renders Allow and keeps approval-bound copy', () => {
     const settings = readRenderer('features/settings/sections/PermissionsSettings.tsx')
-    assert.ok(settings.includes('Terminal execution always requires approval for the exact command.'))
-    assert.ok(settings.includes('Allowing proposals does not allow STARK to apply them.'))
+    assert.ok(settings.includes('Run terminal commands inside the workspace.'))
+    assert.ok(settings.includes('Propose file changes for human review.'))
     assert.ok(settings.includes('Permissions only control whether future STARK Worker tools may request an action.'))
+    assert.ok(settings.includes('Always ask is required for this capability.'))
   })
 
   it('shows all five capability rows with Deny/Ask/Allow where legal', () => {

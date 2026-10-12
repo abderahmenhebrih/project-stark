@@ -25,9 +25,10 @@ import { PluginsPanel } from '../plugins/PluginsPanel'
 import { useBrandAssets } from '../styles/use-brand-assets'
 import type { ActivityKind } from './ActivityRail'
 import { StarkMark } from '../../components/StarkMark'
-import { StarkIcon } from '../../components/icons/StarkIcon'
+import { UiIcon } from '../../components/icons/UiIcon'
 import { WorkspaceToolsDrawer } from '../../layouts/WorkspaceToolsDrawer'
 import { WorkspaceSecondaryPane, type SecondaryTabKind } from '../workspace/WorkspaceSecondaryPane'
+import { LiveReviewPanel } from '../live-review/LiveReviewPanel'
 import { ContextTab } from '../sessions/ContextTab'
 
 import { ChangeSetReview } from '../changes/ChangeSetReview'
@@ -119,7 +120,7 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile, fileIconT
               onClick={() => onToggle(entry.relativePath)}
             >
               <span className="explorer__chevron" aria-hidden="true">
-                <StarkIcon
+                <UiIcon
                   name={state.expanded.includes(entry.relativePath) ? 'chevron-down' : 'chevron-right'}
                   size={13}
                 />
@@ -160,7 +161,7 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile, fileIconT
                 aria-label={`Attach ${entry.relativePath} to chat`}
                 title="Attach to context"
               >
-                <StarkIcon name="plus" size={13} />
+                <UiIcon name="plus" size={13} />
               </button>
             </span>
           ) : (
@@ -204,6 +205,7 @@ function fileBasename(relativePath: string): string {
 interface SecondaryUiState {
   readonly tab: SecondaryTabKind
   readonly contextPinned: boolean
+  readonly liveOpen: boolean
   readonly splitPct: number | null
 }
 
@@ -211,6 +213,8 @@ type SecondaryUiAction =
   | { readonly type: 'open-tab'; readonly tab: SecondaryTabKind }
   | { readonly type: 'pin-context' }
   | { readonly type: 'unpin-context' }
+  | { readonly type: 'open-live' }
+  | { readonly type: 'close-live' }
   | { readonly type: 'set-split'; readonly pct: number | null }
   | { readonly type: 'reset' }
 
@@ -224,12 +228,22 @@ function secondaryUiReducer(state: SecondaryUiState, action: SecondaryUiAction):
         : { ...state, contextPinned: true, tab: 'context' }
     case 'unpin-context':
       return state.contextPinned ? { ...state, contextPinned: false } : state
+    case 'open-live':
+      // Explicit Live Review click wins pane ownership: the Live tab
+      // opens and activates. Background updates never dispatch this.
+      return state.liveOpen && state.tab === 'live'
+        ? state
+        : { ...state, liveOpen: true, tab: 'live' }
+    case 'close-live':
+      return !state.liveOpen
+        ? state
+        : { ...state, liveOpen: false, tab: state.tab === 'live' ? 'context' : state.tab }
     case 'set-split':
       return state.splitPct === action.pct ? state : { ...state, splitPct: action.pct }
     case 'reset':
-      return state.tab === 'file' && !state.contextPinned && state.splitPct === null
+      return state.tab === 'file' && !state.contextPinned && !state.liveOpen && state.splitPct === null
         ? state
-        : { tab: 'file', contextPinned: false, splitPct: null }
+        : { tab: 'file', contextPinned: false, liveOpen: false, splitPct: null }
   }
 }
 
@@ -261,6 +275,10 @@ interface ExplorerProps {
   readonly externalReviewChangeSetId?: number | null
   /** Renderer-local request to reveal the secondary Context tab. Consumed once per count. */
   readonly externalContextRequest?: number
+  /** Renderer-local request to open Live Review (explicit click wins pane ownership). Consumed once per count. */
+  readonly externalLiveReviewRequest?: number
+  /** Known managed-runtime URL used as the Live Review default. */
+  readonly liveReviewInitialUrl?: string | null
   /** Controlled activity driving the workspace tools drawer. */
   readonly activity: ActivityKind
   readonly onActivityChange: (activity: ActivityKind) => void
@@ -318,6 +336,8 @@ export function Explorer({
   externalReviewTransactionId = null,
   externalReviewChangeSetId = null,
   externalContextRequest = 0,
+  externalLiveReviewRequest = 0,
+  liveReviewInitialUrl = null,
   activity,
   onActivityChange,
   canvasView,
@@ -398,9 +418,15 @@ export function Explorer({
   const [secondaryUi, secondaryUiDispatch] = useReducer(secondaryUiReducer, undefined, () => ({
     tab: 'file',
     contextPinned: false,
+    liveOpen: false,
     splitPct: null
   }) as SecondaryUiState)
   const consumedContextRequestRef = useRef(0)
+  const consumedLiveReviewRequestRef = useRef(0)
+  // Live Review URL captured from the explicit open request (managed
+  // runtime URL or null for manual entry). The panel owns its input
+  // afterwards; remounts per request via the request key.
+  const [liveUrl, setLiveUrl] = useState<string | null>(null)
   const workareaRef = useRef<HTMLDivElement | null>(null)
   const draggingRef = useRef(false)
   // Document formatting (generic activation): explicit user action only.
@@ -989,7 +1015,8 @@ export function Explorer({
   useEffect(() => {
     secondaryUiDispatch({ type: 'reset' })
     consumedContextRequestRef.current = externalContextRequest
-  }, [workspaceId, externalContextRequest])
+    consumedLiveReviewRequestRef.current = externalLiveReviewRequest
+  }, [workspaceId, externalContextRequest, externalLiveReviewRequest])
 
   // Stage 16 review handoff: open the newly proposed transaction in the
   // existing review + DiffEditor and refresh history. Consumed once per
@@ -1090,6 +1117,19 @@ export function Explorer({
     secondaryUiDispatch({ type: 'pin-context' })
     onCanvasViewChange('editor')
   }, [externalContextRequest, onCanvasViewChange])
+
+  // Explicit Live Review request (AppChrome action): open and activate
+  // the Live tab beside the still-visible session. One-shot per
+  // request count; background runtime updates never steal the pane.
+  useEffect(() => {
+    if (externalLiveReviewRequest === consumedLiveReviewRequestRef.current) {
+      return
+    }
+    consumedLiveReviewRequestRef.current = externalLiveReviewRequest
+    setLiveUrl(liveReviewInitialUrl)
+    secondaryUiDispatch({ type: 'open-live' })
+    onCanvasViewChange('editor')
+  }, [externalLiveReviewRequest, liveReviewInitialUrl, onCanvasViewChange])
 
   function handleToggle(path: string): void {
     const expanding = !state.expanded.includes(path)
@@ -1658,6 +1698,7 @@ export function Explorer({
       onToggleTerminal()
     }
     secondaryUiDispatch({ type: 'unpin-context' })
+    secondaryUiDispatch({ type: 'close-live' })
     handleCloseGitDiff()
     handleCloseReview()
     handleCloseChangeSet()
@@ -1750,11 +1791,14 @@ export function Explorer({
   const hasGitDiff = gitDiff.relativePath !== null
   const hasReviewTab = hasReviewContent || hasGitDiff
   const hasFile = state.preview !== null
-  const secondaryOpen = hasReviewTab || hasFile || secondaryUi.contextPinned || terminalOpen
+  const secondaryOpen = hasReviewTab || hasFile || secondaryUi.contextPinned || secondaryUi.liveOpen || terminalOpen
 
   const tabs: { readonly kind: SecondaryTabKind; readonly label: string }[] = []
   if (hasReviewTab) {
     tabs.push({ kind: 'review', label: 'Review' })
+  }
+  if (secondaryUi.liveOpen) {
+    tabs.push({ kind: 'live', label: 'Live Review' })
   }
   tabs.push({ kind: 'context', label: 'Context' })
   if (hasFile) {
@@ -1766,9 +1810,11 @@ export function Explorer({
     ? secondaryUi.tab
     : hasReviewTab
       ? 'review'
-      : hasFile
-        ? 'file'
-        : 'context'
+      : secondaryUi.liveOpen
+        ? 'live'
+        : hasFile
+          ? 'file'
+          : 'context'
 
   // Secondary-pane ownership (H5): exactly one detail owns the Review
   // tab at a time. Explicit selections are mutually exclusive — each
@@ -2007,7 +2053,7 @@ export function Explorer({
                 onClick={() => setRootCollapsed((collapsed) => !collapsed)}
               >
                 <span className="explorer__chevron" aria-hidden="true">
-                  <StarkIcon name={rootCollapsed ? 'chevron-right' : 'chevron-down'} size={13} />
+                  <UiIcon name={rootCollapsed ? 'chevron-right' : 'chevron-down'} size={13} />
                 </span>
                 <span className="explorer__folder-icon" aria-hidden="true">
                   <img src={rootCollapsed ? FOLDER_ICON_URL : FOLDER_OPEN_ICON_URL} alt="" draggable={false} />
@@ -2154,6 +2200,12 @@ export function Explorer({
             <div className="workbench__editor-main">
               {effectiveTab === 'review' && hasReviewTab ? (
                 renderReviewBody()
+              ) : effectiveTab === 'live' && secondaryUi.liveOpen ? (
+                <LiveReviewPanel
+                  key={externalLiveReviewRequest}
+                  initialUrl={liveUrl}
+                  onClose={() => secondaryUiDispatch({ type: 'close-live' })}
+                />
               ) : effectiveTab === 'file' && hasFile ? (
                 renderFileBody()
               ) : (

@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { StarkIcon } from '../../components/icons/StarkIcon'
+import { UiIcon } from '../../components/icons/UiIcon'
 import { productionEntitlements, type AccountEntitlements } from '../billing/entitlements'
 import './PluginsPanel.css'
 
@@ -23,7 +23,7 @@ export function PluginsPanel({ entitlements, onNavigateBilling }: PluginsPanelPr
   return (
     <div className="plugins-panel" aria-label="Plugins">
       <span className="plugins-panel__icon" aria-hidden="true">
-        <StarkIcon name="plugins" size={20} />
+        <UiIcon name="plugins" size={20} />
       </span>
       <p className="plugins-panel__title">Plugins</p>
       {effective.pluginsEnabled ? (

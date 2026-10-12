@@ -1,6 +1,6 @@
 import { Fragment, useRef, type ReactElement } from 'react'
 import type { Terminal } from '@xterm/xterm'
-import { StarkIcon } from '../../components/icons/StarkIcon'
+import { UiIcon } from '../../components/icons/UiIcon'
 import { TerminalInstanceView } from './TerminalInstanceView'
 import type { HumanTerminalEntry } from './terminal-state'
 import './TerminalPanel.css'
@@ -128,7 +128,7 @@ export function TerminalPanel({
                 aria-label={active ? `${entry.title} (active terminal)` : entry.title}
               >
                 <div className="terminal-pane__header">
-                  <StarkIcon name="terminal" size={14} />
+                  <UiIcon name="terminal" size={14} />
                   <span className="terminal-pane__title">{entry.title}</span>
                   {entry.status !== 'running' && <span className="terminal-pane__meta">{entry.status}</span>}
                   <span className="terminal-pane__spacer" aria-hidden="true" />
@@ -158,7 +158,7 @@ export function TerminalPanel({
                     aria-label={`Close ${entry.title}`}
                     title={`Close ${entry.title}`}
                   >
-                    <StarkIcon name="close" size={12} />
+                    <UiIcon name="close" size={12} />
                   </button>
                 </div>
                 <TerminalInstanceView

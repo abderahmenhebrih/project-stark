@@ -14,6 +14,8 @@ import {
   UnknownProviderError
 } from './errors'
 import { MAX_AI_CONTEXT_BYTES, MAX_AI_CONTEXT_MESSAGES, MAX_ASSISTANT_OUTPUT_TOKENS, STAGE_14_FIXED_INSTRUCTIONS } from './limits'
+import { deriveStarkRunPolicy } from './stark-run-policy'
+import { isStarkEffort, type StarkEffort } from '../../shared/agent-target/types'
 import type { ProviderRegistry } from './provider-adapter'
 import { formatProviderContext } from '../session-context/session-context-service'
 import { AiOperationGuard } from './ai-operation-guard'
@@ -51,6 +53,21 @@ function contextBytes(messages: readonly { readonly content: string }[]): number
     total += encoder.encode(entry.content).byteLength
   }
   return total
+}
+
+/**
+ * Reads the optional STARK effort selector from a request payload.
+ * Absent means Regular baseline. A present-but-invalid value is a
+ * renderer contract violation (rejected, never defaulted silently).
+ */
+function readRequestEffort(payload: Record<string, unknown>): StarkEffort {
+  if (!('effort' in payload) || payload['effort'] === undefined) {
+    return 'regular'
+  }
+  if (!isStarkEffort(payload['effort'])) {
+    throw new InvalidProviderRequestError('effort is invalid')
+  }
+  return payload['effort']
 }
 
 export interface AiCompletionServiceOptions {
@@ -195,7 +212,7 @@ export class AiCompletionService {
     return [...base.slice(0, -1), { role: 'user' as const, content: block }, trailing]
   }
 
-  async generateResponse(payload: unknown): Promise<AiGenerateResult> {    if (!hasStrictShape(payload, ['workspaceId', 'sessionId'])) {
+  async generateResponse(payload: unknown): Promise<AiGenerateResult> {    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort'])) {
       throw new InvalidProviderRequestError('generation request is invalid')
     }
     const record = payload as Record<string, unknown>
@@ -203,6 +220,7 @@ export class AiCompletionService {
     if (!isValidId(workspaceId) || !isValidId(sessionId)) {
       throw new InvalidProviderRequestError('session reference is invalid')
     }
+    const effort = readRequestEffort(record)
     if (this.workspaces.findById(workspaceId) === undefined) {
       throw new SessionWorkspaceUnavailableError()
     }
@@ -235,7 +253,7 @@ export class AiCompletionService {
     }
       this.guard.acquire(sessionId)
     try {
-      return await this.generateWithAdapter(workspaceId, sessionId, latest.id, providerId, adapter, model, null, 'ask')
+      return await this.generateWithAdapter(workspaceId, sessionId, latest.id, providerId, adapter, model, null, 'ask', undefined, effort)
     } finally {
       this.guard.release(sessionId)
     }
@@ -402,7 +420,8 @@ export class AiCompletionService {
     model: string,
     excludeDuplicateText: string | null,
     operation: 'ask' | 'recovery_ask',
-    preResolvedApiKey?: string
+    preResolvedApiKey?: string,
+    effort: StarkEffort = 'regular'
   ): Promise<AiGenerateResult> {
       const context = this.loadContext(sessionId)
       // Only the trailing message's explicit attachments travel with
@@ -439,6 +458,10 @@ export class AiCompletionService {
       const apiKey = preResolvedApiKey ?? (await this.providerService.decryptCredentialForUse(providerId))
       // Bound capture for the tracking closure (preserves adapter `this`).
       const generateText = adapter.generateText.bind(adapter)
+      // Effort policy: one central derivation — output budget and
+      // model-gated reasoning travel with this call. Recovery
+      // operations keep the Regular baseline (fixed budgets).
+      const policy = operation === 'ask' ? deriveStarkRunPolicy(effort, model) : deriveStarkRunPolicy('regular', model)
       let text: string
       try {
         const result = await this.trackCall(
@@ -450,7 +473,8 @@ export class AiCompletionService {
             model,
             instructions: STAGE_14_FIXED_INSTRUCTIONS,
             messages: providerMessages,
-            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+            maxOutputTokens: policy.maxOutputTokens,
+            ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
             ...(chatSection.payloads.length > 0 ? { attachments: chatSection.payloads } : {})
           })
         )

@@ -256,7 +256,7 @@ describe('secondary close returns the session to full width', () => {
   it('secondaryOpen still derives from open content, and drag math is untouched', () => {
     const source = readRenderer('features/explorer/Explorer.tsx')
     assert.ok(
-      source.includes('const secondaryOpen = hasReviewTab || hasFile || secondaryUi.contextPinned || terminalOpen'),
+      source.includes('const secondaryOpen = hasReviewTab || hasFile || secondaryUi.contextPinned || secondaryUi.liveOpen || terminalOpen'),
       'open state must derive from content so clearing content closes the pane'
     )
     assert.ok(source.includes('((event.clientX - rect.left) / rect.width) * 100'), 'drag percentage math must be unchanged')

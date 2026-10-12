@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { StarkIcon } from '../../components/icons/StarkIcon'
+import { UiIcon } from '../../components/icons/UiIcon'
 import type { HumanTerminalEntry } from './terminal-state'
 
 interface TerminalDrawerProps {
@@ -47,7 +47,7 @@ export function TerminalDrawer({
         aria-label="New terminal"
         title={atCap ? 'Too many terminals are open' : 'New terminal'}
       >
-        <StarkIcon name="plus" size={14} />
+        <UiIcon name="plus" size={14} />
         <span>New terminal</span>
       </button>
       <p className="terminal-drawer__section" aria-hidden="true">
@@ -105,7 +105,7 @@ export function TerminalDrawer({
                   title={entry.title}
                 >
                   <span className="terminal-drawer__indicator" aria-hidden="true" />
-                  <StarkIcon name="terminal" size={14} />
+                  <UiIcon name="terminal" size={14} />
                   <span className="terminal-drawer__title">{entry.title}</span>
                   {entry.status !== 'running' && <span className="terminal-drawer__meta">{entry.status}</span>}
                 </button>
@@ -116,7 +116,7 @@ export function TerminalDrawer({
                   aria-label={`Close ${entry.title}`}
                   title={`Close ${entry.title}`}
                 >
-                  <StarkIcon name="close" size={12} />
+                  <UiIcon name="close" size={12} />
                 </button>
               </li>
             )

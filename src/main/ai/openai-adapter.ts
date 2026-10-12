@@ -54,6 +54,7 @@ export interface OpenAiResponsesClient {
       max_output_tokens: number
       store: boolean
       text?: unknown
+      reasoning?: { effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' } | null
     },
     options?: { timeout?: number; maxRetries?: number }
   ): Promise<{
@@ -246,7 +247,11 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
           instructions: request.instructions,
           input: toResponsesInput(request.messages, request.attachments),
           max_output_tokens: request.maxOutputTokens,
-          store: false
+          store: false,
+          // Model-gated reasoning only: null/undefined means the
+          // current default behavior (no parameter sent). Unsupported
+          // models never receive this field.
+          ...(request.reasoningEffort ? { reasoning: { effort: request.reasoningEffort } } : {})
         },
         { timeout: AI_GENERATE_TIMEOUT_MS, maxRetries: 0 }
       )
@@ -282,6 +287,7 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
           input: toResponsesInput(request.messages, request.attachments),
           max_output_tokens: request.maxOutputTokens,
           store: false,
+          ...(request.reasoningEffort ? { reasoning: { effort: request.reasoningEffort } } : {}),
           text: {
             format: {
               type: 'json_schema',

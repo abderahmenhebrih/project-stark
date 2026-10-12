@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { StarkIcon, type StarkIconName } from '../../components/icons/StarkIcon'
+import { UiIcon, type UiIconName } from '../../components/icons/UiIcon'
 
 export type ActivityKind = 'explorer' | 'search' | 'plugins' | 'git' | 'extensions' | 'terminal'
 
@@ -8,7 +8,7 @@ interface ActivityRailProps {
   readonly onSelect: (activity: ActivityKind) => void
 }
 
-const ACTIVITIES: readonly { readonly kind: ActivityKind; readonly label: string; readonly icon: StarkIconName }[] = [
+const ACTIVITIES: readonly { readonly kind: ActivityKind; readonly label: string; readonly icon: UiIconName }[] = [
   { kind: 'explorer', label: 'Explorer', icon: 'explorer' },
   { kind: 'search', label: 'Search', icon: 'search' },
   { kind: 'plugins', label: 'Plugins', icon: 'plugins' },
@@ -41,7 +41,7 @@ export function ActivityRail({ activity, onSelect }: ActivityRailProps): ReactEl
             onClick={() => onSelect(entry.kind)}
           >
             <span className="explorer__tab-icon" aria-hidden="true">
-              <StarkIcon name={entry.icon} size={20} />
+              <UiIcon name={entry.icon} size={20} />
             </span>
             <span className="explorer__tab-label">{entry.label}</span>
           </button>

@@ -112,6 +112,10 @@ export function HomePage(): ReactElement {
   // Renderer-local request for the secondary Context tab (e.g. from a
   // composer chip). Consumed once by the Explorer; no persistence.
   const [contextRequest, setContextRequest] = useState(0)
+  // Renderer-local request for the Live Review tab (AppChrome action).
+  // Consumed once by the Explorer, which opens the secondary Live tab
+  // beside the still-visible session; no persistence, no polling.
+  const [liveReviewRequest, setLiveReviewRequest] = useState(0)
   // Mirrored session-chrome display for the AppChrome tab strip. The
   // SessionPanel reducer stays canonical; actions live in a ref so
   // forwarding them never re-renders.
@@ -141,6 +145,7 @@ export function HomePage(): ReactElement {
     setSettingsOpen((open) => !open)
   }, [])
   const handleOpenContext = useCallback(() => setContextRequest((count) => count + 1), [])
+  const handleOpenLiveReview = useCallback(() => setLiveReviewRequest((count) => count + 1), [])
   const handleSessionChrome = useCallback(
     (snapshot: SessionChromeSnapshot, actions: SessionChromeActions) => {
       sessionActionsRef.current = actions
@@ -185,6 +190,7 @@ export function HomePage(): ReactElement {
     setChromeSession(null)
     setReviewTransactionId(null)
     setReviewChangeSetId(null)
+    setLiveReviewRequest(0)
   }
 
   useEffect(() => {
@@ -239,6 +245,13 @@ export function HomePage(): ReactElement {
         onCloseSessionTab={handleCloseSessionTab}
         onContinueLooplink={handleContinueLooplink}
         onSwitchWorkspace={handleSwitchWorkspace}
+        onOpenLiveReview={handleOpenLiveReview}
+        planLabel={chromeSession?.planLabel ?? 'STARK Free'}
+        agentTarget={chromeSession?.agentTarget ?? { kind: 'stark' }}
+        effort={chromeSession?.effort ?? 'regular'}
+        providerConfigured={chromeSession?.providerConfigured ?? false}
+        providerModel={chromeSession?.providerModel ?? null}
+        usageSummary={chromeSession?.usageSummary ?? null}
       />
       <div className="stage-workarea">
         <div className={settingsOpen ? 'stage-workarea__main stage-workarea__main--hidden' : 'stage-workarea__main'}>
@@ -253,6 +266,8 @@ export function HomePage(): ReactElement {
           externalReviewTransactionId={reviewTransactionId}
           externalReviewChangeSetId={reviewChangeSetId}
           externalContextRequest={contextRequest}
+          externalLiveReviewRequest={liveReviewRequest}
+          liveReviewInitialUrl={chromeSession?.runtimePreviewUrl ?? null}
           activity={activity}
           onActivityChange={handleActivityChange}
           canvasView={canvasView}

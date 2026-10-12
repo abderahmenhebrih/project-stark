@@ -47,6 +47,8 @@ import {
 } from './limits'
 import type { AiProviderService } from './ai-provider-service'
 import { AiOperationGuard } from './ai-operation-guard'
+import { deriveStarkRunPolicy } from './stark-run-policy'
+import { isStarkEffort, type StarkEffort } from '../../shared/agent-target/types'
 import { PendingApprovalBlockedError } from '../worker-tools/worker-tool-errors'
 import type { AiUsageDeps } from '../usage/ai-usage-tracker'
 import type { WorkUsageSnapshot } from '../usage/ai-usage-service'
@@ -348,13 +350,23 @@ export class AiBrainService {
   }
 
   async runBrain(payload: unknown): Promise<AiRunBrainResult> {
-    if (!hasStrictShape(payload, ['workspaceId', 'sessionId'])) {
+    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort'])) {
       throw new InvalidBrainRequestError('brain request is invalid')
     }
     const record = payload as Record<string, unknown>
     const { workspaceId, sessionId } = record
     if (!isValidId(workspaceId) || !isValidId(sessionId)) {
       throw new InvalidBrainRequestError('session reference is invalid')
+    }
+    // Optional STARK effort selector; absent means Regular baseline.
+    // Present-but-invalid is a contract violation (rejected, never
+    // defaulted silently).
+    let effort: StarkEffort = 'regular'
+    if ('effort' in record && record['effort'] !== undefined) {
+      if (!isStarkEffort(record['effort'])) {
+        throw new InvalidBrainRequestError('effort is invalid')
+      }
+      effort = record['effort']
     }
     if (this.workspaces.findById(workspaceId) === undefined) {
       throw new SessionWorkspaceUnavailableError()
@@ -374,7 +386,7 @@ export class AiBrainService {
     }
     this.guard.acquire(sessionId)
     try {
-      return await this.runInner(workspaceId, sessionId)
+      return await this.runInner(workspaceId, sessionId, effort)
     } finally {
       this.guard.release(sessionId)
     }
@@ -534,7 +546,7 @@ export class AiBrainService {
     return [...base.slice(0, -1), { role: 'user' as const, content: block }, trailing]
   }
 
-  private async runInner(workspaceId: number, sessionId: number): Promise<AiRunBrainResult> {    const latest = this.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
+  private async runInner(workspaceId: number, sessionId: number, effort: StarkEffort = 'regular'): Promise<AiRunBrainResult> {    const latest = this.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
     if (latest === undefined || latest.role !== 'user') {
       throw new BrainNothingToAnswerError()
     }
@@ -545,7 +557,11 @@ export class AiBrainService {
       throw new BrainNothingToAnswerError()
     }
     const chatVision = this.chatAttachmentVision(latest.id)
-    const deadline = this.now() + MAX_ORCHESTRATION_RUN_MS
+    // Effort policy, deadline slice: the timeout budget applies from
+    // run start and never depends on the model, so it is derived up
+    // front (model-gated reasoning resolves after Heart routing).
+    const deadlinePolicy = deriveStarkRunPolicy(effort, '')
+    const deadline = this.now() + deadlinePolicy.orchestrationTimeoutMs
     // Immutable routing snapshot for this run: Heart is never
     // re-read between Brain → Worker → Brain, so mid-run config
     // changes cannot cause model drift.
@@ -605,8 +621,12 @@ export class AiBrainService {
       // adapter both read instance state).
       const generateStructured = brainAdapter.generateStructured.bind(brainAdapter)
 
-      // Call 1 of at most 3: structured Brain plan.
+      // Call 1 of at most 3: structured Brain plan (bounded second
+      // attempts from the effort policy: Regular keeps the
+      // single-attempt baseline; higher efforts repeat plan-shape
+      // validation failures within the policy cap).
       this.requireDeadline(deadline)
+      const brainPolicy = deriveStarkRunPolicy(effort, brainModel)
       const planSection = this.planAttachmentSection(latest.id, brainResolved.adapter.id, brainModel)
       const planBase =
         persisted.length === 0
@@ -622,25 +642,39 @@ export class AiBrainService {
               planBaseWithChat[planBaseWithChat.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
             ]
       let plan: ValidatedBrainPlan
-      try {
-        const planned = await this.trackCall(
-          { operation: 'brain_plan', workspaceId, sessionId, runId },
-          brainResolved.adapter.id,
-          brainModel,
-          () => generateStructured({
-            apiKey: brainResolved.apiKey,
-            model: brainModel,
-            instructions: STAGE_18_FIXED_BRAIN_PLANNING_INSTRUCTIONS,
-            messages: planMessages,
-            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
-            schemaName: BRAIN_PLAN_SCHEMA_NAME,
-            schema: BRAIN_PLAN_JSON_SCHEMA,
-            ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {})
-          })
-        )
-        plan = this.parseAndValidatePlan(planned.outputText)
-      } finally {
-        void brainResolved.apiKey
+      let planAttempts = 0
+      for (;;) {
+        try {
+          const planned = await this.trackCall(
+            { operation: 'brain_plan', workspaceId, sessionId, runId },
+            brainResolved.adapter.id,
+            brainModel,
+            () => generateStructured({
+              apiKey: brainResolved.apiKey,
+              model: brainModel,
+              instructions: STAGE_18_FIXED_BRAIN_PLANNING_INSTRUCTIONS,
+              messages: planMessages,
+              maxOutputTokens: brainPolicy.maxOutputTokens,
+              ...(brainPolicy.providerReasoningEffort !== null ? { reasoningEffort: brainPolicy.providerReasoningEffort } : {}),
+              schemaName: BRAIN_PLAN_SCHEMA_NAME,
+              schema: BRAIN_PLAN_JSON_SCHEMA,
+              ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {})
+            })
+          )
+          plan = this.parseAndValidatePlan(planned.outputText)
+          break
+        } catch (error) {
+          // Only plan-shape validation failures may repeat, bounded by
+          // the effort policy. Transport/provider failures propagate
+          // immediately (no masking, no loops).
+          if (!(error instanceof InvalidBrainPlanError) || planAttempts >= brainPolicy.structuredOutputRepeatBudget) {
+            throw error
+          }
+          planAttempts += 1
+          this.requireDeadline(deadline)
+        } finally {
+          void brainResolved.apiKey
+        }
       }
       this.runs.appendStepWithModel(
         {
@@ -726,6 +760,7 @@ export class AiBrainService {
       let workerOutput: string
       try {
         const workerMessages = this.buildWorkerMessages(context, persisted, workerInstruction, loop?.block ?? null, workerSection.block)
+        const workerPolicy = deriveStarkRunPolicy(effort, workerResolved.model)
         const produced = await this.trackCall(
           { operation: 'worker', workspaceId, sessionId, runId },
           workerResolved.adapter.id,
@@ -735,7 +770,8 @@ export class AiBrainService {
             model: workerResolved.model,
             instructions: STAGE_18_FIXED_WORKER_INSTRUCTIONS,
             messages: workerMessages,
-            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+            maxOutputTokens: workerPolicy.maxOutputTokens,
+            ...(workerPolicy.providerReasoningEffort !== null ? { reasoningEffort: workerPolicy.providerReasoningEffort } : {}),
             ...(workerSection.payloads.length > 0 ? { attachments: workerSection.payloads } : {})
           })
         )
@@ -787,7 +823,8 @@ export class AiBrainService {
             model: synthesisResolved.model,
             instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
             messages: synthesisMessages,
-            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+            maxOutputTokens: brainPolicy.maxOutputTokens,
+            ...(brainPolicy.providerReasoningEffort !== null ? { reasoningEffort: brainPolicy.providerReasoningEffort } : {})
           })
         )
         finalText = this.validateFinalText(synthesized.text)

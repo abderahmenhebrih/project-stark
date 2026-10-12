@@ -125,7 +125,10 @@ describe('send-clear ownership', () => {
     for (const marker of ['async function handleSend()', 'async function handleProposeSend(', 'async function handleWorkSend(']) {
       const at = source.indexOf(marker)
       assert.ok(at >= 0, `${marker} must exist`)
-      const body = source.slice(at, at + 2400)
+      // Window covers the unified STARK send (target guard + slash
+      // resolution precede the snapshot); the invariant is unchanged:
+      // snapshot before the await, ownership clear after it.
+      const body = source.slice(at, at + 4200)
       assert.ok(body.includes('const sentAttachmentIds = attachments.map((entry) => entry.id)'), `${marker} must snapshot consumed IDs`)
       assert.ok(body.includes('clearSentComposer(content, sessionId, sentAttachmentIds)'), `${marker} must clear with ownership`)
     }

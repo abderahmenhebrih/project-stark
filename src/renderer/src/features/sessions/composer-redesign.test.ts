@@ -53,65 +53,87 @@ describe('floating composer shell', () => {
   })
 })
 
-describe('compact mode selector', () => {
-  it('replaces the permanent tab row with one pill control', () => {
-    const region = composerRegion()
-    assert.ok(!region.includes('session__mode session__mode--ask'), 'permanent Ask tab must be gone')
-    assert.ok(!region.includes('session__mode--work'), 'permanent Work tab must be gone')
-    assert.ok(!region.includes('session__mode--propose'), 'permanent Propose tab must be gone')
-    assert.ok(!region.includes('aria-pressed={proposal.mode'), 'segmented pressed tabs must be gone')
-    assert.ok(region.includes('session__modepill'), 'compact mode pill must exist')
-    assert.ok(region.includes('aria-haspopup="menu"'), 'pill must expose the menu contract')
-    assert.ok(region.includes('aria-expanded={modeMenuOpen}'), 'pill must expose menu state')
-    assert.ok(region.includes('aria-label="Choose message mode"'), 'pill must be labelled')
-    assert.ok(region.includes('name="chevron-down"'), 'pill must carry a disclosure cue')
-  })
-
-  it('menu lists every mode and marks the active one', () => {
+describe('agent target selector', () => {
+  it('replaces the Ask/Work/Propose primary dropdown with STARK + Kilo targets', () => {
     const region = composerRegion()
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(region.includes('role="menu"'), 'mode menu must exist')
-    assert.ok(region.includes('role="menuitemradio"'), 'options must be radio items')
-    assert.ok(region.includes('aria-checked={proposal.mode === option.mode}'), 'active mode must be indicated')
+    assert.ok(!panel.includes('MODE_OPTIONS'), 'the old Ask/Work/Propose option list must be gone')
+    assert.ok(!panel.includes('selectProposalMode'), 'the old mode selection helper must be gone')
+    assert.ok(!region.includes('aria-label="Choose message mode"'), 'the old mode pill label must be gone')
     for (const label of ["'Ask'", "'Work'", "'Propose change'"]) {
-      assert.ok(panel.includes(label), `menu must offer ${label}`)
+      assert.ok(!panel.includes(label), `primary selector must not offer ${label}`)
     }
+    assert.ok(region.includes('aria-label="Agent target"'), 'target group must be labelled')
+    assert.ok(region.includes('aria-label="Choose agent target"'), 'target pill must be labelled')
+    assert.ok(region.includes('STARK'), 'STARK target must exist')
+    // The menu renders the shared KILO_DISPLAY_NAME constant (literal
+    // 'Kilo Code' is pinned in the agent-target contract tests).
+    assert.ok(region.includes('KILO_DISPLAY_NAME'), 'Kilo target must exist in the menu')
+    // The menu renders the live kilo.reason (honest unavailable copy);
+    // the fail-closed reason literal lives in the panel state + send net.
+    assert.ok(panel.includes('Kilo bridge not available'), 'unavailable Kilo must carry its honest reason')
+    assert.ok(region.includes('canSelectKilo(kilo)'), 'Kilo selection must gate on real availability')
   })
 
-  it('selection flows through the existing mode state, then refocuses', () => {
+  it('unified STARK send keeps runtime paths as slash overrides only', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('selectProposalMode'), 'menu must select through one helper')
-    assert.ok(panel.includes('handleProposalMode(mode)'), 'selection must reuse the existing mode handler')
-    assert.ok(panel.includes("proposalDispatch({ type: 'mode-changed'"), 'mode semantics must be unchanged')
-    const helperAt = panel.indexOf('function selectProposalMode')
+    assert.ok(panel.includes('resolveStarkSendMode(content)'), 'sends must resolve through the deterministic resolver')
+    assert.ok(panel.includes("await handleWorkSend(sessionId, sendContent)"), 'default send must use the unified Work path')
+    assert.ok(panel.includes('runBrainWorkRaw({ workspaceId, sessionId, effort })'), 'Work runs must carry the effort selector')
+    assert.ok(panel.includes('generateAssistantResponseRaw({ workspaceId, sessionId, effort })'), 'Ask override must carry the effort selector')
+    assert.ok(panel.includes("proposalDispatch({ type: 'mode-changed'"), 'slash overrides must reuse the preserved mode state')
+  })
+
+  it('effort selector sits next to the target with five real levels', () => {
+    const region = composerRegion()
+    const panel = readRenderer('features/sessions/SessionPanel.tsx')
+    assert.ok(region.includes('aria-label="STARK effort"'), 'effort group must sit beside the target')
+    assert.ok(region.includes('aria-label="Choose STARK effort"'), 'effort pill must be labelled')
+    assert.ok(panel.includes('STARK_EFFORTS'), 'menu must render the exact five levels')
+    assert.ok(panel.includes('STARK_EFFORT_TOOLTIPS[effort]'), 'effort must tooltip its copy')
+    assert.ok(panel.includes('effortVisibleFor(agentTarget)'), 'effort must hide for external targets')
+  })
+
+  it('selection flows through target/effort state, then refocuses', () => {
+    const panel = readRenderer('features/sessions/SessionPanel.tsx')
+    assert.ok(panel.includes('function selectAgentTarget'), 'target selection must flow through one helper')
+    assert.ok(panel.includes('function selectEffort'), 'effort selection must flow through one helper')
+    assert.ok(panel.includes('setTargetMenuOpen(false)'), 'target menu must close on selection')
+    assert.ok(panel.includes('setEffortMenuOpen(false)'), 'effort menu must close on selection')
+    assert.ok(panel.includes('composerRef.current?.focus()'), 'focus must return to the textarea')
+  })
+
+  it('switching target during an active run is blocked and drafts survive', () => {
+    const panel = readRenderer('features/sessions/SessionPanel.tsx')
+    assert.ok(panel.includes('isTargetSwitchBlocked'), 'target switches must guard in-flight runs')
+    assert.ok(panel.includes('Finish the current run before switching agents.'), 'blocked switches must explain calmly')
+    const helperAt = panel.indexOf('function selectAgentTarget')
     assert.ok(helperAt >= 0, 'selection helper must exist')
-    const helper = panel.slice(helperAt, helperAt + 400)
-    assert.ok(helper.includes('setModeMenuOpen(false)'), 'menu must close on selection')
-    assert.ok(helper.includes('composerRef.current?.focus()'), 'focus must return to the textarea')
+    const helper = panel.slice(helperAt, helperAt + 1400)
+    assert.ok(!helper.includes('setComposer'), 'switching target must never clear the draft')
+    assert.ok(!helper.includes('setAttachments'), 'switching target must never drop staged attachments')
   })
 
-  it('menu closes on Escape and outside pointer-down, listeners cleaned up', () => {
+  it('menus close on Escape and outside pointer-down, listeners cleaned up', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes("event.key === 'Escape'"), 'Escape must close the menu')
+    assert.ok(panel.includes("event.key === 'Escape'"), 'Escape must close the menus')
     assert.ok(panel.includes("document.addEventListener('keydown', onKeyDown)"), 'Escape listener must mount while open')
     assert.ok(panel.includes("document.addEventListener('pointerdown', onPointerDown)"), 'outside-click listener must mount while open')
     assert.ok(panel.includes("document.removeEventListener('keydown', onKeyDown)"), 'Escape listener must be removed')
     assert.ok(panel.includes("document.removeEventListener('pointerdown', onPointerDown)"), 'outside-click listener must be removed')
-    assert.ok(panel.includes('modeButtonRef.current?.focus()'), 'Escape must return focus to the trigger')
+    assert.ok(panel.includes('targetButtonRef.current?.focus()'), 'Escape must return focus to the target trigger')
+    assert.ok(panel.includes('effortButtonRef.current?.focus()'), 'Escape must return focus to the effort trigger')
   })
 
-  it('menu is keyboard navigable with per-mode accents', () => {
+  it('menus are keyboard navigable with checked active items', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('handleModeMenuKeyDown'), 'arrow-key navigation must exist')
+    assert.ok(panel.includes('handleTargetEffortMenuKeyDown'), 'arrow-key navigation must exist')
     assert.ok(panel.includes("'ArrowDown'"), 'ArrowDown must move through options')
     assert.ok(panel.includes("'ArrowUp'"), 'ArrowUp must move through options')
-    const css = readRenderer('features/sessions/session.css')
-    assert.ok(css.includes('.session__modepill--ask'), 'Ask pill must carry lime')
-    assert.ok(css.includes('.session__modemenu-item--work'), 'Work menu item must exist')
-    const pillAsk = css.match(/\.session__modepill--ask\s*\{[^}]*\}/)
-    assert.ok(pillAsk !== null && pillAsk[0].includes('var(--stark-lime)'), 'Ask pill must read lime')
-    const pillWork = css.match(/\.session__modepill--work\s*\{[^}]*\}/)
-    assert.ok(pillWork !== null && pillWork[0].includes('var(--stark-magenta)'), 'Work pill must read magenta')
+    const region = composerRegion()
+    assert.ok(region.includes('role="menuitemradio"'), 'options must be radio items')
+    assert.ok(region.includes('aria-checked={agentTarget.kind'), 'active target must be indicated')
+    assert.ok(region.includes('aria-checked={effort === level}'), 'active effort must be indicated')
   })
 })
 
@@ -264,7 +286,8 @@ describe('copy, status, and responsive discipline', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     const voice = readRenderer('features/sessions/VoiceInputButton.tsx')
     assert.ok(panel.includes('aria-label="Attach files"'), 'attach must be labelled')
-    assert.ok(panel.includes('aria-label="Choose message mode"'), 'mode must be labelled')
+    assert.ok(panel.includes('aria-label="Choose agent target"'), 'target must be labelled')
+    assert.ok(panel.includes('aria-label="Choose STARK effort"'), 'effort must be labelled')
     assert.ok(voice.includes('aria-label="Start voice input"'), 'mic must be labelled')
     assert.ok(panel.includes('aria-label="Send message"'), 'send must be labelled')
   })

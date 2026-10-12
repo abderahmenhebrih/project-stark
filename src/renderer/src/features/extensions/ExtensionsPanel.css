@@ -767,7 +767,7 @@
 }
 
 .ext-overlay__palette-item:hover {
-  background: rgba(200, 255, 0, 0.08);
+  background: var(--stark-lime-dim);
 }
 
 .ext-overlay__palette-title {
@@ -844,7 +844,7 @@
 
 .ext-overlay__prompt-item:hover,
 .ext-overlay__prompt-item--selected {
-  background: rgba(200, 255, 0, 0.08);
+  background: var(--stark-lime-dim);
 }
 
 .ext-overlay__prompt-input {

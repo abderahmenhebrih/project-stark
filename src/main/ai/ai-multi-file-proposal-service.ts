@@ -39,12 +39,13 @@ import {
   MAX_AI_CONTEXT_BYTES,
   MAX_AI_CONTEXT_MESSAGES,
   MAX_AI_PROPOSED_FILE_BYTES,
-  MAX_ASSISTANT_OUTPUT_TOKENS,
   MIN_AI_CHANGE_SET_FILES,
   STAGE_17_FIXED_MULTI_FILE_INSTRUCTIONS
 } from './limits'
 import type { AiProviderService } from './ai-provider-service'
 import { AiOperationGuard } from './ai-operation-guard'
+import { deriveStarkRunPolicy } from './stark-run-policy'
+import { isStarkEffort, type StarkEffort } from '../../shared/agent-target/types'
 import { PendingApprovalBlockedError } from '../worker-tools/worker-tool-errors'
 import type { ProviderRegistry } from './provider-adapter'
 import type { AiUsageDeps } from '../usage/ai-usage-tracker'
@@ -196,13 +197,20 @@ export class AiMultiFileProposalService {
   }
 
   async proposeChangeSet(payload: unknown): Promise<AiChangeSetProposalResult> {
-    if (!hasStrictShape(payload, ['workspaceId', 'sessionId'])) {
+    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort'])) {
       throw new InvalidChangeSetRequestError('change-set proposal request is invalid')
     }
     const record = payload as Record<string, unknown>
     const { workspaceId, sessionId } = record
     if (!isValidId(workspaceId) || !isValidId(sessionId)) {
       throw new InvalidChangeSetRequestError('session reference is invalid')
+    }
+    let effort: StarkEffort = 'regular'
+    if ('effort' in record && record['effort'] !== undefined) {
+      if (!isStarkEffort(record['effort'])) {
+        throw new InvalidChangeSetRequestError('effort is invalid')
+      }
+      effort = record['effort']
     }
     if (this.workspaces.findById(workspaceId) === undefined) {
       throw new SessionWorkspaceUnavailableError()
@@ -222,13 +230,13 @@ export class AiMultiFileProposalService {
     }
     this.guard.acquire(sessionId)
     try {
-      return await this.proposeInner(workspaceId, sessionId)
+      return await this.proposeInner(workspaceId, sessionId, effort)
     } finally {
       this.guard.release(sessionId)
     }
   }
 
-  private async proposeInner(workspaceId: number, sessionId: number): Promise<AiChangeSetProposalResult> {
+  private async proposeInner(workspaceId: number, sessionId: number, effort: StarkEffort = 'regular'): Promise<AiChangeSetProposalResult> {
     const latest = this.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
     if (latest === undefined || latest.role !== 'user') {
       throw new ChangeSetNothingToProposeError()
@@ -313,6 +321,9 @@ export class AiMultiFileProposalService {
 
     const apiKey = await this.providerService.decryptCredentialForUse(providerId)
     let outputText: string
+    // Effort policy: output budget + model-gated reasoning travel
+    // with the proposal call (Regular keeps the exact baseline).
+    const policy = deriveStarkRunPolicy(effort, model)
     try {
       const result = await this.trackCall(
         { workspaceId, sessionId },
@@ -323,7 +334,8 @@ export class AiMultiFileProposalService {
           model,
           instructions: STAGE_17_FIXED_MULTI_FILE_INSTRUCTIONS,
           messages: providerMessages,
-          maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+          maxOutputTokens: policy.maxOutputTokens,
+          ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
           schemaName: CHANGE_SET_SCHEMA_NAME,
           schema: buildChangeSetJsonSchema(targets.length)
         })

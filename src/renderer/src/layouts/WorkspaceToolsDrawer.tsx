@@ -2,7 +2,7 @@ import type { ReactElement, ReactNode } from 'react'
 import { useEffect, useRef } from 'react'
 import { DrawerWorkspaceMenu } from '../features/workspace/DrawerWorkspaceMenu'
 import { ActivityRail, type ActivityKind } from '../features/explorer/ActivityRail'
-import { StarkIcon } from '../components/icons/StarkIcon'
+import { UiIcon } from '../components/icons/UiIcon'
 
 interface WorkspaceToolsDrawerProps {
   readonly open: boolean
@@ -74,7 +74,7 @@ export function WorkspaceToolsDrawer({
           aria-label="Close workspace tools"
           title="Close workspace tools"
         >
-          <StarkIcon name="close" size={16} />
+          <UiIcon name="close" size={16} />
         </button>
       </div>
       <div className="workspace-tools-drawer__body">

@@ -59,8 +59,7 @@ export const STARK_SEMANTIC_TOKEN_TYPES: readonly string[] = [
 ]
 
 /** Theme data: near-black background, lime reserved for caret/accents. */
-export function starkEditorTheme(): StarkEditorTheme {
-  return {
+export function starkEditorTheme(): StarkEditorTheme {  return {
     base: 'vs-dark',
     inherit: true,
     rules: [
@@ -236,6 +235,73 @@ export function starkEditorTheme(): StarkEditorTheme {
       'editorHint.foreground': '#93A196'
     }
   }
+}
+
+/**
+ * Official style primaries (mirrors style-registry.ts — no new hues).
+ * The Monaco canvas cannot consume CSS vars, so caret/selection
+ * colors resolve through this mapping: Magma reads volcano orange,
+ * never lime. Semantic colors (success/warning/error/diagnostics)
+ * are identical across styles.
+ */
+const STYLE_PRIMARY_HEX: Record<string, string> = {
+  free: '#C8FF00',
+  magma: '#FF6A00',
+  frost: '#CFE9FF',
+  void: '#F4F4F5'
+}
+
+/** Official primary hex for a brand style id (fail-closed to Free lime). */
+export function brandPrimaryForStyleId(styleId: string): string {
+  return STYLE_PRIMARY_HEX[styleId] ?? '#C8FF00'
+}
+
+/**
+ * STARK theme tinted to one official primary: the eight lime-derived
+ * caret/selection/match colors resolve from the given 6-digit hex
+ * (validated; anything else falls back to Free lime). All other
+ * token, diagnostic, and bracket colors are unchanged.
+ */
+export function starkEditorThemeForPrimary(primary: string): StarkEditorTheme {
+  const base = starkEditorTheme()
+  const match = /^#([0-9a-fA-F]{6})$/.exec(primary.trim())
+  const hex = (match?.[1] ?? 'C8FF00').toUpperCase()
+  return {
+    ...base,
+    colors: {
+      ...base.colors,
+      'editorCursor.foreground': `#${hex}`,
+      'editor.selectionBackground': `#${hex}40`,
+      'editor.inactiveSelectionBackground': `#${hex}20`,
+      'editor.findMatchBackground': `#${hex}44`,
+      'editor.findMatchHighlightBackground': `#${hex}22`,
+      'editorBracketMatch.background': `#${hex}22`,
+      'editorBracketMatch.border': `#${hex}55`
+    }
+  }
+}
+
+/** Current brand style id from the document dataset (Node-safe). */
+export function documentStyleId(): string {
+  try {
+    const holder = globalThis as unknown as {
+      readonly document?: { readonly documentElement?: { readonly dataset?: Record<string, string> } }
+    }
+    return holder.document?.documentElement?.dataset?.['starkStyle'] ?? 'free'
+  } catch {
+    return 'free'
+  }
+}
+
+/**
+ * Re-defines and activates the STARK theme tinted to the current
+ * document style. Idempotent; call on mount and on style switches
+ * for a live Magma caret with no editor remount.
+ */
+export function refreshStarkThemeForDocumentStyle(api: MonacoThemeApi): void {
+  const theme = starkEditorThemeForPrimary(brandPrimaryForStyleId(documentStyleId()))
+  api.editor.defineTheme(STARK_EDITOR_THEME_NAME, theme)
+  api.editor.setTheme(STARK_EDITOR_THEME_NAME)
 }
 
 /**

@@ -1,4 +1,5 @@
 import type { ChatAttachment } from '../../../../shared/chat-attachments/types'
+import type { AgentTarget, StarkEffort } from '../../../../shared/agent-target/types'
 import type { ProposalMode } from './proposal-state'
 
 /**
@@ -35,6 +36,13 @@ export interface SessionTabDraft {
   readonly composer: string
   readonly attachments: readonly ChatAttachment[]
   readonly mode: ProposalMode
+  /**
+   * Composer agent target + STARK effort stashed per session
+   * (renderer memory only — never web storage, never the DB, so no
+   * migration). Absent means the STARK/Regular defaults.
+   */
+  readonly target?: AgentTarget
+  readonly effort?: StarkEffort
 }
 
 /** Fresh (empty) draft for a session with no stashed state. */

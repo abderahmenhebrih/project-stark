@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import type { WorkspaceSearchMatch } from '../../../../shared/workspace-search/types'
 import { searchWorkspace } from '../../lib/stark-api'
-import { StarkIcon } from '../../components/icons/StarkIcon'
+import { UiIcon } from '../../components/icons/UiIcon'
 import { FILE_ICON_URLS } from '../explorer/fileIconAssets'
 import { getFileIconKind } from '../explorer/fileIconForName'
 import { initialSearchState, searchPanelReducer } from './search-state'
@@ -200,7 +200,7 @@ export function SearchPanel({ workspaceId, onSelectResult, onAttachResult }: Sea
     <section className="search" aria-label="Search">
       <div className="search__field">
         <span className="search__field-icon" aria-hidden="true">
-          <StarkIcon name="search" size={16} />
+          <UiIcon name="search" size={16} />
         </span>
         <input
           id="workspace-search-input"
@@ -215,7 +215,7 @@ export function SearchPanel({ workspaceId, onSelectResult, onAttachResult }: Sea
         />
         {input.length > 0 && (
           <button className="search__clear" type="button" onClick={handleClear} aria-label="Clear search" title="Clear search">
-            <StarkIcon name="close" size={14} />
+            <UiIcon name="close" size={14} />
           </button>
         )}
         <label className="search__case" title="Match case">
@@ -293,7 +293,7 @@ export function SearchPanel({ workspaceId, onSelectResult, onAttachResult }: Sea
                         aria-label={`Attach match in ${match.relativePath} line ${match.line} to chat`}
                         title="Attach to context"
                       >
-                        <StarkIcon name="plus" size={13} />
+                        <UiIcon name="plus" size={13} />
                       </button>
                     )}
                   </li>

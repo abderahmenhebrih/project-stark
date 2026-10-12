@@ -36,6 +36,13 @@ export interface ProviderGenerateRequest {
   readonly messages: readonly ProviderContextMessage[]
   readonly maxOutputTokens: number
   /**
+   * Provider reasoning effort (optional). Sent ONLY when the model
+   * officially supports it (see stark-run-policy capability gating).
+   * Absent/null means current/default provider behavior — never an
+   * unsupported literal.
+   */
+  readonly reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null
+  /**
    * Resolved attachment content (Step 2, optional). Adapters map it
    * to the provider's native multimodal representation — never into
    * giant plain-text prompts, never into instructions. Absent means
@@ -62,6 +69,11 @@ export interface ProviderStructuredRequest {
   readonly maxOutputTokens: number
   readonly schemaName: string
   readonly schema: unknown
+  /**
+   * Provider reasoning effort (optional). Same contract as the
+   * text-generation request — model-gated, never unsupported.
+   */
+  readonly reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null
   /**
    * Resolved attachment content (Step 2, optional). Same contract as
    * the text-generation request — adapters map it natively and keep

@@ -225,12 +225,15 @@ describe('stage 31 frontend shell', () => {
     assert.ok(stack !== null && stack[0].includes('min-height: 280px'), 'stack must keep a comfortable floor')
   })
 
-  it('composer contains its modes, input, context state, and send', () => {
+  it('composer contains its target, effort, input, context state, and send', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('session__composer--'), 'composer must know the active mode')
-    for (const feature of ['Composer mode', 'Message composer', 'Ask', 'Work', 'Propose change', 'Choose message mode', 'Send message']) {
+    assert.ok(panel.includes('session__composer--'), 'composer must know the active runtime path')
+    for (const feature of ['Agent target', 'Message composer', 'STARK', 'Choose agent target', 'Choose STARK effort', 'Send message']) {
       assert.ok(panel.includes(feature), `composer must contain ${feature}`)
     }
+    // Ask/Work/Propose live on as slash overrides behind the unified
+    // STARK send — the primary dropdown is the Agent Target selector.
+    assert.ok(panel.includes('resolveStarkSendMode'), 'composer must resolve sends through the override parser')
     const css = readRenderer('features/sessions/session.css')
     const composer = css.match(/\.session__composer\s*\{[^}]*\}/)
     assert.ok(composer !== null, 'composer dock CSS must exist')
@@ -425,11 +428,10 @@ describe('stage 31 frontend shell', () => {
     }
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     for (const feature of [
-      'Composer mode',
+      'Agent target',
       'Message composer',
-      'Ask',
-      'Work',
-      'Propose change',
+      'STARK',
+      'KILO_DISPLAY_NAME',
       'Send',
       'Heart routing',
       'Workspace Agent Capabilities',
@@ -451,6 +453,11 @@ describe('stage 31 frontend shell', () => {
     }
     const chrome = readRenderer('layouts/AppChrome.tsx')
     assert.ok(chrome.includes('Continue with Looplink'), 'Looplink must remain reachable in the session overflow')
+    // Ask/Work/Propose runtime paths survive as explicit slash
+    // overrides behind the unified STARK send (no classifier).
+    assert.ok(panel.includes('resolveStarkSendMode'), 'composer must resolve sends through the deterministic override parser')
+    assert.ok(panel.includes('/ask') && panel.includes('/work') && panel.includes('/propose'), 'slash overrides must stay documented in the send path')
+    assert.ok(panel.includes('handleWorkSend(sessionId, sendContent)'), 'unified send must default to the Work runtime path')
   })
 
   it('responsive shell never requires three squeezed columns', () => {

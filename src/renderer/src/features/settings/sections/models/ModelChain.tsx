@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { StarkIcon } from '../../../../components/icons/StarkIcon'
+import { UiIcon } from '../../../../components/icons/UiIcon'
 import type { StarkModelIdentity } from './model-library'
 import { canEnterChain, findLibraryModel } from './model-library'
 import { MAX_CHAIN_MODELS, deriveModelRoster, enableModel } from './model-chain'
@@ -204,7 +204,7 @@ export function ModelChain(props: ModelChainProps): ReactElement {
                     aria-label={`Reorder ${name}`}
                     title={`Reorder ${name} (Alt + Up/Down)`}
                   >
-                    <StarkIcon name="menu" size={14} />
+                    <UiIcon name="menu" size={14} />
                   </button>
                   <span className="models-chain__position" aria-hidden="true">
                     {position}

@@ -457,7 +457,9 @@ export class AiRecoveryCoordinator {
   }
 
   private parseScope(payload: unknown): { workspaceId: number; sessionId: number } {
-    if (!hasStrictShape(payload, ['workspaceId', 'sessionId'])) {
+    // 'effort' is accepted and ignored here: recovery runs keep fixed
+    // baseline budgets (effort never changes safety/recovery semantics).
+    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort'])) {
       throw new InvalidRecoveryRequestError('recovery request is invalid')
     }
     const record = payload as Record<string, unknown>

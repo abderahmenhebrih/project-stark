@@ -12,7 +12,7 @@ import { AccountSettings } from './sections/AccountSettings'
 import { BillingSettings } from './sections/BillingSettings'
 import { StylesSettings } from './sections/StylesSettings'
 import { AboutSettings } from './sections/AboutSettings'
-import { StarkIcon } from '../../components/icons/StarkIcon'
+import { UiIcon } from '../../components/icons/UiIcon'
 import './SettingsPage.css'
 
 export interface SettingsPageBinding {
@@ -111,7 +111,7 @@ export function SettingsPage({ section, onSectionChange, onBack, binding }: Sett
           aria-label="Back to workbench"
           title="Back to workbench"
         >
-          <StarkIcon name="chevron-left" size={14} />
+          <UiIcon name="chevron-left" size={14} />
           <span>Back</span>
         </button>
         <div className="settings-page__heading">

@@ -12,11 +12,18 @@ import type { ChangeTransaction } from '../change-transactions/types'
 import type { ChangeSet } from '../change-sets/types'
 import type { OrchestrationRun } from '../orchestration/types'
 import type { RecoveryEvent } from '../recovery/types'
+import type { StarkEffort } from '../agent-target/types'
 
 /** Generation request: which session's trailing user message to answer. */
 export interface AiGenerateRequest {
   readonly workspaceId: number
   readonly sessionId: number
+  /**
+   * STARK effort selector (optional). Absent means Regular baseline
+   * behavior. External agent targets never send this — main ignores
+   * effort for non-STARK runs.
+   */
+  readonly effort?: StarkEffort
 }
 
 /** Generation result: the persisted assistant message plus session. */
@@ -33,6 +40,8 @@ export interface AiGenerateResult {
 export interface AiProposeFileChangeRequest {
   readonly workspaceId: number
   readonly sessionId: number
+  /** STARK effort selector (optional, Regular baseline when absent). */
+  readonly effort?: StarkEffort
 }
 
 /**
@@ -52,6 +61,8 @@ export interface AiFileChangeProposalResult {
 export interface AiProposeChangeSetRequest {
   readonly workspaceId: number
   readonly sessionId: number
+  /** STARK effort selector (optional, Regular baseline when absent). */
+  readonly effort?: StarkEffort
 }
 
 /**
@@ -70,6 +81,8 @@ export interface AiChangeSetProposalResult {
 export interface AiRunBrainRequest {
   readonly workspaceId: number
   readonly sessionId: number
+  /** STARK effort selector (optional, Regular baseline when absent). */
+  readonly effort?: StarkEffort
 }
 
 /**

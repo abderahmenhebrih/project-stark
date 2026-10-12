@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactElement, ReactNode } from 'react'
-import { StarkIcon } from '../../components/icons/StarkIcon'
+import { UiIcon } from '../../components/icons/UiIcon'
 
-export type SecondaryTabKind = 'review' | 'context' | 'file'
+export type SecondaryTabKind = 'review' | 'context' | 'file' | 'live'
 
 interface SecondaryTab {
   readonly kind: SecondaryTabKind
@@ -22,11 +22,13 @@ interface WorkspaceSecondaryPaneProps {
 }
 
 /**
- * Contextual secondary workspace pane: Review / Context / file tabs
- * above an optional stacked terminal. Rendered only when useful (a
- * file, review, context request, or terminal needs it); otherwise it
- * unmounts and the session expands. Presentational only — all review,
- * editor, context, and terminal state stays with its existing owner.
+ * Contextual secondary workspace pane: Review / Context / file / Live
+ * Review tabs above an optional stacked terminal. Rendered only when
+ * useful (a file, review, context request, Live Review, or terminal
+ * needs it); otherwise it unmounts and the session expands.
+ * Presentational only — all review, editor, context, Live Review,
+ * and terminal state stays with its existing owner. Explicit tab
+ * selections win ownership; background updates never steal it.
  */
 export function WorkspaceSecondaryPane({
   tabs,
@@ -39,6 +41,19 @@ export function WorkspaceSecondaryPane({
   terminalOpen,
   style
 }: WorkspaceSecondaryPaneProps): ReactElement {
+  function tabTitle(kind: SecondaryTabKind, label: string): string {
+    if (kind === 'review') {
+      return 'Review'
+    }
+    if (kind === 'context') {
+      return 'Context'
+    }
+    if (kind === 'live') {
+      return 'Live Review — localhost preview'
+    }
+    return label
+  }
+
   return (
     <section className="workspace__secondary" aria-label="Workspace" style={style}>
       <div className="workspace__tabs" role="tablist" aria-label="Workspace views">
@@ -53,14 +68,16 @@ export function WorkspaceSecondaryPane({
             type="button"
             role="tab"
             aria-selected={activeTab === tab.kind}
-            title={tab.kind === 'review' ? 'Review' : tab.kind === 'context' ? 'Context' : tab.label}
+            title={tab.kind === 'file' ? tab.label : tabTitle(tab.kind, tab.label)}
             aria-label={tab.kind === 'file' ? `File ${tab.label}` : tab.label}
             onClick={() => onTabChange(tab.kind)}
           >
             {tab.kind === 'review' ? (
-              <StarkIcon name="review" size={14} />
+              <UiIcon name="review" size={14} />
             ) : tab.kind === 'context' ? (
-              <StarkIcon name="context" size={14} />
+              <UiIcon name="context" size={14} />
+            ) : tab.kind === 'live' ? (
+              <UiIcon name="live" size={14} />
             ) : null}
             <span className="workspace__tab-label">{tab.label}</span>
           </button>
@@ -73,7 +90,7 @@ export function WorkspaceSecondaryPane({
           aria-label="Open workspace tools"
           title="Open workspace tools"
         >
-          <StarkIcon name="plus" size={15} />
+          <UiIcon name="plus" size={15} />
         </button>
         <button
           className="workspace__tab-action"
@@ -82,7 +99,7 @@ export function WorkspaceSecondaryPane({
           aria-label="Close workspace pane"
           title="Close workspace pane"
         >
-          <StarkIcon name="close" size={15} />
+          <UiIcon name="close" size={15} />
         </button>
       </div>
       <div className="workspace__pane-body">{children}</div>

@@ -3,7 +3,7 @@ import {
   VOICE_MAX_AUDIO_BYTES,
   VOICE_MAX_DURATION_MS
 } from '../../../../shared/voice/types'
-import { StarkIcon } from '../../components/icons/StarkIcon'
+import { UiIcon } from '../../components/icons/UiIcon'
 import { normalizeVoiceError, VOICE_FAILED_MESSAGE, VOICE_TOO_LONG_MESSAGE } from '../../lib/voice-error'
 import { transcribeVoiceAudio } from '../../lib/voice-api'
 import {
@@ -301,7 +301,7 @@ export function VoiceInputButton({ disabled, sessionKey, onTranscribed }: VoiceI
           aria-label="Stop recording"
           title="Stop recording"
         >
-          <StarkIcon name="mic" size={16} />
+          <UiIcon name="mic" size={16} />
         </button>
         <span className="session__voice-elapsed" aria-hidden="true">
           {formatVoiceElapsed(elapsedMs)}
@@ -313,7 +313,7 @@ export function VoiceInputButton({ disabled, sessionKey, onTranscribed }: VoiceI
           aria-label="Cancel recording"
           title="Cancel recording"
         >
-          <StarkIcon name="close" size={12} />
+          <UiIcon name="close" size={12} />
         </button>
       </span>
     )
@@ -329,7 +329,7 @@ export function VoiceInputButton({ disabled, sessionKey, onTranscribed }: VoiceI
         aria-label="Start voice input"
         title="Start voice input"
       >
-        <StarkIcon name="mic" size={16} />
+        <UiIcon name="mic" size={16} />
       </button>
       {phase === 'transcribing' && (
         <span className="session__hint" role="status">
