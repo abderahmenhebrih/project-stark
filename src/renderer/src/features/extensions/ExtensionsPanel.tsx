@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ReactElement } from 'react'
 import type { ExtensionEntry, InstalledExtensionEntry } from '../../../../shared/extension-registry/types'
 import type { ExtensionDetails, ExtensionEditProposal } from '../../../../shared/extension-management/types'
+import { listExtensionAgentProviders } from '../../lib/extension-agents-api'
 import {
   acknowledgeAndActivateExtension,
   checkExtensionUpdate,
@@ -151,6 +152,9 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
   /** Renderer-safe failure copy per entry, as returned by main (matched, never raw internals). */
   const [failedMessages, setFailedMessages] = useState<Readonly<Record<string, string>>>({})
   const [installedByKey, setInstalledByKey] = useState<Readonly<Record<string, InstalledExtensionEntry>>>({})
+  // Extensions owning at least one discovered agent provider (honest
+  // "Agent" chip on installed rows; absent when undiscoverable).
+  const [agentExtensionIds, setAgentExtensionIds] = useState<ReadonlySet<string>>(new Set())
   const [confirmingKey, setConfirmingKey] = useState<string | null>(null)
   const [uninstallingKeys, setUninstallingKeys] = useState<readonly string[]>([])
   const [uninstallFailedKeys, setUninstallFailedKeys] = useState<readonly string[]>([])
@@ -261,6 +265,21 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
         // Installed state stays empty; catalog rows remain installable.
       }
     )
+    // Agent-provider ownership for the honest installed-row chip.
+    // Best effort: a failed load simply shows no chip (never a badge).
+    listExtensionAgentProviders().then(
+      (providers) => {
+        if (cancelled) {
+          return
+        }
+        setAgentExtensionIds(new Set(providers.map((entry) => entry.extensionId)))
+      },
+      () => {
+        if (!cancelled) {
+          setAgentExtensionIds(new Set())
+        }
+      }
+    )
     return () => {
       cancelled = true
     }
@@ -278,6 +297,11 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
       () => {
         // Keep the last known installed set on refresh failure.
       }
+    )
+    // Agent ownership follows installs/uninstalls/enables explicitly.
+    listExtensionAgentProviders().then(
+      (providers) => setAgentExtensionIds(new Set(providers.map((entry) => entry.extensionId))),
+      () => {}
     )
   }
 
@@ -881,6 +905,11 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
             <span className="extensions__installed-meta">
               {item.namespace} · {item.version}
             </span>
+            {agentExtensionIds.has(`${item.namespace}.${item.name}`) && (
+              <span className="extensions__badge" title="Exposes a compatible agent provider (composer target)">
+                Agent
+              </span>
+            )}
             <span className="extensions__state-label">
               {installedStatusCopy(item, loaded, details, failed)}
             </span>

@@ -32,6 +32,7 @@ import { ProviderRegistry } from '../ai/provider-adapter'
 import { ExtensionHostManager } from '../extension-host/extension-host-manager'
 import { ExtensionActivationService } from '../extension-host/extension-activation-service'
 import { ExtensionRuntimeService } from '../extension-host/extension-runtime-service'
+import { ExtensionAgentService } from '../extension-agents/extension-agent-service'
 import { FormatterService } from '../formatter/formatter-service'
 import { ChatAttachmentService } from '../chat-attachments/service'
 import type { ProviderModel } from '../../shared/providers/types'
@@ -223,6 +224,8 @@ const EXPECTED_PRODUCTION_CHANNELS: readonly string[] = [
   IPC_CHANNELS.extensionsGetSelectedThemes,
   IPC_CHANNELS.extensionsSetSelectedTheme,
   IPC_CHANNELS.extensionsListJsonSchemas,
+  IPC_CHANNELS.extensionAgentsListProviders,
+  IPC_CHANNELS.extensionAgentsRun,
   IPC_CHANNELS.formatterFormatDocument
 ]
 
@@ -287,6 +290,20 @@ describe('authoritative production IPC surface', () => {
           activationService: activationServiceForSurface,
           installService: installServiceForSurface,
           installRoot
+        }),
+        extensionAgentService: new ExtensionAgentService({
+          workspaces: new WorkspaceRepository(db),
+          sessions: new CodingSessionRepository(db),
+          files: services.workspaceFilesService,
+          transactions: services.changeTransactionService,
+          installService: installServiceForSurface,
+          installRoot,
+          runtime: new ExtensionRuntimeService({
+            manager: hostManagerForSurface,
+            activationService: activationServiceForSurface,
+            installService: installServiceForSurface,
+            installRoot
+          })
         }),
         formatterService: new FormatterService({
           manager: new ExtensionHostManager({
@@ -401,6 +418,10 @@ describe('authoritative production IPC surface', () => {
       'IPC_CHANNELS.extensionsHostStatus',
       'IPC_CHANNELS.extensionsHostStart',
       'IPC_CHANNELS.extensionsHostStop',
+      'IPC_CHANNELS.extensionAgentsListProviders',
+      'IPC_CHANNELS.extensionAgentsRun',
+      'createExtensionAgentsApi()',
+      'extensionAgents: createExtensionAgentsApi()',
       'IPC_CHANNELS.formatterFormatDocument',
       'createExtensionsApi()',
       'extensions: createExtensionsApi()',

@@ -561,7 +561,7 @@
 
 /* Agent-target pill: STARK reads brand lime, external reads neutral
    until selected. Effort pill stays neutral; the checked menu item
-   carries the accent. Disabled Kilo rows show the honest reason. */
+   carries the accent. Disabled provider rows show the honest reason. */
 .session__modepill--target {
   color: var(--stark-lime);
   border-color: var(--stark-lime);
@@ -590,6 +590,43 @@
   font-weight: 400;
   color: var(--stark-text-dim);
   white-space: normal;
+}
+
+/* Dynamic agent-target menu: section label, provider icon artwork
+   (extension's own package icon, generic fallback otherwise), and a
+   truncating provider name with an optional full-width reason. */
+.session__modemenu-label {
+  margin: 0;
+  padding: 6px 12px 2px;
+  font-family: var(--stark-font-sans);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--stark-text-dim);
+  white-space: nowrap;
+}
+
+.session__modemenu-icon {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.session__modemenu-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session__modemenu-item--wrap {
+  flex-wrap: wrap;
+}
+
+.session__modemenu-item--wrap .session__modemenu-reason {
+  width: 100%;
 }
 
 .session__send {

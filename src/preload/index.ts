@@ -155,6 +155,12 @@ import type {
   ExtensionJsonSchema,
   SelectedThemeRef
 } from '../shared/extension-management/types'
+import type {
+  ExtensionAgentProviderInfo,
+  ExtensionAgentRunRequest,
+  ExtensionAgentRunResult,
+  ExtensionAgentsApi
+} from '../shared/extension-agents/types'
 import type { FormatDocumentRequest, FormatDocumentResult, FormatterApi } from '../shared/formatter/types'
 import type { ChatAttachmentsApi, ChatAttachment, ChooseAttachmentsRequest } from '../shared/chat-attachments/types'
 import type { VoiceApi, VoiceTranscribeRequest, VoiceTranscribeResult } from '../shared/voice/types'
@@ -546,6 +552,15 @@ function createExtensionManagementApi(): ExtensionManagementApi {
   }
 }
 
+function createExtensionAgentsApi(): ExtensionAgentsApi {
+  return {
+    listProviders: (): Promise<readonly ExtensionAgentProviderInfo[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionAgentsListProviders) as Promise<readonly ExtensionAgentProviderInfo[]>,
+    runAgent: (request: ExtensionAgentRunRequest): Promise<ExtensionAgentRunResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.extensionAgentsRun, request) as Promise<ExtensionAgentRunResult>
+  }
+}
+
 function createAttachmentsApi(): ChatAttachmentsApi {
   return {
     choose: (request: ChooseAttachmentsRequest): Promise<readonly ChatAttachment[]> =>
@@ -663,6 +678,7 @@ const starkApi: StarkApi = {
   extensionHost: createExtensionHostApi(),
   extensionActivation: createExtensionActivationApi(),
   extensionManagement: createExtensionManagementApi(),
+  extensionAgents: createExtensionAgentsApi(),
   formatter: createFormatterApi(),
   attachments: createAttachmentsApi(),
   voice: createVoiceApi()

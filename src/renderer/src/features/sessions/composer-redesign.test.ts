@@ -53,8 +53,8 @@ describe('floating composer shell', () => {
   })
 })
 
-describe('agent target selector', () => {
-  it('replaces the Ask/Work/Propose primary dropdown with STARK + Kilo targets', () => {
+describe('agent target selector (data-driven)', () => {
+  it('replaces the Ask/Work/Propose primary dropdown with STARK + discovered extensions', () => {
     const region = composerRegion()
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     assert.ok(!panel.includes('MODE_OPTIONS'), 'the old Ask/Work/Propose option list must be gone')
@@ -66,22 +66,38 @@ describe('agent target selector', () => {
     assert.ok(region.includes('aria-label="Agent target"'), 'target group must be labelled')
     assert.ok(region.includes('aria-label="Choose agent target"'), 'target pill must be labelled')
     assert.ok(region.includes('STARK'), 'STARK target must exist')
-    // The menu renders the shared KILO_DISPLAY_NAME constant (literal
-    // 'Kilo Code' is pinned in the agent-target contract tests).
-    assert.ok(region.includes('KILO_DISPLAY_NAME'), 'Kilo target must exist in the menu')
-    // The menu renders the live kilo.reason (honest unavailable copy);
-    // the fail-closed reason literal lives in the panel state + send net.
-    assert.ok(panel.includes('Kilo bridge not available'), 'unavailable Kilo must carry its honest reason')
-    assert.ok(region.includes('canSelectKilo(kilo)'), 'Kilo selection must gate on real availability')
+    // The menu renders discovered provider rows (data, never vendor
+    // names) plus the empty-state row when none are registered.
+    assert.ok(region.includes('providers.map((row)'), 'menu must render discovered providers dynamically')
+    assert.ok(region.includes('No compatible agent extensions installed'), 'empty registry must say so honestly')
+    assert.ok(region.includes('canSelectProvider(row)'), 'selection must gate on real provider availability')
+    assert.ok(panel.includes('listExtensionAgentProviders'), 'providers must come from the narrow discovery channel')
   })
 
   it('unified STARK send keeps runtime paths as slash overrides only', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes('resolveStarkSendMode(content)'), 'sends must resolve through the deterministic resolver')
+    assert.ok(panel.includes('resolveComposerSend(agentTarget, content, providers)'), 'sends must resolve through the data-driven resolver')
     assert.ok(panel.includes("await handleWorkSend(sessionId, sendContent)"), 'default send must use the unified Work path')
     assert.ok(panel.includes('runBrainWorkRaw({ workspaceId, sessionId, effort })'), 'Work runs must carry the effort selector')
     assert.ok(panel.includes('generateAssistantResponseRaw({ workspaceId, sessionId, effort })'), 'Ask override must carry the effort selector')
     assert.ok(panel.includes("proposalDispatch({ type: 'mode-changed'"), 'slash overrides must reuse the preserved mode state')
+  })
+
+  it('extension sends run one bounded provider turn with raw text', () => {
+    const panel = readRenderer('features/sessions/SessionPanel.tsx')
+    assert.ok(panel.includes('function handleExtensionSend('), 'extension sends must flow through one helper')
+    assert.ok(
+      panel.includes('runExtensionAgent({ workspaceId, sessionId, extensionId, providerId })'),
+      'runs must submit references only (prompt derives main-side, effort never sent)'
+    )
+    // STARK effort never travels into extensions: the run call site
+    // carries references only.
+    const runAt = panel.indexOf('runExtensionAgent({ workspaceId, sessionId, extensionId, providerId })')
+    assert.ok(runAt >= 0, 'extension run call must exist')
+    assert.ok(!panel.slice(runAt, runAt + 120).includes('effort'), 'effort must never be sent to extensions')
+    assert.ok(panel.includes("dispatch({\n        type: 'generate-succeeded',"), 'provider text must land in the same conversation')
+    assert.ok(panel.includes('setExtensionOutcome'), 'proposed edits must surface a Review offer')
+    assert.ok(panel.includes("onReviewTransaction(extensionOutcome.transactionIds[0]"), 'edits must enter the Review flow')
   })
 
   it('effort selector sits next to the target with five real levels', () => {

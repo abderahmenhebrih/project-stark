@@ -63,24 +63,25 @@ import { SettingsPage } from '../settings/SettingsPage'
 import type { SettingsSection } from '../settings/settings-section'
 import { UiIcon } from '../../components/icons/UiIcon'
 import { StarkMark } from '../../components/StarkMark'
+import type { ExtensionAgentProviderInfo } from '../../../../shared/extension-agents/types'
 import {
-  KILO_DISPLAY_NAME,
   STARK_EFFORT_LABELS,
   STARK_EFFORT_TOOLTIPS,
   STARK_EFFORTS,
   type AgentTarget,
-  type KiloAvailability,
   type StarkEffort
 } from '../../../../shared/agent-target/types'
 import {
-  canSelectKilo,
+  agentTargetLabel,
+  canSelectProvider,
   DEFAULT_AGENT_TARGET,
   DEFAULT_STARK_EFFORT,
   effortVisibleFor,
+  findProvider,
   isTargetSwitchBlocked,
-  resolveStarkSendMode
+  resolveComposerSend
 } from './agent-target-state'
-import { getKiloAvailability } from '../../lib/kilo-api'
+import { listExtensionAgentProviders, runExtensionAgent } from '../../lib/extension-agents-api'
 import type { UsageSummary } from '../../../../shared/usage/types'
 import { initialProviderPanelState, providerPanelReducer } from './provider-state'
 import { initialSessionPanelState, sessionPanelReducer } from './session-state'
@@ -194,12 +195,12 @@ export interface SessionChromeSnapshot {
   readonly sendBusy: boolean
   /** A creation is in flight: the shell disables + (one creation at a time). */
   readonly creatingSession: boolean
-  /** Composer agent target (STARK default; Kilo only when available). */
+  /** Composer agent target (STARK default; extension rows are discovered data). */
   readonly agentTarget: AgentTarget
   /** STARK effort selector (applies to STARK runs only). */
   readonly effort: StarkEffort
-  /** Honest Kilo availability for the target menu + Usage Status. */
-  readonly kilo: KiloAvailability
+  /** Display label for the target (STARK or the provider's own name). */
+  readonly agentLabel: string
   /** Provider truth for Usage Status (configured/not configured). */
   readonly providerConfigured: boolean
   /** Actual current model id, or null when none is selected. */
@@ -472,11 +473,19 @@ export function SessionPanel({
   // switch during an active run is blocked with calm copy.
   const [agentTarget, setAgentTarget] = useState<AgentTarget>(() => ({ ...DEFAULT_AGENT_TARGET }))
   const [effort, setEffort] = useState<StarkEffort>(() => DEFAULT_STARK_EFFORT)
-  const [kilo, setKilo] = useState<KiloAvailability>({
-    status: 'unavailable',
-    reason: 'Kilo bridge not available',
-    version: null
-  })
+  // Discovered extension agent providers (dynamic menu source — no
+  // hardcoded vendors). Loaded explicitly per workspace through the
+  // narrow list channel; no polling, no timers.
+  const [providers, setProviders] = useState<readonly ExtensionAgentProviderInfo[]>([])
+  const [providersError, setProvidersError] = useState<string | null>(null)
+  // One extension-agent run at a time (mirrors the STARK guards).
+  const [extensionRunning, setExtensionRunning] = useState(false)
+  const extensionRequestRef = useRef(0)
+  // Latest extension-run proposals awaiting human Review (per session).
+  const [extensionOutcome, setExtensionOutcome] = useState<{
+    readonly sessionId: number
+    readonly transactionIds: readonly number[]
+  } | null>(null)
   const [targetMenuOpen, setTargetMenuOpen] = useState(false)
   const [effortMenuOpen, setEffortMenuOpen] = useState(false)
   const [targetBlockedNotice, setTargetBlockedNotice] = useState<string | null>(null)
@@ -829,12 +838,22 @@ export function SessionPanel({
       }
     )
     refreshProviderState()
-    // Real Kilo availability: explicit single probe per workspace
-    // through the existing installed-extension bridge. No polling,
-    // no timers — the menu reflects exactly what is installed.
-    void getKiloAvailability().then(
-      (found) => setKilo(found),
-      () => setKilo({ status: 'unavailable', reason: 'Kilo bridge not available', version: null })
+    // Real provider discovery: explicit single list per workspace
+    // through the narrow agent channel. The menu renders whatever is
+    // registered — STARK plus discovered providers, never a fixed
+    // vendor list. No polling, no timers. State settles only in the
+    // async callbacks below (never synchronously in the effect).
+    void listExtensionAgentProviders().then(
+      (found) => {
+        setProviders(found)
+        setProvidersError(null)
+      },
+      (error: unknown) => {
+        setProviders([])
+        setProvidersError(
+          error instanceof Error && error.message !== '' ? error.message : 'We couldn’t list compatible agent extensions.'
+        )
+      }
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId])
@@ -891,6 +910,9 @@ export function SessionPanel({
     proposalDispatch({ type: 'session-changed', workspaceId, sessionId: selectedSessionId })
     workDispatch({ type: 'session-changed', workspaceId, sessionId: selectedSessionId })
     looplinkDispatch({ type: 'session-changed', workspaceId, sessionId: selectedSessionId })
+    // Stale extension outcomes never render for other sessions (the
+    // Review offer checks its session id); returning to the session
+    // restores its still-pending offer. Cleared on the next send.
     void loadSessionLooplink(selectedSessionId)
     void loadRecoveryForSelected(selectedSessionId)
     void loadPendingApproval(selectedSessionId)
@@ -1224,7 +1246,7 @@ export function SessionPanel({
   }
 
   async function handleSend(): Promise<void> {
-    if (state.selectedSessionId === null || state.sending) {
+    if (state.selectedSessionId === null || state.sending || extensionRunning) {
       return
     }
     const sessionId = state.selectedSessionId
@@ -1232,15 +1254,23 @@ export function SessionPanel({
     if ((isComposerEmpty(content) && attachments.length === 0) || composerByteLength(content) > COMPOSER_MAX_BYTES) {
       return
     }
-    // External targets never send through STARK: Kilo stays
-    // unselectable while its bridge is unavailable, so this is a
-    // fail-closed net with honest copy (never fake Kilo output).
-    if (agentTarget.kind === 'external') {
+    // A new send supersedes any previous extension proposal offer.
+    setExtensionOutcome(null)
+    // Data-driven target resolution: STARK sends use the unified Work
+    // path (slash overrides win); extension sends run one bounded
+    // provider turn with the raw text. Unavailable providers fail
+    // closed with their honest reason — never fake output.
+    const resolved = resolveComposerSend(agentTarget, content, providers)
+    if (resolved.kind === 'extension') {
+      await handleExtensionSend(sessionId, content, resolved.extensionId, resolved.providerId)
+      return
+    }
+    if (resolved.kind === 'blocked') {
       dispatch({
         type: 'send-failed',
         workspaceId,
         sessionId,
-        message: kilo.reason ?? 'Kilo bridge not available.'
+        message: resolved.reason
       })
       return
     }
@@ -1248,7 +1278,6 @@ export function SessionPanel({
     // coding tasks (Brain answers directly when no tools are needed).
     // /ask, /work, /propose are explicit internal overrides reusing
     // the preserved runtime paths — no classifier, no new model.
-    const resolved = resolveStarkSendMode(content)
     const sendContent = resolved.content
     if (resolved.mode !== proposal.mode) {
       proposalDispatch({ type: 'mode-changed', workspaceId, mode: resolved.mode })
@@ -1291,6 +1320,80 @@ export function SessionPanel({
         sessionId,
         message: toSendErrorMessage(error)
       })
+    }
+  }
+
+  /**
+   * Extension-agent send: persists the user message + reviewed context
+   * through the normal Stage 15 path, then runs one bounded provider
+   * turn for the persisted trailing message. Provider text lands in
+   * the same conversation; structured file edits become pending
+   * Change Transactions for human Review (never direct writes).
+   * STARK effort is never sent — extensions own their behavior.
+   * Single-flight with STARK generation through the shared
+   * generate-started/succeeded/failed actions; outcomes land only in
+   * the originating session.
+   */
+  async function handleExtensionSend(
+    sessionId: number,
+    content: string,
+    extensionId: string,
+    providerId: string
+  ): Promise<void> {
+    if (extensionRunning || state.generating) {
+      return
+    }
+    const sentAttachmentIds = attachments.map((entry) => entry.id)
+    dispatch({ type: 'send-started', workspaceId, sessionId })
+    try {
+      const result = await sendSessionUserMessage(messageSendPayload(sessionId, content))
+      stickToBottomRef.current = true
+      dispatch({ type: 'send-succeeded', workspaceId, session: result.session, message: result.message })
+      clearSentComposer(content, sessionId, sentAttachmentIds)
+    } catch (error: unknown) {
+      dispatch({
+        type: 'send-failed',
+        workspaceId,
+        sessionId,
+        message: toSendErrorMessage(error)
+      })
+      return
+    }
+    const requestId = extensionRequestRef.current + 1
+    extensionRequestRef.current = requestId
+    setExtensionRunning(true)
+    dispatch({ type: 'generate-started', workspaceId, sessionId, requestId })
+    try {
+      const outcome = await runExtensionAgent({ workspaceId, sessionId, extensionId, providerId })
+      // Ownership: the outcome belongs to the session that started it.
+      if (extensionRequestRef.current !== requestId || selectedSessionIdRef.current !== sessionId) {
+        return
+      }
+      stickToBottomRef.current = true
+      dispatch({
+        type: 'generate-succeeded',
+        workspaceId,
+        sessionId,
+        requestId,
+        session: outcome.session,
+        message: outcome.message
+      })
+      if (outcome.proposalTransactionIds.length > 0) {
+        setExtensionOutcome({ sessionId, transactionIds: outcome.proposalTransactionIds })
+      }
+    } catch (error: unknown) {
+      if (extensionRequestRef.current !== requestId || selectedSessionIdRef.current !== sessionId) {
+        return
+      }
+      dispatch({
+        type: 'generate-failed',
+        workspaceId,
+        sessionId,
+        requestId,
+        message: error instanceof Error && error.message !== '' ? error.message : 'We couldn’t run that extension agent.'
+      })
+    } finally {
+      setExtensionRunning(false)
     }
   }
 
@@ -1416,16 +1519,20 @@ export function SessionPanel({
   }
 
   /**
-   * Agent-target selection: STARK is always selectable; Kilo is
-   * refused while its bridge is unavailable (menu item disabled).
+   * Agent-target selection: STARK is always selectable; extension
+   * rows are selectable only when their provider reports available.
+   * No vendor branches — identity is data (extensionId/providerId).
    * A switch during an active run is blocked with calm copy — the
    * draft (composer text + staged attachments) always survives.
    */
   function selectAgentTarget(next: AgentTarget): void {
     setTargetMenuOpen(false)
-    if (next.kind === 'external' && !canSelectKilo(kilo)) {
-      composerRef.current?.focus()
-      return
+    if (next.kind === 'extension') {
+      const row = findProvider(providers, next.extensionId, next.providerId)
+      if (row === undefined || !canSelectProvider(row)) {
+        composerRef.current?.focus()
+        return
+      }
     }
     if (
       isTargetSwitchBlocked({
@@ -1433,7 +1540,7 @@ export function SessionPanel({
         generating: state.generating,
         proposalPreparing: proposal.preparing,
         workPreparing: work.preparing,
-        kiloRunning: false
+        agentRunning: extensionRunning
       })
     ) {
       setTargetBlockedNotice('Finish the current run before switching agents.')
@@ -2157,10 +2264,12 @@ export function SessionPanel({
   const empty = isComposerEmpty(composer) && attachments.length === 0
   const overLimit = composerByteLength(composer) > COMPOSER_MAX_BYTES
   const eligibility = proposalEligibility(contextDrafts)
-  // Live slash resolution for gating: a `/propose` draft without
+  // Live send resolution for gating: a STARK `/propose` draft without
   // eligible whole-file context disables send with guidance copy.
-  const resolvedComposerMode = resolveStarkSendMode(composer).mode
-  const proposeGated = resolvedComposerMode === 'propose' && !eligibility.eligible
+  // Extension targets never gate on STARK proposal eligibility.
+  const resolvedComposerSend = resolveComposerSend(agentTarget, composer, providers)
+  const proposeGated =
+    resolvedComposerSend.kind === 'stark' && resolvedComposerSend.mode === 'propose' && !eligibility.eligible
   // loadingMessages gates sending: a latest page in flight must settle
   // first, otherwise its replace-on-arrive could drop a just-appended
   // message. Older-page loads only prepend, so they never clobber.
@@ -2172,6 +2281,7 @@ export function SessionPanel({
     state.loadingMessages ||
     proposal.preparing ||
     work.preparing ||
+    extensionRunning ||
     proposeGated
   // Sponsored-working narrow binding: observational AI-run state only.
   // Never delays, gates, or alters sends, generations, proposals, work
@@ -2257,7 +2367,7 @@ export function SessionPanel({
         creatingSession,
         agentTarget,
         effort,
-        kilo,
+        agentLabel: agentTargetLabel(agentTarget, providers),
         providerConfigured: provider.configured,
         providerModel: provider.selectedModel,
         planLabel: sponsorProductEntitlements.planLabel,
@@ -2286,7 +2396,7 @@ export function SessionPanel({
     looplink.acting,
     agentTarget,
     effort,
-    kilo,
+    providers,
     provider.configured,
     provider.selectedModel,
     sponsorProductEntitlements.planLabel,
@@ -2547,7 +2657,7 @@ export function SessionPanel({
             )}
             {state.generating && (
               <p className="session__status" role="status">
-                STARK is thinking…
+                {agentTarget.kind === 'stark' ? 'STARK is thinking…' : 'Extension agent is working…'}
               </p>
             )}
             {/* Sponsored-working slot: single placement inside the existing
@@ -3122,7 +3232,10 @@ export function SessionPanel({
                     title="Choose agent target"
                   >
                     <span className="session__modepill-label">
-                      {agentTarget.kind === 'stark' ? 'STARK' : KILO_DISPLAY_NAME}
+                      {agentTarget.kind === 'stark'
+                        ? 'STARK'
+                        : (findProvider(providers, agentTarget.extensionId, agentTarget.providerId)?.displayName ??
+                          'Extension agent')}
                     </span>
                     <UiIcon name="chevron-down" size={12} />
                   </button>
@@ -3146,24 +3259,70 @@ export function SessionPanel({
                         <span className="session__modemenu-dot" aria-hidden="true" />
                         STARK
                       </button>
-                      <button
-                        className="session__modemenu-item session__modemenu-item--propose"
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={false}
-                        disabled={!canSelectKilo(kilo)}
-                        title={kilo.reason ?? KILO_DISPLAY_NAME}
-                        aria-label={
-                          canSelectKilo(kilo) ? `Use ${KILO_DISPLAY_NAME}` : `${KILO_DISPLAY_NAME} — ${kilo.reason ?? 'unavailable'}`
-                        }
-                        onClick={() => selectAgentTarget({ kind: 'external', adapterId: 'kilo-code' })}
-                      >
-                        <span className="session__modemenu-dot" aria-hidden="true" />
-                        {KILO_DISPLAY_NAME}
-                        {!canSelectKilo(kilo) && (
-                          <span className="session__modemenu-reason">{kilo.reason ?? 'unavailable'}</span>
-                        )}
-                      </button>
+                      <span className="session__modemenu-label" aria-hidden="true">
+                        EXTENSIONS
+                      </span>
+                      {providersError !== null && (
+                        <p className="session__hint" role="status">
+                          {providersError}
+                        </p>
+                      )}
+                      {providers.length === 0 ? (
+                        <p className="session__hint" role="status">
+                          No compatible agent extensions installed
+                        </p>
+                      ) : (
+                        providers.map((row) => {
+                          const selectable = canSelectProvider(row)
+                          const checked =
+                            agentTarget.kind === 'extension' &&
+                            agentTarget.extensionId === row.extensionId &&
+                            agentTarget.providerId === row.providerId
+                          return (
+                            <button
+                              key={`${row.extensionId}::${row.providerId}`}
+                              className={`session__modemenu-item session__modemenu-item--wrap${
+                                checked ? ' session__modemenu-item--checked' : ''
+                              }`}
+                              type="button"
+                              role="menuitemradio"
+                              aria-checked={checked}
+                              disabled={!selectable}
+                              title={row.availability.reason ?? row.displayName}
+                              aria-label={
+                                selectable
+                                  ? `Use ${row.displayName}`
+                                  : `${row.displayName} — ${row.availability.reason ?? 'unavailable'}`
+                              }
+                              onClick={() =>
+                                selectAgentTarget({
+                                  kind: 'extension',
+                                  extensionId: row.extensionId,
+                                  providerId: row.providerId
+                                })
+                              }
+                            >
+                              {row.iconUrl !== null ? (
+                                <img
+                                  className="session__modemenu-icon"
+                                  src={row.iconUrl}
+                                  alt=""
+                                  aria-hidden="true"
+                                  draggable={false}
+                                />
+                              ) : (
+                                <UiIcon name="extensions" size={14} />
+                              )}
+                              <span className="session__modemenu-name">{row.displayName}</span>
+                              {!selectable && (
+                                <span className="session__modemenu-reason">
+                                  {row.availability.reason ?? 'unavailable'}
+                                </span>
+                              )}
+                            </button>
+                          )
+                        })
+                      )}
                     </div>
                   )}
                 </div>
@@ -3296,6 +3455,23 @@ export function SessionPanel({
                 </button>
               </div>
             )}
+            {extensionOutcome !== null &&
+              extensionOutcome.sessionId === state.selectedSessionId &&
+              extensionOutcome.transactionIds.length > 0 && (
+                <div className="session__generation-error" role="status" aria-label="Extension proposal ready">
+                  <p className="session__status">
+                    Proposal ready · {extensionOutcome.transactionIds.length} file
+                    {extensionOutcome.transactionIds.length === 1 ? '' : 's'}
+                  </p>
+                  <button
+                    className="explorer__secondary"
+                    type="button"
+                    onClick={() => onReviewTransaction(extensionOutcome.transactionIds[0] ?? 0)}
+                  >
+                    Review change
+                  </button>
+                </div>
+              )}
           </div>
         </>
       )}

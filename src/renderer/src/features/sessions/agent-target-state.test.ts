@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import type { ExtensionAgentProviderInfo } from '../../../../shared/extension-agents/types'
 import {
-  canSelectKilo,
+  agentTargetLabel,
+  canSelectProvider,
   effortVisibleFor,
+  findProvider,
   initialAgentTargetState,
   isTargetSwitchBlocked,
   resolveComposerSend,
@@ -11,63 +14,99 @@ import {
 } from './agent-target-state'
 import { emptySessionTabDraft, stashSessionDraft } from './session-tabs'
 
-function unavailableKilo(): { status: 'unavailable'; reason: string; version: null } {
-  return { status: 'unavailable', reason: 'Kilo bridge not available', version: null }
+function provider(
+  overrides?: Partial<ExtensionAgentProviderInfo>
+): ExtensionAgentProviderInfo {
+  return {
+    extensionId: 'example.agent',
+    namespace: 'example',
+    name: 'agent',
+    version: '1.0.0',
+    providerId: 'chat',
+    displayName: 'Example Agent',
+    iconUrl: null,
+    capabilities: { chat: true, streaming: false, tools: false, proposals: true, cancellation: false },
+    availability: { status: 'available', reason: null, version: '1.0.0' },
+    ...overrides
+  }
 }
 
-describe('agent target selection', () => {
-  it('starts on STARK with Regular effort', () => {
+function unavailableProvider(): ExtensionAgentProviderInfo {
+  return provider({ availability: { status: 'unavailable', reason: 'Extension does not expose a compatible agent interface.', version: null } })
+}
+
+describe('agent target selection (data-driven)', () => {
+  it('starts on STARK with Regular effort and no providers', () => {
     const state = initialAgentTargetState()
     assert.deepEqual(state.target, { kind: 'stark' })
     assert.equal(state.effort, 'regular')
-    assert.equal(state.kilo.status, 'unavailable')
+    assert.deepEqual(state.providers, [])
   })
 
-  it('refuses unavailable Kilo (state unchanged, never a fake working target)', () => {
-    const state = initialAgentTargetState(unavailableKilo())
-    const next = selectAgentTarget(state, { kind: 'external', adapterId: 'kilo-code' })
-    assert.equal(next, state)
-    assert.deepEqual(next.target, { kind: 'stark' })
+  it('refuses unknown or unavailable providers (state unchanged, never fake)', () => {
+    const state = initialAgentTargetState([unavailableProvider()])
+    const unknown = selectAgentTarget(state, { kind: 'extension', extensionId: 'missing.ext', providerId: 'chat' })
+    assert.equal(unknown, state)
+    const refused = selectAgentTarget(state, { kind: 'extension', extensionId: 'example.agent', providerId: 'chat' })
+    assert.equal(refused, state)
+    assert.deepEqual(refused.target, { kind: 'stark' })
   })
 
-  it('selects Kilo only when the adapter reports available or running', () => {
-    const blocked = initialAgentTargetState(unavailableKilo())
-    assert.ok(!canSelectKilo(blocked.kilo))
+  it('selects a provider only when it reports available or running', () => {
+    const blocked = initialAgentTargetState([unavailableProvider()])
+    assert.ok(!canSelectProvider(blocked.providers[0] as ExtensionAgentProviderInfo))
     for (const status of ['available', 'running'] as const) {
-      const ready = initialAgentTargetState({ status, reason: null, version: '1.2.3' })
-      assert.ok(canSelectKilo(ready.kilo))
-      const next = selectAgentTarget(ready, { kind: 'external', adapterId: 'kilo-code' })
-      assert.deepEqual(next.target, { kind: 'external', adapterId: 'kilo-code' })
+      const ready = initialAgentTargetState([provider({ availability: { status, reason: null, version: '1.0.0' } })])
+      const row = ready.providers[0] as ExtensionAgentProviderInfo
+      assert.ok(canSelectProvider(row))
+      const next = selectAgentTarget(ready, { kind: 'extension', extensionId: 'example.agent', providerId: 'chat' })
+      assert.deepEqual(next.target, { kind: 'extension', extensionId: 'example.agent', providerId: 'chat' })
     }
     for (const status of ['connecting', 'error'] as const) {
-      const notReady = initialAgentTargetState({ status, reason: 'busy', version: null })
-      assert.ok(!canSelectKilo(notReady.kilo))
+      const notReady = initialAgentTargetState([provider({ availability: { status, reason: 'busy', version: null } })])
+      assert.ok(!canSelectProvider(notReady.providers[0] as ExtensionAgentProviderInfo))
     }
+  })
+
+  it('finds providers by exact coordinates (no name matching)', () => {
+    const providers = [provider(), provider({ providerId: 'other', displayName: 'Other' })]
+    assert.equal(findProvider(providers, 'example.agent', 'chat')?.displayName, 'Example Agent')
+    assert.equal(findProvider(providers, 'example.agent', 'missing'), undefined)
   })
 
   it('blocks target switches during an active run (drafts untouched)', () => {
-    const idle = { sending: false, generating: false, proposalPreparing: false, workPreparing: false, kiloRunning: false }
+    const idle = { sending: false, generating: false, proposalPreparing: false, workPreparing: false, agentRunning: false }
     assert.ok(!isTargetSwitchBlocked(idle))
     for (const flags of [
       { ...idle, sending: true },
       { ...idle, generating: true },
       { ...idle, proposalPreparing: true },
       { ...idle, workPreparing: true },
-      { ...idle, kiloRunning: true }
+      { ...idle, agentRunning: true }
     ]) {
       assert.ok(isTargetSwitchBlocked(flags))
     }
   })
 
   it('composer draft survives target selection (selection never clears text)', () => {
-    // selectAgentTarget returns target/effort state only — it holds no
-    // composer reference and cannot clear drafts by construction.
-    const state = initialAgentTargetState({ status: 'available', reason: null, version: '1.0.0' })
+    const state = initialAgentTargetState([provider()])
     const draft = 'unsent work in progress'
-    const next = selectAgentTarget(state, { kind: 'external', adapterId: 'kilo-code' })
+    const next = selectAgentTarget(state, { kind: 'extension', extensionId: 'example.agent', providerId: 'chat' })
     assert.equal(typeof draft, 'string')
     assert.ok(draft.length > 0)
-    assert.deepEqual(next.target, { kind: 'external', adapterId: 'kilo-code' })
+    assert.deepEqual(next.target, { kind: 'extension', extensionId: 'example.agent', providerId: 'chat' })
+  })
+
+  it('labels targets from provider data (STARK or the provider display name)', () => {
+    assert.equal(agentTargetLabel({ kind: 'stark' }, []), 'STARK')
+    assert.equal(
+      agentTargetLabel({ kind: 'extension', extensionId: 'example.agent', providerId: 'chat' }, [provider()]),
+      'Example Agent'
+    )
+    assert.equal(
+      agentTargetLabel({ kind: 'extension', extensionId: 'missing.ext', providerId: 'chat' }, [provider()]),
+      'Extension agent'
+    )
   })
 })
 
@@ -82,32 +121,40 @@ describe('stark effort state', () => {
     assert.equal(unchanged, state)
   })
 
-  it('hides the effort selector for external targets', () => {
+  it('hides the effort selector for ANY extension target (generic, never vendor-specific)', () => {
     assert.ok(effortVisibleFor({ kind: 'stark' }))
-    assert.ok(!effortVisibleFor({ kind: 'external', adapterId: 'kilo-code' }))
+    assert.ok(!effortVisibleFor({ kind: 'extension', extensionId: 'example.agent', providerId: 'chat' }))
+    assert.ok(!effortVisibleFor({ kind: 'extension', extensionId: 'other.helper', providerId: 'assistant' }))
   })
 
   it('persists per session inside the existing tab-draft stash (memory only)', () => {
-    // No web storage, no DB: target + effort ride the renderer-local
-    // per-session draft alongside composer text and attachments.
     const fresh = emptySessionTabDraft('ask')
     assert.equal(fresh.target, undefined)
     assert.equal(fresh.effort, undefined)
     const drafts = stashSessionDraft({}, 7, {
       ...fresh,
       composer: 'unsent work',
-      target: { kind: 'stark' },
+      target: { kind: 'extension', extensionId: 'example.agent', providerId: 'chat' },
       effort: 'xhigh'
     })
     assert.equal(drafts[7]?.composer, 'unsent work')
-    assert.deepEqual(drafts[7]?.target, { kind: 'stark' })
+    assert.deepEqual(drafts[7]?.target, { kind: 'extension', extensionId: 'example.agent', providerId: 'chat' })
     assert.equal(drafts[7]?.effort, 'xhigh')
   })
 
-  it('external sends are blocked (no fake Kilo output); STARK resolves unified work', () => {
-    const blocked = resolveComposerSend({ kind: 'external', adapterId: 'kilo-code' }, 'hello')
-    assert.deepEqual(blocked, { blocked: 'external-unavailable' })
-    assert.deepEqual(resolveComposerSend({ kind: 'stark' }, 'hello'), { mode: 'work', content: 'hello' })
-    assert.deepEqual(resolveComposerSend({ kind: 'stark' }, '/ask why?'), { mode: 'ask', content: 'why?' })
+  it('resolves STARK sends to unified work and extension sends to provider runs', () => {
+    assert.deepEqual(resolveComposerSend({ kind: 'stark' }, 'hello'), { kind: 'stark', mode: 'work', content: 'hello' })
+    assert.deepEqual(resolveComposerSend({ kind: 'stark' }, '/ask why?'), { kind: 'stark', mode: 'ask', content: 'why?' })
+    // Slashes are STARK-internal: extension runs receive raw text.
+    assert.deepEqual(
+      resolveComposerSend({ kind: 'extension', extensionId: 'example.agent', providerId: 'chat' }, '/ask hi', [provider()]),
+      { kind: 'extension', extensionId: 'example.agent', providerId: 'chat' }
+    )
+    const blocked = resolveComposerSend(
+      { kind: 'extension', extensionId: 'example.agent', providerId: 'chat' },
+      'hello',
+      [unavailableProvider()]
+    )
+    assert.equal(blocked.kind, 'blocked')
   })
 })

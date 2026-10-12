@@ -36,6 +36,7 @@ import type { ExtensionInstallService } from '../extension-install/extension-ins
 import type { ExtensionHostManager } from '../extension-host/extension-host-manager'
 import type { ExtensionActivationService } from '../extension-host/extension-activation-service'
 import type { ExtensionRuntimeService } from '../extension-host/extension-runtime-service'
+import type { ExtensionAgentService } from '../extension-agents/extension-agent-service'
 import type { FormatterService } from '../formatter/formatter-service'
 import type { AttachmentPicker } from '../chat-attachments/picker'
 import type { ChatAttachmentService } from '../chat-attachments/service'
@@ -69,6 +70,7 @@ import { createExtensionInstallBindings } from './extension-install'
 import { createExtensionHostBindings } from './extension-host'
 import { createExtensionActivationBindings } from './extension-activation'
 import { createExtensionManagementBindings } from './extension-management'
+import { createExtensionAgentBindings } from './extension-agents'
 import { createFormatterBindings } from './formatter'
 import { createAttachmentBindings } from './attachments'
 import { createAccountBindings } from './account'
@@ -127,6 +129,13 @@ export interface IpcDependencies {
    * means no extension-management channels.
    */
   readonly extensionRuntimeService?: ExtensionRuntimeService
+  /**
+   * Generic extension-agent runtime (discovery + bounded runs).
+   * Optional in older harnesses; absent means no agent channels.
+   * Constructed in main/index.ts from the install/runtime services
+   * plus the session/file/transaction repositories.
+   */
+  readonly extensionAgentService?: ExtensionAgentService
   /**
    * Document formatter (Prettier pilot). Optional; absent means no
    * formatter channel. Constructed in main/index.ts from the host
@@ -304,6 +313,9 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
   }
   if (deps.extensionRuntimeService !== undefined) {
     bindings.push(...createExtensionManagementBindings(deps.extensionRuntimeService))
+  }
+  if (deps.extensionAgentService !== undefined) {
+    bindings.push(...createExtensionAgentBindings(deps.extensionAgentService))
   }
   if (deps.formatterService !== undefined) {
     bindings.push(...createFormatterBindings(deps.formatterService))

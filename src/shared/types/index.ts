@@ -37,6 +37,7 @@ import type { GitApi } from '../git/types'
 import type { ExtensionsApi } from '../extension-registry/types'
 import type { ExtensionActivationApi, ExtensionHostApi } from '../extension-host/types'
 import type { ExtensionManagementApi } from '../extension-management/types'
+import type { ExtensionAgentsApi } from '../extension-agents/types'
 import type { FormatterApi } from '../formatter/types'
 import type { ChatAttachmentsApi } from '../chat-attachments/types'
 import type { VoiceApi } from '../voice/types'
@@ -76,6 +77,7 @@ export interface StarkApi {
   extensionHost: ExtensionHostApi
   extensionActivation: ExtensionActivationApi
   extensionManagement: ExtensionManagementApi
+  extensionAgents: ExtensionAgentsApi
   formatter: FormatterApi
   attachments: ChatAttachmentsApi
   voice: VoiceApi

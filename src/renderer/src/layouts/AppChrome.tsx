@@ -45,6 +45,8 @@ interface AppChromeProps {
   readonly planLabel: string
   /** Composer agent target mirrored from SessionPanel. */
   readonly agentTarget: AgentTarget
+  /** Display label for the target (STARK or the provider's own name). */
+  readonly agentLabel: string
   /** STARK effort mirrored from SessionPanel (STARK runs only). */
   readonly effort: StarkEffort
   /** Provider truth mirrored from SessionPanel (configured/not). */
@@ -211,6 +213,7 @@ interface UsageStatusMenuProps {
   readonly anchor: { readonly right: number; readonly bottom: number; readonly top: number }
   readonly planLabel: string
   readonly agentTarget: AgentTarget
+  readonly agentLabel: string
   readonly effort: StarkEffort
   readonly providerConfigured: boolean
   readonly providerModel: string | null
@@ -232,6 +235,7 @@ function UsageStatusMenu({
   anchor,
   planLabel,
   agentTarget,
+  agentLabel,
   effort,
   providerConfigured,
   providerModel,
@@ -312,11 +316,11 @@ function UsageStatusMenu({
         </div>
         <div className="app-chrome__usage-row">
           <dt>Agent</dt>
-          <dd>{agentTarget.kind === 'stark' ? 'STARK' : 'Kilo Code'}</dd>
+          <dd>{agentTarget.kind === 'stark' ? 'STARK' : agentLabel}</dd>
         </div>
         <div className="app-chrome__usage-row">
           <dt>Effort</dt>
-          <dd>{agentTarget.kind === 'stark' ? STARK_EFFORT_LABELS[effort] : 'Managed by Kilo'}</dd>
+          <dd>{agentTarget.kind === 'stark' ? STARK_EFFORT_LABELS[effort] : 'Managed by extension'}</dd>
         </div>
         <div className="app-chrome__usage-row">
           <dt>Provider</dt>
@@ -392,6 +396,7 @@ export function AppChrome({
   onOpenLiveReview,
   planLabel,
   agentTarget,
+  agentLabel,
   effort,
   providerConfigured,
   providerModel,
@@ -632,6 +637,7 @@ export function AppChrome({
           anchor={usageAnchor}
           planLabel={planLabel}
           agentTarget={agentTarget}
+          agentLabel={agentLabel}
           effort={effort}
           providerConfigured={providerConfigured}
           providerModel={providerModel}

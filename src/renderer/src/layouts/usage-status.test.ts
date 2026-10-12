@@ -45,7 +45,7 @@ describe('usage status surface', () => {
 
   it('reads only real mirrored state (plan/target/effort/provider/model/summary)', () => {
     const chrome = readRenderer('layouts/AppChrome.tsx')
-    for (const prop of ['planLabel', 'agentTarget', 'effort', 'providerConfigured', 'providerModel', 'usageSummary']) {
+    for (const prop of ['planLabel', 'agentTarget', 'agentLabel', 'effort', 'providerConfigured', 'providerModel', 'usageSummary']) {
       assert.ok(chrome.includes(prop), `popover must read mirrored ${prop}`)
     }
     const panel = readRenderer('features/sessions/SessionPanel.tsx')

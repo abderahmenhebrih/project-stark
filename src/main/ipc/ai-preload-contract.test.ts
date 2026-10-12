@@ -71,13 +71,29 @@ describe('provider/AI preload contract', () => {
 
   it('exposes no generic invoke/send or tool execution', () => {
     const source = readPreloadSource()
-    for (const forbidden of ['generic invoke', 'generic send', 'run-agent', 'runAgent', 'tools:']) {
+    for (const forbidden of ['generic invoke', 'generic send', 'run-agent', 'tools:']) {
       assert.ok(!source.includes(forbidden), `preload must not contain ${forbidden}`)
     }
     // invoke() calls below are the fixed per-domain bridge — no channel
     // choice reaches the renderer.
     assert.ok(!source.includes('genericInvoke'))
     assert.ok(!source.includes('genericSend'))
+  })
+
+  it('extension-agent bridge is a fixed narrow two-function surface', () => {
+    const source = readPreloadSource()
+    // Exactly list + run over IPC_CHANNELS constants (no channel
+    // choice, no generic command execution): the review-gated agent
+    // boundary, not a tool runner.
+    for (const expected of [
+      'IPC_CHANNELS.extensionAgentsListProviders',
+      'IPC_CHANNELS.extensionAgentsRun',
+      'createExtensionAgentsApi()',
+      'extensionAgents: createExtensionAgentsApi()'
+    ]) {
+      assert.ok(source.includes(expected), `preload must contain ${expected}`)
+    }
+    assert.ok(!source.includes("'stark:extension-agents:"), 'preload must not hardcode agent channel names')
   })
 
   it('uses no raw channel strings for providers/AI', () => {

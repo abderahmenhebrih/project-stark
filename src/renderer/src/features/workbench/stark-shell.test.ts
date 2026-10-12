@@ -104,12 +104,12 @@ describe('stage 31 D05 shell proof', () => {
 
   it('12. composer contains the agent target, effort, and Send', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    for (const feature of ['Agent target', 'STARK', 'KILO_DISPLAY_NAME', 'STARK effort', 'Send', 'Message composer']) {
+    for (const feature of ['Agent target', 'STARK', 'listExtensionAgentProviders', 'STARK effort', 'Send', 'Message composer']) {
       assert.ok(panel.includes(feature), `composer must contain ${feature}`)
     }
     // Ask/Work/Propose survive as explicit slash overrides behind the
     // unified STARK send (primary dropdown replaced by Agent Target).
-    assert.ok(panel.includes('resolveStarkSendMode'), 'composer must resolve sends through the override parser')
+    assert.ok(panel.includes('resolveComposerSend'), 'composer must resolve sends through the override parser')
   })
 
   it('13. pending approval is adjacent to the composer', () => {

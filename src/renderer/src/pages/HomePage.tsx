@@ -248,6 +248,7 @@ export function HomePage(): ReactElement {
         onOpenLiveReview={handleOpenLiveReview}
         planLabel={chromeSession?.planLabel ?? 'STARK Free'}
         agentTarget={chromeSession?.agentTarget ?? { kind: 'stark' }}
+        agentLabel={chromeSession?.agentLabel ?? 'STARK'}
         effort={chromeSession?.effort ?? 'regular'}
         providerConfigured={chromeSession?.providerConfigured ?? false}
         providerModel={chromeSession?.providerModel ?? null}

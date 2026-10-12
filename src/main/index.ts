@@ -20,6 +20,7 @@ import {
 import { ExtensionHostManager, type ExtensionHostLauncher } from './extension-host/extension-host-manager'
 import { ExtensionActivationService } from './extension-host/extension-activation-service'
 import { ExtensionRuntimeService } from './extension-host/extension-runtime-service'
+import { ExtensionAgentService } from './extension-agents/extension-agent-service'
 import {
   devExtensionHostSourceDir,
   ensureExtensionHostArtifacts,
@@ -617,6 +618,19 @@ void app.whenReady().then(() => {
   extensionRuntimeService.setEventListener((event) => {
     broadcastExtensionEvent(event)
   })
+  // Generic extension-agent runtime (composer targets): discovers
+  // agent providers from installed manifests and runs them through
+  // the trust-gated command boundary; file edits enter the Change
+  // Transaction pipeline (human Accept required, never direct writes).
+  const extensionAgentService = new ExtensionAgentService({
+    workspaces: starkDatabase.getWorkspaces(),
+    sessions: starkDatabase.getCodingSessions(),
+    files: services.workspaceFilesService,
+    transactions: services.changeTransactionService,
+    installService: extensionInstallService,
+    installRoot: join(app.getPath('userData'), EXTENSION_INSTALL_DIR_NAME),
+    runtime: extensionRuntimeService
+  })
   const formatterService = new FormatterService({
     manager: extensionHostManager,
     installService: extensionInstallService,
@@ -636,6 +650,7 @@ void app.whenReady().then(() => {
     extensionHostManager,
     extensionActivationService,
     extensionRuntimeService,
+    extensionAgentService,
     formatterService,
     attachmentService: services.chatAttachmentService,
     attachmentPicker: electronAttachmentPicker,

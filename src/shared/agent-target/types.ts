@@ -1,15 +1,21 @@
 /**
- * Shared agent-target + STARK effort contracts (composer hardening).
+ * Shared composer target + STARK effort contracts.
  *
  * Plain TypeScript only — no Node.js or DOM APIs. Importable from
  * main, preload, renderer, and the Node test runner.
  *
- * - AgentTarget: which agent the composer sends to. STARK is local;
- *   external adapters (Kilo first) run through a typed registry and
- *   must enter the existing Change Transaction / Review flow.
- * - StarkEffort: speed-vs-quality selector for STARK only. External
- *   targets never consume it ("Managed by Kilo").
+ * The composer target is STARK's native runtime OR a discovered
+ * compatible extension agent. Extension identity is DATA
+ * (`extensionId` + `providerId` strings) — never a vendor union, so
+ * no SessionPanel edits are needed when a new compatible extension
+ * appears. The registry (main) and the target menu (renderer) both
+ * consume discovered provider rows.
+ *
+ * - StarkEffort: speed-vs-quality selector for STARK only. Extension
+ *   targets never consume it and must never receive it.
  */
+
+import type { ExtensionAgentAvailability } from '../extension-agents/types'
 
 /** Speed-vs-quality selector for STARK runs. */
 export type StarkEffort = 'light' | 'regular' | 'medium' | 'high' | 'xhigh'
@@ -54,14 +60,13 @@ export function normalizeStarkEffort(value: unknown): StarkEffort {
   return isStarkEffort(value) ? value : DEFAULT_STARK_EFFORT
 }
 
-/** Which agent the composer sends to. */
-export type AgentTarget = { readonly kind: 'stark' } | { readonly kind: 'external'; readonly adapterId: string }
-
-/** First (and currently only) external adapter id. */
-export const KILO_ADAPTER_ID = 'kilo-code' as const
-
-/** Display name for the Kilo external coding agent. */
-export const KILO_DISPLAY_NAME = 'Kilo Code' as const
+/**
+ * Which agent the composer sends to: the built-in STARK runtime, or
+ * one discovered extension agent provider (data-driven identity).
+ */
+export type AgentTarget =
+  | { readonly kind: 'stark' }
+  | { readonly kind: 'extension'; readonly extensionId: string; readonly providerId: string }
 
 /** Default composer target: STARK. */
 export const DEFAULT_AGENT_TARGET: AgentTarget = { kind: 'stark' }
@@ -71,25 +76,18 @@ export function isStarkTarget(target: AgentTarget): boolean {
   return target.kind === 'stark'
 }
 
-/**
- * Honest Kilo availability states. The selector disables Kilo unless
- * status is 'available' or 'running'; 'unavailable' carries a concise
- * human reason (never a fake working state).
- */
-export type KiloAvailabilityStatus = 'available' | 'unavailable' | 'connecting' | 'running' | 'error'
-
-export interface KiloAvailability {
-  readonly status: KiloAvailabilityStatus
-  /** Concise human reason when not available (e.g. "Kilo bridge not available"). */
-  readonly reason: string | null
-  /** Detected backend version when known (display only, never a secret). */
-  readonly version: string | null
+/** True for extension agent targets (effort hidden, extension owns its behavior). */
+export function isExtensionTarget(target: AgentTarget): boolean {
+  return target.kind === 'extension'
 }
 
-/** Sanitized Kilo availability for the renderer (no tokens, env, or URLs). */
-export function emptyKiloUnavailable(reason: string): KiloAvailability {
-  return { status: 'unavailable', reason, version: null }
+/** Stable renderer key for one target (menu identity, draft stash). */
+export function agentTargetKey(target: AgentTarget): string {
+  return target.kind === 'stark' ? 'stark' : `extension:${target.extensionId}:${target.providerId}`
 }
+
+/** Re-exported availability shape for target-menu state (generic, no vendors). */
+export type { ExtensionAgentAvailability }
 
 /**
  * Internal STARK send-mode overrides. The primary composer selector no

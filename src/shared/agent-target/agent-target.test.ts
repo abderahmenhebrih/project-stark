@@ -3,37 +3,42 @@ import { describe, it } from 'node:test'
 import {
   DEFAULT_AGENT_TARGET,
   DEFAULT_STARK_EFFORT,
-  KILO_ADAPTER_ID,
-  KILO_DISPLAY_NAME,
   STARK_EFFORT_LABELS,
   STARK_EFFORT_TOOLTIPS,
   STARK_EFFORTS,
-  emptyKiloUnavailable,
+  agentTargetKey,
+  isExtensionTarget,
   isStarkEffort,
   isStarkTarget,
   normalizeStarkEffort,
   parseStarkSlashOverride,
-  resolveStarkSendMode,
-  type KiloAvailability
+  resolveStarkSendMode
 } from './types'
 
 describe('agent target contracts', () => {
   it('defaults to the STARK target', () => {
     assert.deepEqual(DEFAULT_AGENT_TARGET, { kind: 'stark' })
     assert.ok(isStarkTarget(DEFAULT_AGENT_TARGET))
-    assert.ok(!isStarkTarget({ kind: 'external', adapterId: KILO_ADAPTER_ID }))
+    assert.ok(!isExtensionTarget(DEFAULT_AGENT_TARGET))
   })
 
-  it('exposes Kilo as the first external adapter without inventing a logo', () => {
-    assert.equal(KILO_ADAPTER_ID, 'kilo-code')
-    assert.equal(KILO_DISPLAY_NAME, 'Kilo Code')
+  it('models extension targets as data (no vendor union)', () => {
+    const target = { kind: 'extension', extensionId: 'example.agent', providerId: 'chat' } as const
+    assert.ok(isExtensionTarget(target))
+    assert.ok(!isStarkTarget(target))
+    assert.equal(agentTargetKey(target), 'extension:example.agent:chat')
+    assert.equal(agentTargetKey({ kind: 'stark' }), 'stark')
+    // The type carries coordinates, not vendor names: any extension
+    // identity fits the same shape.
+    const other = { kind: 'extension', extensionId: 'other.helper', providerId: 'assistant' } as const
+    assert.equal(agentTargetKey(other), 'extension:other.helper:assistant')
   })
 
-  it('builds honest unavailable Kilo states with a concise reason', () => {
-    const availability: KiloAvailability = emptyKiloUnavailable('Kilo bridge not available')
-    assert.equal(availability.status, 'unavailable')
-    assert.equal(availability.reason, 'Kilo bridge not available')
-    assert.equal(availability.version, null)
+  it('carries no vendor names in the target model', () => {
+    const source = JSON.stringify(DEFAULT_AGENT_TARGET) + agentTargetKey({ kind: 'stark' })
+    for (const vendor of ['kilo', 'cline', 'copilot', 'roo-code', 'roo code']) {
+      assert.ok(!source.toLowerCase().includes(vendor), `target model must not name ${vendor}`)
+    }
   })
 })
 
