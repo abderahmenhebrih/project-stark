@@ -76,6 +76,12 @@ export type ExtensionHostEvent =
   | { readonly kind: 'message'; readonly raw: unknown }
   | { readonly kind: 'exit' }
 
+/** Maximum automatic host restarts before requiring an explicit start. */
+export const EXTENSION_HOST_MAX_RESTARTS = 3
+
+/** Restart window: crash counts reset after this many ms without a crash. */
+export const EXTENSION_HOST_RESTART_WINDOW_MS = 60_000
+
 export class ExtensionHostManager {
   private state: ExtensionHostState = 'stopped'
   private child: ExtensionHostProcess | null = null
@@ -84,6 +90,8 @@ export class ExtensionHostManager {
   private pendingStart: { readonly resolve: (status: ExtensionHostStatus) => void; readonly reject: (error: Error) => void } | null = null
   private readonly subscribers = new Set<(event: ExtensionHostEvent) => void>()
   private readonly options: ExtensionHostManagerOptions
+  private crashCount = 0
+  private lastCrashAt = 0
 
   constructor(options: ExtensionHostManagerOptions) {
     this.options = options
@@ -242,6 +250,7 @@ export class ExtensionHostManager {
           this.clearStartupTimer()
           this.detach()
           this.state = 'crashed'
+          this.recordCrash()
           this.log('crashed')
         }
       })
@@ -250,6 +259,38 @@ export class ExtensionHostManager {
         settleCrashed(new ExtensionHostError('Extension Host failed to start.'))
       }, startupTimeoutMs)
     })
+  }
+
+  /** Bounded restart policy: restarts only the exact-owned host, max N per window. Never loops. */
+  canRestart(): boolean {
+    if (this.state !== 'crashed') {
+      return false
+    }
+    const now = Date.now()
+    if (now - this.lastCrashAt > EXTENSION_HOST_RESTART_WINDOW_MS) {
+      return true
+    }
+    return this.crashCount < EXTENSION_HOST_MAX_RESTARTS
+  }
+
+  /** Explicit bounded restart after a crash (STARK stays open; editor/session/terminal data intact). */
+  async restart(): Promise<ExtensionHostStatus> {
+    if (!this.canRestart()) {
+      throw new ExtensionHostError('Extension Host restart limit reached.')
+    }
+    this.state = 'stopped'
+    this.child = null
+    return this.start()
+  }
+
+  private recordCrash(): void {
+    const now = Date.now()
+    if (now - this.lastCrashAt > EXTENSION_HOST_RESTART_WINDOW_MS) {
+      this.crashCount = 1
+    } else {
+      this.crashCount += 1
+    }
+    this.lastCrashAt = now
   }
 
   async stop(): Promise<ExtensionHostStatus> {

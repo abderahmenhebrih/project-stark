@@ -5,10 +5,21 @@ import type { CapabilityGate } from '../capabilities/capability-gate'
 import type { WorkspaceRepository } from '../database/repositories/workspace-repository'
 import type { OrchestrationRepository } from '../database/repositories/orchestration-repository'
 import type {
+  DetectPreviewResult,
+  HumanPreviewState,
+  HumanPreviewSummary,
+  HumanPreviewUpdatedEvent,
   ProjectRuntimeSummary,
-  ProjectRuntimeUpdatedEvent
+  ProjectRuntimeUpdatedEvent,
+  StartHumanPreviewResult
 } from '../../shared/project-runtime/types'
+import {
+  parseLoopbackUrlFromText,
+  PREVIEW_STARTUP_TIMEOUT_MS
+} from '../../shared/project-runtime/preview-detection'
 import { previewUrlForPort } from '../../shared/project-runtime/types'
+import { readPreviewProject } from './preview-project'
+import { InvalidRuntimeRequestError } from './project-runtime-errors'
 import { resolveWorkerExecutable } from '../worker-tools/worker-executable'
 import { buildWorkerCommandEnv, normalizeCommandOutput } from '../worker-tools/worker-command-service'
 import type { SpawnFn } from '../worker-tools/worker-command-service'
@@ -67,6 +78,35 @@ interface LiveRuntime {
   intent: 'user' | 'lifetime' | 'shutdown' | null
 }
 
+/**
+ * One human (Live Review) preview. Memory-only: no database row, no
+ * approval linkage — the explicit human Start click is the
+ * authorization. Lifecycle (spawn flags, tails, tree kill, lifetime)
+ * reuses the managed-runtime machinery below.
+ */
+interface HumanLive {
+  child: ChildProcess
+  workspaceId: number
+  script: string
+  packageManager: 'npm' | 'pnpm' | 'yarn' | 'bun'
+  program: string
+  args: readonly string[]
+  stdoutTail: string
+  stderrTail: string
+  logsTruncated: boolean
+  totalOutputBytes: number
+  startedAt: number
+  endedAt: number | null
+  url: string | null
+  state: HumanPreviewState
+  error: string | null
+  dirty: boolean
+  flushTimer: ReturnType<typeof setTimeout> | undefined
+  lifetimeTimer: ReturnType<typeof setTimeout> | undefined
+  startupTimer: ReturnType<typeof setTimeout> | undefined
+  intent: 'user' | 'lifetime' | 'shutdown' | null
+}
+
 export interface ProjectRuntimeServiceDeps {
   readonly workspaces: WorkspaceRepository
   readonly gate: CapabilityGate
@@ -106,7 +146,9 @@ export class ProjectRuntimeService {
   private readonly logFlushMs: number
   private readonly logTailCapBytes: number
   private onUpdated: ((event: ProjectRuntimeUpdatedEvent) => void) | undefined
+  private onHumanUpdated: ((event: HumanPreviewUpdatedEvent) => void) | undefined
   private readonly live = new Map<number, LiveRuntime>()
+  private readonly humanLive = new Map<number, HumanLive>()
   private readonly previews = new Map<number, PreviewWindow>()
   private readonly previewUrls = new Map<number, string>()
 
@@ -125,6 +167,11 @@ export class ProjectRuntimeService {
   /** Late-wires the renderer notification sink (set by the app root after construction). */
   setUpdatedListener(listener: ((event: ProjectRuntimeUpdatedEvent) => void) | undefined): void {
     this.onUpdated = listener
+  }
+
+  /** Late-wires the human-preview notification sink (no polling). */
+  setHumanUpdatedListener(listener: ((event: HumanPreviewUpdatedEvent) => void) | undefined): void {
+    this.onHumanUpdated = listener
   }
 
   /**
@@ -350,6 +397,207 @@ export class ProjectRuntimeService {
   }
 
   /**
+   * Detects a runnable human preview for one workspace: reads the
+   * workspace package.json plus lockfiles (main-owned) and applies
+   * the shared detection priority. No spawn, no side effects.
+   */
+  async detectHumanPreview(workspaceId: number): Promise<DetectPreviewResult> {
+    this.requireWorkspace(workspaceId)
+    const cwd = await this.resolveWorkspaceCwd(workspaceId)
+    if (cwd === null) {
+      throw new InvalidRuntimeRequestError('workspace reference is invalid')
+    }
+    const outcome = await readPreviewProject(cwd)
+    if (outcome.kind !== 'ready') {
+      return { workspaceId, script: null, packageManager: null, program: null, args: [], reason: outcome.kind }
+    }
+    return {
+      workspaceId,
+      script: outcome.plan.script,
+      packageManager: outcome.plan.packageManager,
+      program: outcome.plan.program,
+      args: [...outcome.plan.args],
+      reason: null
+    }
+  }
+
+  /** Current human preview summary for one workspace, or null. */
+  getHumanPreview(workspaceId: number): HumanPreviewSummary | null {
+    this.requireWorkspace(workspaceId)
+    const live = this.humanLive.get(workspaceId)
+    return live === undefined ? null : this.toHumanSummary(live)
+  }
+
+  /**
+   * Explicit human Start (Live Review button). The click authorizes
+   * exactly the detected dev script for this workspace — no worker
+   * approval, no renderer-supplied program. Reuses an already active
+   * worker or human runtime instead of spawning a second process.
+   */
+  async startHumanPreview(input: { workspaceId: number; now: number }): Promise<StartHumanPreviewResult> {
+    this.requireValidId(input.workspaceId)
+    this.requireWorkspace(input.workspaceId)
+    if (this.deps.runtimes.findActiveForWorkspace(input.workspaceId) !== undefined) {
+      return { status: 'active', preview: null }
+    }
+    const existing = this.humanLive.get(input.workspaceId)
+    if (existing !== undefined && (existing.state === 'starting' || existing.state === 'running')) {
+      return { status: 'active', preview: this.toHumanSummary(existing) }
+    }
+    if (existing !== undefined) {
+      this.dropHuman(input.workspaceId)
+    }
+    const cwd = await this.resolveWorkspaceCwd(input.workspaceId)
+    if (cwd === null) {
+      throw new InvalidRuntimeRequestError('workspace reference is invalid')
+    }
+    const outcome = await readPreviewProject(cwd)
+    if (outcome.kind !== 'ready') {
+      return { status: 'no-preview', preview: null }
+    }
+    const resolved = await this.resolveExecutable(outcome.plan.program)
+    if (resolved.absolutePath === null) {
+      return {
+        status: 'failed',
+        preview: this.failedHumanSummary(input.workspaceId, outcome.plan, input.now, 'The package manager could not be started.')
+      }
+    }
+    let child: ChildProcess
+    try {
+      child = this.spawnImpl(resolved.absolutePath, [...outcome.plan.args], {
+        cwd,
+        shell: false,
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: buildWorkerCommandEnv(),
+        windowsHide: true
+      })
+    } catch {
+      return {
+        status: 'failed',
+        preview: this.failedHumanSummary(input.workspaceId, outcome.plan, input.now, 'The preview process could not be started.')
+      }
+    }
+    const live: HumanLive = {
+      child,
+      workspaceId: input.workspaceId,
+      script: outcome.plan.script,
+      packageManager: outcome.plan.packageManager,
+      program: outcome.plan.program,
+      args: [...outcome.plan.args],
+      stdoutTail: '',
+      stderrTail: '',
+      logsTruncated: false,
+      totalOutputBytes: 0,
+      startedAt: input.now,
+      endedAt: null,
+      url: null,
+      state: 'starting',
+      error: null,
+      dirty: false,
+      flushTimer: undefined,
+      lifetimeTimer: undefined,
+      startupTimer: undefined,
+      intent: null
+    }
+    this.humanLive.set(input.workspaceId, live)
+    live.lifetimeTimer = setTimeout(() => {
+      void this.onHumanLifetimeExpired(input.workspaceId)
+    }, Math.max(0, this.lifetimeMs))
+    live.startupTimer = setTimeout(() => {
+      const current = this.humanLive.get(input.workspaceId)
+      if (current !== undefined && current.state === 'starting') {
+        // Healthy server, undiscovered URL: keep running, say so
+        // honestly. Never killed for a parse miss.
+        current.state = 'running'
+        this.emitHuman(input.workspaceId)
+      }
+    }, PREVIEW_STARTUP_TIMEOUT_MS)
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      this.appendHumanLog(input.workspaceId, chunk, 'stdout')
+    })
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      this.appendHumanLog(input.workspaceId, chunk, 'stderr')
+    })
+    child.on('error', () => {
+      const current = this.humanLive.get(input.workspaceId)
+      if (current === undefined) {
+        return
+      }
+      this.flushHuman(input.workspaceId)
+      const intent = current.intent
+      if (intent === 'user' || intent === 'shutdown' || intent === 'lifetime') {
+        current.state = 'stopped'
+      } else {
+        current.state = 'failed'
+        current.error = this.sanitizePreviewTail(current.stderrTail || current.stdoutTail, 'The preview process exited with an error.')
+      }
+      current.endedAt = this.now()
+      this.dropHumanTimers(current)
+      this.emitHuman(input.workspaceId)
+    })
+    child.on('close', (code: number | null) => {
+      const current = this.humanLive.get(input.workspaceId)
+      if (current === undefined) {
+        return
+      }
+      this.flushHuman(input.workspaceId)
+      const intent = current.intent
+      if (intent === 'user' || intent === 'shutdown' || intent === 'lifetime') {
+        current.state = 'stopped'
+      } else if (code === 0) {
+        current.state = 'stopped'
+      } else {
+        current.state = 'failed'
+        current.error = this.sanitizePreviewTail(current.stderrTail || current.stdoutTail, 'The preview process exited unexpectedly.')
+      }
+      current.endedAt = this.now()
+      this.dropHumanTimers(current)
+      this.emitHuman(input.workspaceId)
+    })
+    this.emitHuman(input.workspaceId)
+    return { status: 'started', preview: this.toHumanSummary(live) }
+  }
+
+  /**
+   * Explicit human Stop: signals only the exact STARK-owned preview
+   * tree for this workspace. A manually supplied external server is
+   * never tracked here, so it can never be killed through this path.
+   */
+  async stopHumanPreview(input: { workspaceId: number; now: number }): Promise<HumanPreviewSummary | null> {
+    this.requireValidId(input.workspaceId)
+    this.requireWorkspace(input.workspaceId)
+    const live = this.humanLive.get(input.workspaceId)
+    if (live === undefined) {
+      return null
+    }
+    if (live.state !== 'starting' && live.state !== 'running') {
+      return this.toHumanSummary(live)
+    }
+    live.intent = 'user'
+    killProcessTree(live.child)
+    await this.waitForClose(live.child, this.stopWaitMs)
+    try {
+      live.child.kill('SIGKILL')
+    } catch {
+      // Best effort on the exact handle only.
+    }
+    this.flushHuman(input.workspaceId)
+    live.state = 'stopped'
+    live.endedAt = input.now
+    live.error = null
+    this.dropHumanTimers(live)
+    this.emitHuman(input.workspaceId)
+    return this.toHumanSummary(live)
+  }
+
+  /** Explicit human Restart: bounded stop, then a fresh start. */
+  async restartHumanPreview(input: { workspaceId: number; now: number }): Promise<StartHumanPreviewResult> {
+    await this.stopHumanPreview(input)
+    return this.startHumanPreview(input)
+  }
+
+  /**
    * Explicit human Stop. Validates workspace ownership, signals only a
    * live handle owned by THIS process, waits boundedly, then finalizes
    * stopped/user. Terminal rows return as-is; live rows without a
@@ -469,6 +717,19 @@ export class ProjectRuntimeService {
       this.dropLive(runtimeId)
       this.emitWorkspace(live.workspaceId)
     }
+    // Human previews are memory-only: stop their exact trees too.
+    for (const workspaceId of [...this.humanLive.keys()]) {
+      const live = this.humanLive.get(workspaceId)
+      if (live === undefined) {
+        continue
+      }
+      live.intent = 'shutdown'
+      killProcessTree(live.child)
+      live.state = 'stopped'
+      live.endedAt = Math.min(this.now(), deadline)
+      this.dropHumanTimers(live)
+      this.emitHuman(workspaceId)
+    }
     return { stopped: ids.length }
   }
 
@@ -549,7 +810,7 @@ export class ProjectRuntimeService {
   }
 
   /** Drops oldest tail text so the combined tail fits the byte cap. */
-  private trimTail(live: LiveRuntime): void {
+  private trimTail(live: { stdoutTail: string; stderrTail: string; logsTruncated: boolean }): void {
     const cap = this.logTailCapBytes
     const combined = encoder.encode(live.stdoutTail + live.stderrTail).byteLength
     if (combined <= cap) {
@@ -615,6 +876,154 @@ export class ProjectRuntimeService {
       child.on('close', finish)
       child.on('error', finish)
     })
+  }
+
+  private requireValidId(workspaceId: number): void {
+    if (!Number.isInteger(workspaceId) || workspaceId <= 0) {
+      throw new InvalidRuntimeRequestError('workspace reference is invalid')
+    }
+  }
+
+  private toHumanSummary(live: HumanLive): HumanPreviewSummary {
+    return {
+      workspaceId: live.workspaceId,
+      state: live.state,
+      script: live.script,
+      packageManager: live.packageManager,
+      program: live.program,
+      args: [...live.args],
+      url: live.url,
+      stdoutTail: live.stdoutTail,
+      stderrTail: live.stderrTail,
+      logsTruncated: live.logsTruncated,
+      startedAt: live.startedAt,
+      endedAt: live.endedAt,
+      error: live.error
+    }
+  }
+
+  private failedHumanSummary(
+    workspaceId: number,
+    plan: { script: string; packageManager: 'npm' | 'pnpm' | 'yarn' | 'bun'; program: string; args: readonly string[] },
+    now: number,
+    error: string
+  ): HumanPreviewSummary {
+    return {
+      workspaceId,
+      state: 'failed',
+      script: plan.script,
+      packageManager: plan.packageManager,
+      program: plan.program,
+      args: [...plan.args],
+      url: null,
+      stdoutTail: '',
+      stderrTail: '',
+      logsTruncated: false,
+      startedAt: now,
+      endedAt: now,
+      error
+    }
+  }
+
+  private emitHuman(workspaceId: number): void {
+    if (workspaceId <= 0 || this.onHumanUpdated === undefined) {
+      return
+    }
+    try {
+      const live = this.humanLive.get(workspaceId)
+      this.onHumanUpdated({ workspaceId, preview: live === undefined ? null : this.toHumanSummary(live) })
+    } catch {
+      // Best effort notification.
+    }
+  }
+
+  private appendHumanLog(workspaceId: number, chunk: Buffer | string, stream: 'stdout' | 'stderr'): void {
+    const live = this.humanLive.get(workspaceId)
+    if (live === undefined) {
+      return
+    }
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    const text = normalizeCommandOutput(buffer)
+    if (stream === 'stdout') {
+      live.stdoutTail += text
+    } else {
+      live.stderrTail += text
+    }
+    live.totalOutputBytes =
+      live.totalOutputBytes > Number.MAX_SAFE_INTEGER - buffer.length
+        ? Number.MAX_SAFE_INTEGER
+        : live.totalOutputBytes + buffer.length
+    this.trimTail(live)
+    // URL discovery over real loopback output only — never port scans.
+    const discovered = parseLoopbackUrlFromText(`${live.stdoutTail}\n${live.stderrTail}`)
+    if (discovered !== null && discovered !== live.url) {
+      live.url = discovered
+      if (live.state === 'starting') {
+        live.state = 'running'
+      }
+    }
+    live.dirty = true
+    if (live.flushTimer === undefined) {
+      live.flushTimer = setTimeout(() => {
+        live.flushTimer = undefined
+        this.flushHuman(workspaceId)
+      }, Math.max(MIN_RUNTIME_LOG_FLUSH_MS, this.logFlushMs))
+    }
+  }
+
+  private flushHuman(workspaceId: number): void {
+    const live = this.humanLive.get(workspaceId)
+    if (live === undefined || !live.dirty) {
+      this.emitHuman(workspaceId)
+      return
+    }
+    live.dirty = false
+    this.emitHuman(workspaceId)
+  }
+
+  private dropHumanTimers(live: HumanLive): void {
+    if (live.flushTimer !== undefined) {
+      clearTimeout(live.flushTimer)
+      live.flushTimer = undefined
+    }
+    if (live.lifetimeTimer !== undefined) {
+      clearTimeout(live.lifetimeTimer)
+      live.lifetimeTimer = undefined
+    }
+    if (live.startupTimer !== undefined) {
+      clearTimeout(live.startupTimer)
+      live.startupTimer = undefined
+    }
+  }
+
+  private dropHuman(workspaceId: number): void {
+    const live = this.humanLive.get(workspaceId)
+    if (live === undefined) {
+      return
+    }
+    this.dropHumanTimers(live)
+    this.humanLive.delete(workspaceId)
+  }
+
+  private onHumanLifetimeExpired(workspaceId: number): void {
+    const live = this.humanLive.get(workspaceId)
+    if (live === undefined) {
+      return
+    }
+    live.intent = 'lifetime'
+    killProcessTree(live.child)
+    this.flushHuman(workspaceId)
+    live.state = 'stopped'
+    live.endedAt = this.now()
+    live.error = 'The preview reached its 30-minute limit.'
+    this.dropHumanTimers(live)
+    this.emitHuman(workspaceId)
+  }
+
+  /** Bounded sanitized failure copy: tail text only, no raw stacks. */
+  private sanitizePreviewTail(tail: string, fallback: string): string {
+    const text = tail.trim().slice(-2000)
+    return text === '' ? fallback : text
   }
 
   private async resolveWorkspaceCwd(workspaceId: number): Promise<string | null> {

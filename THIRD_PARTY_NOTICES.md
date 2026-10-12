@@ -62,3 +62,38 @@ STARK's own application license is unchanged by these notices.
   oversize entries are rejected.
 - **STARK application license:** unchanged. This notice covers only
   the listed library.
+
+---
+
+## Code OSS extension-host architecture concepts (MIT)
+
+- **Source project:** microsoft/vscode — Code - OSS (MIT License,
+  Copyright (c) 2015 Microsoft Corporation).
+- **Repository:** https://github.com/microsoft/vscode
+- **Compatibility pin audited against:** 1.90.0
+  (`src/main/extension-host/code-oss-compat.ts`).
+- **Files/components reusing Code OSS concepts:** the isolated
+  Node extension host (`src/main/extension-host/extension-host-manager.ts`),
+  the generic activation pipeline (`generic-host.mjs`,
+  `extension-activation-service.ts`, `extension-activation-events.ts`),
+  the MainThread/ExtHost-style RPC split (`protocol.ts`,
+  `HOST_REQUEST` / `HOST_NOTIFY`), extension manifest processing and
+  contribution points (`extension-manifest.ts`,
+  `extension-contributions.ts`), and the Code-OSS-compatible `vscode`
+  API surface (`vscode-shim.mjs`: commands, workspace, window,
+  languages, authentication, terminals, webviews, custom editors,
+  filesystem providers, diagnostics, tasks, debug seams, tests,
+  notebooks seams, SCM, configuration, chat/language-model seams,
+  URI, EventEmitter, Disposable).
+- **How the concepts are used:** clean-room TypeScript/JavaScript
+  adapters at STARK boundaries shaped for behavior equivalence —
+  no proprietary Microsoft VS Code product assets, Visual Studio
+  Marketplace integration, Microsoft branding, proprietary built-in
+  extensions, or closed components are copied. STARK uses Open VSX
+  as the default public extension registry.
+- **Modifications:** STARK safety boundaries differ intentionally
+  (review-before-write for workspace edits, sandboxed filesystem
+  scope, hardened terminal host, isolated per-provider auth storage,
+  main-owned secrets, no proposed-API bypass, no private-API fakes).
+- **STARK application license:** unchanged. This notice covers only
+  the reused Code OSS architecture concepts under their MIT grant.

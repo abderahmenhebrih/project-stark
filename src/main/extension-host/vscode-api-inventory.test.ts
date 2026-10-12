@@ -4,14 +4,15 @@ import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
 /**
- * VS Code API compatibility inventory (§10/§11 evidence).
+ * VS Code API compatibility inventory (Code OSS 1.90.0 target).
  *
  * Documents the ACTUAL supported subset the STARK Extension Host
  * exposes through its auditable shim — the foundation agent
- * extensions build on. Chat / language-model APIs are honestly
- * absent (the shim throws `Unsupported VS Code API` instead of
- * faking them), which is why agent execution flows through
- * manifest-declared commands today.
+ * extensions build on. Chat / language-model APIs are exposed as
+ * explicit generic registries (participant/tool registration plus a
+ * main-owned model gateway) so agent extensions use standard API
+ * paths; unsupported or proposed surfaces still throw
+ * `Unsupported VS Code API` instead of being faked.
  */
 
 function shimExports(): readonly string[] {
@@ -32,7 +33,14 @@ describe('vscode compatibility inventory', () => {
       'export const languages',
       'export const extensions',
       'export const env',
-      'export const authentication'
+      'export const authentication',
+      'export const tasks',
+      'export const debug',
+      'export const scm',
+      'export const chat',
+      'export const lm',
+      'export const tests',
+      'export const comments'
     ]) {
       assert.ok(source.includes(domain), `shim must expose ${domain}`)
     }
@@ -42,14 +50,18 @@ describe('vscode compatibility inventory', () => {
     assert.ok(!source.includes('new Proxy'), 'shim must not proxy unknown APIs')
   })
 
-  it('honestly lacks chat / language-model APIs (never faked)', () => {
+  it('exposes generic chat / language-model registries (never faked results)', () => {
     const lines = shimExports()
-    for (const line of lines) {
-      assert.ok(!/chat/i.test(line), `shim must not claim chat APIs (${line.slice(0, 80)})`)
-      assert.ok(!/languagemodel/i.test(line), `shim must not claim language-model APIs (${line.slice(0, 80)})`)
-      assert.ok(!/copilot/i.test(line), `shim must not claim provider APIs (${line.slice(0, 80)})`)
-    }
+    assert.ok(lines.some((line) => line.includes('chat')), 'shim must expose the chat registry')
+    assert.ok(
+      lines.some((line) => line.startsWith('export const lm')),
+      'shim must expose the language-model registry'
+    )
+    assert.ok(!lines.some((line) => /copilot/i.test(line)), 'shim must not claim provider APIs')
     const source = readFileSync(join(process.cwd(), 'src', 'main', 'extension-host', 'vscode-shim.mjs'), 'utf8')
     assert.ok(source.includes('Unsupported VS Code API'), 'unknown APIs must fail closed with an honest error')
+    // No catch-all fake: model access routes through the main-owned
+    // gateway and throws honestly without it.
+    assert.ok(source.includes("lm.sendChatRequest (no language-model access)"))
   })
 })

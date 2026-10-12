@@ -75,6 +75,23 @@ import {
 } from '../terminal/terminal-state'
 import { confirmDiscardUnsavedDraft, setUnsavedDraft } from './editor-guard'
 import { clampSplitPct, splitBounds } from './split-bounds'
+import {
+  createExplorerFile,
+  createExplorerFolder,
+  crudErrorMessage,
+  renameExplorerEntry,
+  trashExplorerEntry
+} from '../../lib/explorer-crud-api'
+import {
+  explorerBasename,
+  explorerParentOf,
+  validateExplorerDraftName,
+  type ExplorerCrudKind,
+  type ExplorerMenuTarget,
+  type PendingExplorerCreate,
+  type PendingExplorerRename
+} from './explorer-crud-state'
+import { ExplorerContextMenu, ExplorerDeleteConfirm, type ExplorerMenuAction } from './ExplorerTreeMenus'
 import { subscribeFormatRequests } from '../extensions/format-request-bus'
 import {
   applyDraftChange,
@@ -99,25 +116,94 @@ interface TreeNodeProps {
   readonly onAttachFile: (path: string) => void
   /** Selected Explorer icon theme (null = STARK default glyphs). */
   readonly fileIconTheme?: IconThemeSnapshot | null
+  /** Row that opened the context menu (highlight only). */
+  readonly menuPath?: string | null
+  readonly onRowMenu?: (target: ExplorerMenuTarget, clientX: number, clientY: number) => void
+  /** Entry currently renamed inline (input replaces its name). */
+  readonly renaming?: PendingExplorerRename | null
+  readonly onRenameDraftChange?: (draft: string) => void
+  readonly onRenameCommit?: (path: string) => void
+  readonly onRenameCancel?: () => void
+  /** Parent currently receiving an inline create row. */
+  readonly creating?: PendingExplorerCreate | null
+  readonly onCreateDraftChange?: (draft: string) => void
+  readonly onCreateCommit?: () => void
+  readonly onCreateCancel?: () => void
+  readonly crudBusy?: boolean
 }
 
-function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile, fileIconTheme = null }: TreeNodeProps): ReactElement | null {
+function TreeNode({
+  path,
+  state,
+  onToggle,
+  onSelectFile,
+  onAttachFile,
+  fileIconTheme = null,
+  menuPath = null,
+  onRowMenu,
+  renaming = null,
+  onRenameDraftChange,
+  onRenameCommit,
+  onRenameCancel,
+  creating = null,
+  onCreateDraftChange,
+  onCreateCommit,
+  onCreateCancel,
+  crudBusy = false
+}: TreeNodeProps): ReactElement | null {
   const entries = state.entries[path]
   const loading = state.loading.includes(path)
   const error = state.errors[path] ?? null
   if (entries === undefined && !loading && error === null) {
     return null
   }
+  const creatingHere = creating !== null && creating.parentPath === path
   return (
     <ul className="explorer__branch" aria-label={path === '' ? 'Workspace root' : path}>
+      {creatingHere && (
+        <li key="__creating" className="explorer__node">
+          <span className="explorer__inline-row">
+            <span className="explorer__chevron explorer__chevron--spacer" aria-hidden="true" />
+            <span className="explorer__file-icon" aria-hidden="true">
+              <UiIcon name={creating.kind === 'directory' ? 'explorer' : 'file-plus'} size={13} />
+            </span>
+            <input
+              className="explorer__inline-input"
+              autoFocus
+              aria-label={creating.kind === 'directory' ? 'New folder name' : 'New file name'}
+              placeholder={creating.kind === 'directory' ? 'Folder name' : 'File name'}
+              value={creating.draft}
+              disabled={crudBusy}
+              onChange={(event) => onCreateDraftChange?.(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  onCreateCommit?.()
+                } else if (event.key === 'Escape') {
+                  event.stopPropagation()
+                  onCreateCancel?.()
+                }
+              }}
+            />
+          </span>
+        </li>
+      )}
       {(entries ?? []).map((entry) => (
         <li key={entry.relativePath} className="explorer__node">
           {entry.kind === 'directory' ? (
             <button
-              className="explorer__row explorer__row--directory"
+              className={
+                menuPath === entry.relativePath
+                  ? 'explorer__row explorer__row--directory explorer__row--menu'
+                  : 'explorer__row explorer__row--directory'
+              }
               type="button"
               aria-expanded={state.expanded.includes(entry.relativePath)}
               onClick={() => onToggle(entry.relativePath)}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                onRowMenu?.({ path: entry.relativePath, kind: 'directory', name: entry.name }, event.clientX, event.clientY)
+              }}
             >
               <span className="explorer__chevron" aria-hidden="true">
                 <UiIcon
@@ -132,7 +218,28 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile, fileIconT
                   draggable={false}
                 />
               </span>
-              <span className="explorer__name">{entry.name}</span>
+              {renaming !== null && renaming.path === entry.relativePath ? (
+                <input
+                  className="explorer__inline-input"
+                  autoFocus
+                  aria-label={`Rename ${entry.name}`}
+                  value={renaming.draft}
+                  disabled={crudBusy}
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) => onRenameDraftChange?.(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      onRenameCommit?.(entry.relativePath)
+                    } else if (event.key === 'Escape') {
+                      event.stopPropagation()
+                      onRenameCancel?.()
+                    }
+                  }}
+                />
+              ) : (
+                <span className="explorer__name">{entry.name}</span>
+              )}
             </button>
           ) : entry.kind === 'file' ? (
             <span
@@ -141,6 +248,10 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile, fileIconT
                   ? 'explorer__file-row explorer__file-row--selected'
                   : 'explorer__file-row'
               }
+              onContextMenu={(event) => {
+                event.preventDefault()
+                onRowMenu?.({ path: entry.relativePath, kind: 'file', name: entry.name }, event.clientX, event.clientY)
+              }}
             >
               <button
                 className="explorer__row explorer__row--file"
@@ -152,7 +263,28 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile, fileIconT
                 <span className="explorer__file-icon" aria-hidden="true">
                   <img src={resolveTreeFileIcon(entry.name, fileIconTheme) ?? FILE_ICON_URLS[getFileIconKind(entry.name)]} alt="" draggable={false} />
                 </span>
-                <span className="explorer__name">{entry.name}</span>
+                {renaming !== null && renaming.path === entry.relativePath ? (
+                  <input
+                    className="explorer__inline-input"
+                    autoFocus
+                    aria-label={`Rename ${entry.name}`}
+                    value={renaming.draft}
+                    disabled={crudBusy}
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={(event) => onRenameDraftChange?.(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        onRenameCommit?.(entry.relativePath)
+                      } else if (event.key === 'Escape') {
+                        event.stopPropagation()
+                        onRenameCancel?.()
+                      }
+                    }}
+                  />
+                ) : (
+                  <span className="explorer__name">{entry.name}</span>
+                )}
               </button>
               <button
                 className="explorer__attach"
@@ -173,7 +305,25 @@ function TreeNode({ path, state, onToggle, onSelectFile, onAttachFile, fileIconT
           )}
           {entry.kind === 'directory' && state.expanded.includes(entry.relativePath) && (
             <div className="explorer__children">
-              <TreeNode path={entry.relativePath} state={state} onToggle={onToggle} onSelectFile={onSelectFile} onAttachFile={onAttachFile} fileIconTheme={fileIconTheme} />
+              <TreeNode
+                path={entry.relativePath}
+                state={state}
+                onToggle={onToggle}
+                onSelectFile={onSelectFile}
+                onAttachFile={onAttachFile}
+                fileIconTheme={fileIconTheme}
+                menuPath={menuPath}
+                onRowMenu={onRowMenu}
+                renaming={renaming}
+                onRenameDraftChange={onRenameDraftChange}
+                onRenameCommit={onRenameCommit}
+                onRenameCancel={onRenameCancel}
+                creating={creating}
+                onCreateDraftChange={onCreateDraftChange}
+                onCreateCommit={onCreateCommit}
+                onCreateCancel={onCreateCancel}
+                crudBusy={crudBusy}
+              />
             </div>
           )}
         </li>
@@ -367,6 +517,18 @@ export function Explorer({
   // VS Code-style root row: collapsing hides the whole tree below it.
   // Workspace switching stays on the AppChrome project button.
   const [rootCollapsed, setRootCollapsed] = useState(false)
+  // Direct human file operations (Explorer CRUD): inline create/rename
+  // drafts, context-menu target, delete confirmation, busy flag, and
+  // one calm notice line. Renderer-local only; every commit goes
+  // through the narrow main-owned CRUD bridge — never AI change
+  // transactions, never direct disk writes.
+  const [creating, setCreating] = useState<PendingExplorerCreate | null>(null)
+  const [renaming, setRenaming] = useState<PendingExplorerRename | null>(null)
+  const [menuTarget, setMenuTarget] = useState<ExplorerMenuTarget | null>(null)
+  const [menuAt, setMenuAt] = useState<{ readonly x: number; readonly y: number } | null>(null)
+  const [deleting, setDeleting] = useState<{ readonly path: string; readonly kind: 'file' | 'directory'; readonly name: string } | null>(null)
+  const [crudBusy, setCrudBusy] = useState(false)
+  const [crudNotice, setCrudNotice] = useState<{ readonly kind: 'info' | 'error'; readonly text: string } | null>(null)
   const [changes, changesDispatch] = useReducer(changesReducer, workspaceId, (id) => ({
     ...initialChangesState(),
     workspaceId: id
@@ -1136,6 +1298,193 @@ export function Explorer({
     dispatch({ type: 'toggle', path })
     if (expanding) {
       void loadDirectory(workspaceId, path)
+    }
+  }
+
+  // ---- Direct human file operations (Explorer CRUD) ----
+  // Every commit below is an explicit human action through the narrow
+  // main-owned CRUD bridge. Nothing here creates AI change
+  // transactions; AI writes keep flowing proposal → Review → Accept.
+
+  function refreshCrudPath(path: string): void {
+    void loadDirectory(workspaceId, path)
+  }
+
+  function ensureExpandedForCreate(parentPath: string): void {
+    if (parentPath !== '' && !state.expanded.includes(parentPath)) {
+      dispatch({ type: 'toggle', path: parentPath })
+      void loadDirectory(workspaceId, parentPath)
+    }
+  }
+
+  function startCreate(parentPath: string, kind: ExplorerCrudKind): void {
+    setCrudNotice(null)
+    setMenuTarget(null)
+    setMenuAt(null)
+    setRenaming(null)
+    setRootCollapsed(false)
+    ensureExpandedForCreate(parentPath)
+    setCreating({ parentPath, kind, draft: '' })
+  }
+
+  function handleCreateDraftChange(draft: string): void {
+    setCreating((prev) => (prev === null ? prev : { ...prev, draft }))
+  }
+
+  function handleCreateCancel(): void {
+    setCreating(null)
+  }
+
+  async function handleCreateCommit(): Promise<void> {
+    const pending = creating
+    if (pending === null || crudBusy) {
+      return
+    }
+    const name = pending.draft.trim()
+    const localError = validateExplorerDraftName(pending.draft)
+    if (localError !== null) {
+      setCrudNotice({ kind: 'error', text: localError })
+      return
+    }
+    setCrudBusy(true)
+    try {
+      const result =
+        pending.kind === 'directory'
+          ? await createExplorerFolder(workspaceId, pending.parentPath, name)
+          : await createExplorerFile(workspaceId, pending.parentPath, name)
+      setCreating(null)
+      setCrudNotice(null)
+      refreshCrudPath(pending.parentPath)
+      if (result.kind === 'file') {
+        handleSelectFile(result.relativePath)
+      }
+    } catch (error: unknown) {
+      setCrudNotice({ kind: 'error', text: crudErrorMessage(error, 'We couldn’t create this item.') })
+    } finally {
+      setCrudBusy(false)
+    }
+  }
+
+  function startRename(path: string): void {
+    setCrudNotice(null)
+    setMenuTarget(null)
+    setMenuAt(null)
+    setCreating(null)
+    setRenaming({ path, draft: explorerBasename(path) })
+  }
+
+  function handleRenameDraftChange(draft: string): void {
+    setRenaming((prev) => (prev === null ? prev : { ...prev, draft }))
+  }
+
+  function handleRenameCancel(): void {
+    setRenaming(null)
+  }
+
+  async function handleRenameCommit(path: string): Promise<void> {
+    const pending = renaming
+    if (pending === null || pending.path !== path || crudBusy) {
+      return
+    }
+    const newName = pending.draft.trim()
+    if (newName === explorerBasename(path)) {
+      setRenaming(null)
+      return
+    }
+    const localError = validateExplorerDraftName(pending.draft)
+    if (localError !== null) {
+      setCrudNotice({ kind: 'error', text: localError })
+      return
+    }
+    // Never corrupt unsaved work: renaming the open dirty file is
+    // blocked with a clear reason instead of rebasing under it.
+    if (state.selectedPath === path && editor !== null && isEditorDirty(editor)) {
+      setCrudNotice({ kind: 'error', text: 'Save or discard your changes before renaming this file.' })
+      setRenaming(null)
+      return
+    }
+    setCrudBusy(true)
+    try {
+      const result = await renameExplorerEntry(workspaceId, path, newName)
+      setRenaming(null)
+      setCrudNotice(null)
+      refreshCrudPath(explorerParentOf(path))
+      if (state.selectedPath === path) {
+        loadPreviewFile(result.relativePath)
+      }
+    } catch (error: unknown) {
+      setCrudNotice({ kind: 'error', text: crudErrorMessage(error, 'We couldn’t rename this item.') })
+    } finally {
+      setCrudBusy(false)
+    }
+  }
+
+  function handleRowMenu(target: ExplorerMenuTarget, clientX: number, clientY: number): void {
+    setCreating(null)
+    setRenaming(null)
+    setMenuTarget(target)
+    setMenuAt({ x: clientX, y: clientY })
+  }
+
+  function handleMenuAction(action: ExplorerMenuAction): void {
+    const target = menuTarget
+    setMenuTarget(null)
+    setMenuAt(null)
+    if (target === null) {
+      return
+    }
+    if (action === 'new-file') {
+      startCreate(target.kind === 'root' ? '' : target.path, 'file')
+    } else if (action === 'new-folder') {
+      startCreate(target.kind === 'root' ? '' : target.path, 'directory')
+    } else if (action === 'rename') {
+      startRename(target.path)
+    } else if (action === 'delete') {
+      setCrudNotice(null)
+      setDeleting({ path: target.path, kind: target.kind === 'directory' ? 'directory' : 'file', name: target.name })
+    } else {
+      refreshCrudPath(target.kind === 'root' ? '' : target.path)
+    }
+  }
+
+  function clearPreviewForDeletedPath(path: string): void {
+    const selected = state.selectedPath
+    if (selected === null) {
+      return
+    }
+    if (selected === path || selected.startsWith(`${path}/`)) {
+      previewPathRef.current = null
+      setEditor(null)
+      setFocusRequest(null)
+      setEditorSelection(null)
+      dispatch({ type: 'preview-cleared' })
+    }
+  }
+
+  async function handleTrashConfirm(): Promise<void> {
+    const target = deleting
+    if (target === null || crudBusy) {
+      return
+    }
+    setCrudBusy(true)
+    try {
+      await trashExplorerEntry(workspaceId, target.path)
+      setDeleting(null)
+      setCrudNotice(null)
+      refreshCrudPath(explorerParentOf(target.path))
+      clearPreviewForDeletedPath(target.path)
+    } catch (error: unknown) {
+      setCrudNotice({ kind: 'error', text: crudErrorMessage(error, 'We couldn’t move this to Trash.') })
+    } finally {
+      setCrudBusy(false)
+    }
+  }
+
+  function handleHeaderRefresh(): void {
+    setCrudNotice(null)
+    refreshCrudPath('')
+    for (const path of state.expanded.slice(0, 32)) {
+      refreshCrudPath(path)
     }
   }
 
@@ -2044,6 +2393,53 @@ export function Explorer({
         <div className="workbench__sidebar-body">
           {activity === 'explorer' ? (
             <>
+              <div className="explorer__actions" role="toolbar" aria-label="Explorer actions">
+                <p className="explorer__actions-label">Explorer</p>
+                <button
+                  className="explorer__action-btn"
+                  type="button"
+                  onClick={() => startCreate('', 'file')}
+                  aria-label="New file"
+                  title="New file"
+                >
+                  <UiIcon name="file-plus" size={15} />
+                </button>
+                <button
+                  className="explorer__action-btn"
+                  type="button"
+                  onClick={() => startCreate('', 'directory')}
+                  aria-label="New folder"
+                  title="New folder"
+                >
+                  <UiIcon name="folder-plus" size={15} />
+                </button>
+                <button
+                  className="explorer__action-btn"
+                  type="button"
+                  onClick={handleHeaderRefresh}
+                  aria-label="Refresh explorer"
+                  title="Refresh explorer"
+                >
+                  <UiIcon name="refresh" size={15} />
+                </button>
+                <button
+                  className="explorer__action-btn"
+                  type="button"
+                  onClick={() => dispatch({ type: 'collapse-all' })}
+                  aria-label="Collapse all folders"
+                  title="Collapse all folders"
+                >
+                  <UiIcon name="collapse-all" size={15} />
+                </button>
+              </div>
+              {crudNotice !== null && (
+                <p
+                  className={crudNotice.kind === 'error' ? 'explorer__crud-notice explorer__crud-notice--error' : 'explorer__crud-notice'}
+                  role={crudNotice.kind === 'error' ? 'alert' : 'status'}
+                >
+                  {crudNotice.text}
+                </p>
+              )}
               <button
                 className="explorer__root"
                 type="button"
@@ -2051,6 +2447,10 @@ export function Explorer({
                 aria-label={`Project root ${workspaceName}`}
                 title={workspaceRootPath}
                 onClick={() => setRootCollapsed((collapsed) => !collapsed)}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  handleRowMenu({ path: '', kind: 'root', name: workspaceName }, event.clientX, event.clientY)
+                }}
               >
                 <span className="explorer__chevron" aria-hidden="true">
                   <UiIcon name={rootCollapsed ? 'chevron-right' : 'chevron-down'} size={13} />
@@ -2061,7 +2461,46 @@ export function Explorer({
                 <span className="explorer__root-name">{workspaceName}</span>
               </button>
               {!rootCollapsed && (
-                <TreeNode path="" state={state} onToggle={handleToggle} onSelectFile={handleSelectFile} onAttachFile={handleAttachTreeFile} fileIconTheme={fileIconTheme} />
+                <TreeNode
+                  path=""
+                  state={state}
+                  onToggle={handleToggle}
+                  onSelectFile={handleSelectFile}
+                  onAttachFile={handleAttachTreeFile}
+                  fileIconTheme={fileIconTheme}
+                  menuPath={menuTarget?.path ?? null}
+                  onRowMenu={handleRowMenu}
+                  renaming={renaming}
+                  onRenameDraftChange={handleRenameDraftChange}
+                  onRenameCommit={handleRenameCommit}
+                  onRenameCancel={handleRenameCancel}
+                  creating={creating}
+                  onCreateDraftChange={handleCreateDraftChange}
+                  onCreateCommit={() => void handleCreateCommit()}
+                  onCreateCancel={handleCreateCancel}
+                  crudBusy={crudBusy}
+                />
+              )}
+              {menuTarget !== null && menuAt !== null && (
+                <ExplorerContextMenu
+                  target={menuTarget}
+                  x={menuAt.x}
+                  y={menuAt.y}
+                  onAction={handleMenuAction}
+                  onClose={() => {
+                    setMenuTarget(null)
+                    setMenuAt(null)
+                  }}
+                />
+              )}
+              {deleting !== null && (
+                <ExplorerDeleteConfirm
+                  name={deleting.name}
+                  kind={deleting.kind}
+                  busy={crudBusy}
+                  onConfirm={() => void handleTrashConfirm()}
+                  onCancel={() => setDeleting(null)}
+                />
               )}
             </>
           ) : activity === 'search' ? (
@@ -2203,6 +2642,7 @@ export function Explorer({
               ) : effectiveTab === 'live' && secondaryUi.liveOpen ? (
                 <LiveReviewPanel
                   key={externalLiveReviewRequest}
+                  workspaceId={workspaceId}
                   initialUrl={liveUrl}
                   onClose={() => secondaryUiDispatch({ type: 'close-live' })}
                 />

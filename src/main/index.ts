@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, protocol, utilityProcess } from 'electron'
+import { app, BrowserWindow, dialog, Menu, protocol, utilityProcess } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { IPC_CHANNELS } from '../shared/constants'
@@ -41,6 +41,7 @@ import { performOrderedShutdown, ShutdownGuard } from './startup/shutdown'
 import { parseSmokeConfig, smokeDatabaseFile, writeSmokeMarker } from './startup/smoke-mode'
 import { runStartupRecoveryPasses } from './startup/startup-order'
 import { TerminalHostManager, type TerminalHostLauncher } from './terminal/terminal-host-manager'
+import { configureNativeApplicationMenu } from './windows/app-menu'
 import { TerminalProcessClient } from './terminal/terminal-host-client'
 import {
   devTerminalHostSourceDir,
@@ -365,6 +366,10 @@ void app.whenReady().then(() => {
     return
   }
   applyContentSecurityPolicy()
+  // Single-AppChrome invariant (Windows/Linux): remove Electron's
+  // default File/Edit/View/Window application menu so the STARK
+  // AppChrome is the only in-window bar. macOS keeps its system menu.
+  configureNativeApplicationMenu({ platform: process.platform, setApplicationMenu: (menu) => Menu.setApplicationMenu(menu) })
   try {
     app.setAsDefaultProtocolClient('stark')
   } catch {
@@ -458,6 +463,21 @@ void app.whenReady().then(() => {
         try {
           if (!window.isDestroyed()) {
             window.webContents.send(IPC_CHANNELS.runtimeUpdated, event)
+          }
+        } catch {
+          // Best effort streaming: a destroyed renderer stops receiving.
+        }
+      }
+    })
+  })
+  // Human Live Review previews fan out the same way (memory-only
+  // summaries, no PIDs/paths). Dropped once shutdown begins.
+  services.projectRuntimeService?.setHumanUpdatedListener((event) => {
+    shutdownGuard.runIfActive(() => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        try {
+          if (!window.isDestroyed()) {
+            window.webContents.send(IPC_CHANNELS.previewUpdated, event)
           }
         } catch {
           // Best effort streaming: a destroyed renderer stops receiving.
@@ -644,6 +664,7 @@ void app.whenReady().then(() => {
     workspaceService: services.workspaceService,
     workspaceFilesService: services.workspaceFilesService,
     workspaceFileWriteService: services.workspaceFileWriteService,
+    workspaceCrudService: services.workspaceCrudService,
     workspaceSearchService: services.workspaceSearchService,
     extensionRegistryService: services.extensionRegistryService,
     extensionInstallService,

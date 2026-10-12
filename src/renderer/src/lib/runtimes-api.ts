@@ -1,9 +1,14 @@
 import type {
+  DetectPreviewResult,
   GetActiveRuntimeRequest,
+  HumanPreviewSummary,
+  HumanPreviewUpdatedListener,
+  HumanPreviewWorkspaceRequest,
   ListRecentRuntimesRequest,
   ProjectRuntimeSummary,
   ProjectRuntimeUpdatedListener,
-  RuntimeRefRequest
+  RuntimeRefRequest,
+  StartHumanPreviewResult
 } from '../../../shared/project-runtime/types'
 import { getStarkApi } from './stark-api'
 
@@ -72,6 +77,69 @@ export function reloadRuntimePreview(request: RuntimeRefRequest): Promise<Projec
  */
 export function subscribeRuntimeUpdates(listener: ProjectRuntimeUpdatedListener): () => void {
   const subscribe = getRuntimesApi()?.onUpdated
+  if (subscribe === undefined) {
+    return () => undefined
+  }
+  return subscribe(listener)
+}
+
+function getPreviewApi(): import('../../../shared/project-runtime/types').HumanPreviewApi | undefined {
+  return getStarkApi()?.preview
+}
+
+function previewUnavailable(): Promise<never> {
+  return Promise.reject(new Error('We couldn’t load the live preview.'))
+}
+
+/**
+ * Typed human-preview callers (Live Review). Explicit human Start
+ * authorizes exactly the detected dev script for the workspace; the
+ * renderer sends workspace ids only — main derives script, program,
+ * and URL ownership. No polling, no port scans.
+ */
+export function detectPreview(request: HumanPreviewWorkspaceRequest): Promise<DetectPreviewResult> {
+  const api = getPreviewApi()?.detectPreview
+  if (api === undefined) {
+    return previewUnavailable()
+  }
+  return api(request)
+}
+
+export function getHumanPreview(request: HumanPreviewWorkspaceRequest): Promise<HumanPreviewSummary | null> {
+  const api = getPreviewApi()?.getPreview
+  if (api === undefined) {
+    return previewUnavailable()
+  }
+  return api(request)
+}
+
+export function startHumanPreview(request: HumanPreviewWorkspaceRequest): Promise<StartHumanPreviewResult> {
+  const api = getPreviewApi()?.startPreview
+  if (api === undefined) {
+    return Promise.reject(new Error('We couldn’t start the live preview.'))
+  }
+  return api(request)
+}
+
+export function stopHumanPreview(request: HumanPreviewWorkspaceRequest): Promise<HumanPreviewSummary | null> {
+  const api = getPreviewApi()?.stopPreview
+  if (api === undefined) {
+    return Promise.reject(new Error('We couldn’t stop the live preview.'))
+  }
+  return api(request)
+}
+
+export function restartHumanPreview(request: HumanPreviewWorkspaceRequest): Promise<StartHumanPreviewResult> {
+  const api = getPreviewApi()?.restartPreview
+  if (api === undefined) {
+    return Promise.reject(new Error('We couldn’t restart the live preview.'))
+  }
+  return api(request)
+}
+
+/** Subscribes to main-pushed human-preview updates (no polling). */
+export function subscribeHumanPreviewUpdates(listener: HumanPreviewUpdatedListener): () => void {
+  const subscribe = getPreviewApi()?.onPreviewUpdated
   if (subscribe === undefined) {
     return () => undefined
   }

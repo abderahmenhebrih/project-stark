@@ -51,11 +51,15 @@ function openFixture(): {
 const EXPECTED_CHANNELS: readonly IpcChannel[] = [
   'stark:workspace-files:list-directory',
   'stark:workspace-files:read-text-file',
-  'stark:workspace-files:write-text-file'
+  'stark:workspace-files:write-text-file',
+  'stark:workspace-files:create-text-file',
+  'stark:workspace-files:create-directory',
+  'stark:workspace-files:set-entry-name',
+  'stark:workspace-files:move-to-trash'
 ]
 
 function filesBindings(services: ApplicationServices): ReturnType<typeof createWorkspaceFilesBindings> {
-  return createWorkspaceFilesBindings(services.workspaceFilesService, services.workspaceFileWriteService)
+  return createWorkspaceFilesBindings(services.workspaceFilesService, services.workspaceFileWriteService, services.workspaceCrudService)
 }
 
 describe('workspace-files IPC bindings', () => {
@@ -103,6 +107,7 @@ describe('workspace-files IPC bindings', () => {
         workspaceService: services.workspaceService,
         workspaceFilesService: services.workspaceFilesService,
         workspaceFileWriteService: services.workspaceFileWriteService,
+        workspaceCrudService: services.workspaceCrudService,
         workspaceSearchService: services.workspaceSearchService,
         changeTransactionService: services.changeTransactionService,
         terminalService: services.terminalService,
@@ -326,6 +331,63 @@ describe('workspace-files IPC bindings', () => {
       })
     } finally {
       db.close()
+    }
+  })
+})
+
+describe('explorer CRUD IPC bindings', () => {
+  it('creates, renames, and guards through narrow channels', async () => {
+    const fixture = openFixture()
+    try {
+      const created = await fixture.services.workspaceService.openDirectory(fixture.root)
+      const bindings = filesBindings(fixture.services)
+      const createFile = bindings.find((binding) => binding.channel === 'stark:workspace-files:create-text-file')
+      const createDir = bindings.find((binding) => binding.channel === 'stark:workspace-files:create-directory')
+      const setName = bindings.find((binding) => binding.channel === 'stark:workspace-files:set-entry-name')
+      const trash = bindings.find((binding) => binding.channel === 'stark:workspace-files:move-to-trash')
+      assert.ok(createFile !== undefined && createDir !== undefined && setName !== undefined && trash !== undefined)
+      const file = (await createFile.invoke({ workspaceId: created.id, parentPath: '', name: 'hello.txt' })) as { workspaceId: number; relativePath: string; kind: string }
+      assert.deepEqual(file, { workspaceId: created.id, relativePath: 'hello.txt', kind: 'file' })
+      await assert.rejects(
+        createFile.invoke({ workspaceId: created.id, parentPath: '', name: 'hello.txt' }),
+        /An item with that name already exists\./
+      )
+      const folder = (await createDir.invoke({ workspaceId: created.id, parentPath: '', name: 'parts' })) as { kind: string }
+      assert.equal(folder.kind, 'directory')
+      const renamed = (await setName.invoke({ workspaceId: created.id, relativePath: 'hello.txt', newName: 'hi.txt' })) as { relativePath: string }
+      assert.equal(renamed.relativePath, 'hi.txt')
+      await assert.rejects(
+        setName.invoke({ workspaceId: created.id, relativePath: 'hi.txt', newName: 'parts' }),
+        /Another item with that name already exists\./
+      )
+      await assert.rejects(
+        setName.invoke({ workspaceId: created.id, relativePath: '', newName: 'root2' }),
+        /project folder itself/
+      )
+      await assert.rejects(
+        trash.invoke({ workspaceId: created.id, relativePath: '' }),
+        /project folder itself/
+      )
+      // Traversal and hostile names fail with safe copy and no side effects.
+      await assert.rejects(
+        createFile.invoke({ workspaceId: created.id, parentPath: '../..', name: 'evil.txt' }),
+        /We couldn’t create this item\./
+      )
+      await assert.rejects(
+        setName.invoke({ workspaceId: created.id, relativePath: 'hi.txt', newName: '../evil' }),
+        /That name isn’t valid|We couldn’t rename/
+      )
+      // Strict shapes: extra keys and malformed payloads are rejected.
+      for (const bad of [null, {}, { workspaceId: created.id }, { workspaceId: created.id, parentPath: '', name: 'x', extra: 1 }]) {
+        await assert.rejects(createFile.invoke(bad), /We couldn’t create this item\./)
+      }
+      // No AI transaction surface on these channels: payloads carry no
+      // proposal fields and responses carry no transaction ids.
+      const response = JSON.stringify(renamed)
+      assert.ok(!response.includes('transaction'))
+    } finally {
+      fixture.db.close()
+      rmSync(fixture.dir, { recursive: true, force: true })
     }
   })
 })

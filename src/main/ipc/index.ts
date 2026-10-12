@@ -29,6 +29,7 @@ import type { TerminalManager } from '../terminal/terminal-manager'
 import type { TerminalService } from '../terminal/terminal-service'
 import type { WorkspaceService } from '../workspace/workspace-service'
 import type { WorkspaceFileWriteService } from '../workspace-files/workspace-file-write-service'
+import type { WorkspaceCrudService } from '../workspace-files/workspace-crud-service'
 import type { WorkspaceFilesService } from '../workspace-files/workspace-files-service'
 import type { WorkspaceSearchService } from '../workspace-search/workspace-search-service'
 import type { ExtensionRegistryService } from '../extension-registry/extension-registry-service'
@@ -109,6 +110,8 @@ export interface IpcDependencies {
   readonly workspaceService: WorkspaceService
   readonly workspaceFilesService: WorkspaceFilesService
   readonly workspaceFileWriteService: WorkspaceFileWriteService
+  /** Direct human file operations. Optional in older harnesses; absent means no CRUD channels. */
+  readonly workspaceCrudService?: WorkspaceCrudService
   readonly workspaceSearchService: WorkspaceSearchService
   /** Extension catalog (display only). Optional in older harnesses; absent means no catalog channels. */
   readonly extensionRegistryService?: ExtensionRegistryService
@@ -194,7 +197,7 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
     ...createSettingsBindings(deps.settingsService),
     ...createProfileBindings(deps.profileService),
     ...createWorkspaceBindings(deps.workspaceService, electronDirectoryPicker),
-    ...createWorkspaceFilesBindings(deps.workspaceFilesService, deps.workspaceFileWriteService),
+    ...createWorkspaceFilesBindings(deps.workspaceFilesService, deps.workspaceFileWriteService, deps.workspaceCrudService),
     ...createWorkspaceSearchBindings(deps.workspaceSearchService),
     ...createChangeTransactionBindings(deps.changeTransactionService),
     ...createTerminalBindings(deps.terminalService, deps.terminalManager),

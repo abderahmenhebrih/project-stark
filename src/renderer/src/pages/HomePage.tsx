@@ -11,6 +11,7 @@ import type {
   SessionChromeActions,
   SessionChromeSnapshot
 } from '../features/sessions/SessionPanel'
+import { UsageSidebar } from '../layouts/UsageSidebar'
 import type { SettingsSection } from '../features/settings/settings-section'
 import {
   initialSessionContextDraftState,
@@ -50,6 +51,10 @@ function sameChromeSnapshot(
     prev.creatingSession === next.creatingSession &&
     prev.openSessionIds.length === next.openSessionIds.length &&
     prev.openSessionIds.every((id, index) => id === next.openSessionIds[index]) &&
+    prev.providerStatus === next.providerStatus &&
+    prev.providerModel === next.providerModel &&
+    prev.selectedSessionCreatedAt === next.selectedSessionCreatedAt &&
+    prev.usageSummary === next.usageSummary &&
     prev.sessions.length === next.sessions.length &&
     prev.sessions.every(
       (entry, index) =>
@@ -109,6 +114,12 @@ export function HomePage(): ReactElement {
   // moving any settings state.
   const [settingsHost, setSettingsHost] = useState<HTMLDivElement | null>(null)
   const handleSettingsHost = useCallback((node: HTMLDivElement | null) => setSettingsHost(node), [])
+  // Docked Usage sidebar (OpenCode-style right panel, STARK styling):
+  // real layout space beside the workarea, never a floating popover.
+  // Session/editor/terminal stay mounted — only the row width changes.
+  const [usageSidebarOpen, setUsageSidebarOpen] = useState(false)
+  const handleToggleUsageSidebar = useCallback(() => setUsageSidebarOpen((open) => !open), [])
+  const handleCloseUsageSidebar = useCallback(() => setUsageSidebarOpen(false), [])
   // Renderer-local request for the secondary Context tab (e.g. from a
   // composer chip). Consumed once by the Explorer; no persistence.
   const [contextRequest, setContextRequest] = useState(0)
@@ -246,13 +257,8 @@ export function HomePage(): ReactElement {
         onContinueLooplink={handleContinueLooplink}
         onSwitchWorkspace={handleSwitchWorkspace}
         onOpenLiveReview={handleOpenLiveReview}
-        planLabel={chromeSession?.planLabel ?? 'STARK Free'}
-        agentTarget={chromeSession?.agentTarget ?? { kind: 'stark' }}
-        agentLabel={chromeSession?.agentLabel ?? 'STARK'}
-        effort={chromeSession?.effort ?? 'regular'}
-        providerConfigured={chromeSession?.providerConfigured ?? false}
-        providerModel={chromeSession?.providerModel ?? null}
-        usageSummary={chromeSession?.usageSummary ?? null}
+        usageOpen={usageSidebarOpen}
+        onToggleUsage={handleToggleUsageSidebar}
       />
       <div className="stage-workarea">
         <div className={settingsOpen ? 'stage-workarea__main stage-workarea__main--hidden' : 'stage-workarea__main'}>
@@ -306,6 +312,22 @@ export function HomePage(): ReactElement {
           }
         />
         </div>
+        {usageSidebarOpen && (
+          <UsageSidebar
+            key={chromeSession?.selectedSessionId ?? 'none'}
+            sessionTitle={chromeSession?.title ?? 'New session'}
+            sessionCreatedAt={chromeSession?.selectedSessionCreatedAt ?? null}
+            selectedSessionId={chromeSession?.selectedSessionId ?? null}
+            planLabel={chromeSession?.planLabel ?? 'STARK Free'}
+            agentTarget={chromeSession?.agentTarget ?? { kind: 'stark' }}
+            agentLabel={chromeSession?.agentLabel ?? 'STARK'}
+            effort={chromeSession?.effort ?? 'regular'}
+            providerStatus={chromeSession?.providerStatus ?? 'not-configured'}
+            providerModel={chromeSession?.providerModel ?? null}
+            usageSummary={chromeSession?.usageSummary ?? null}
+            onClose={handleCloseUsageSidebar}
+          />
+        )}
         <div ref={handleSettingsHost} className="stage-settings-host" hidden={!settingsOpen} />
       </div>
     </div>

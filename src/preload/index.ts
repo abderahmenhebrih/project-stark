@@ -10,7 +10,11 @@ import type {
   ListChangeTransactionsRequest
 } from '../shared/change-transactions/types'
 import type {
+  WorkspaceCreateRequest,
+  WorkspaceCrudResult,
   WorkspaceDirectoryListing,
+  WorkspacePathRequest,
+  WorkspaceSetEntryNameRequest,
   WorkspaceTextFile,
   WorkspaceTextFileWriteRequest,
   WorkspaceTextFileWriteResult
@@ -95,19 +99,28 @@ import type {
   WorkerToolsApi
 } from '../shared/worker-tools/types'
 import type {
+  SessionUsageRequest,
+  SessionUsageSummary,
   UpdateUsageConfigRequest,
   UsageApi,
   UsageConfig,
   UsageSummary
 } from '../shared/usage/types'
 import type {
+  DetectPreviewResult,
   GetActiveRuntimeRequest,
+  HumanPreviewApi,
+  HumanPreviewSummary,
+  HumanPreviewUpdatedEvent,
+  HumanPreviewUpdatedListener,
+  HumanPreviewWorkspaceRequest,
   ListRecentRuntimesRequest,
   ProjectRuntimeSummary,
   ProjectRuntimeUpdatedEvent,
   ProjectRuntimeUpdatedListener,
   ProjectRuntimesApi,
-  RuntimeRefRequest
+  RuntimeRefRequest,
+  StartHumanPreviewResult
 } from '../shared/project-runtime/types'
 import type {
   CloudAccountApi,
@@ -336,7 +349,9 @@ function createUsageApi(): UsageApi {
     updateConfig: (config: UpdateUsageConfigRequest): Promise<UsageConfig> =>
       ipcRenderer.invoke(IPC_CHANNELS.usageUpdateConfig, config) as Promise<UsageConfig>,
     getSummary: (): Promise<UsageSummary> =>
-      ipcRenderer.invoke(IPC_CHANNELS.usageGetSummary) as Promise<UsageSummary>
+      ipcRenderer.invoke(IPC_CHANNELS.usageGetSummary) as Promise<UsageSummary>,
+    getSessionSummary: (request: SessionUsageRequest): Promise<SessionUsageSummary> =>
+      ipcRenderer.invoke(IPC_CHANNELS.usageGetSessionSummary, request) as Promise<SessionUsageSummary>
   }
 }
 
@@ -359,6 +374,44 @@ function isProjectRuntimeUpdatedEvent(value: unknown): value is ProjectRuntimeUp
     typeof record['workspaceId'] === 'number' &&
     (runtime === null || (typeof runtime === 'object' && runtime !== null && typeof (runtime as Record<string, unknown>)['id'] === 'number'))
   )
+}
+
+function isHumanPreviewUpdatedEvent(value: unknown): value is HumanPreviewUpdatedEvent {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+  const record = value as Record<string, unknown>
+  const preview = record['preview']
+  return (
+    typeof record['workspaceId'] === 'number' &&
+    (preview === null || (typeof preview === 'object' && preview !== null && typeof (preview as Record<string, unknown>)['workspaceId'] === 'number'))
+  )
+}
+
+function createPreviewApi(): HumanPreviewApi {
+  return {
+    detectPreview: (request: HumanPreviewWorkspaceRequest): Promise<DetectPreviewResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.previewDetect, request) as Promise<DetectPreviewResult>,
+    getPreview: (request: HumanPreviewWorkspaceRequest): Promise<HumanPreviewSummary | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.previewGet, request) as Promise<HumanPreviewSummary | null>,
+    startPreview: (request: HumanPreviewWorkspaceRequest): Promise<StartHumanPreviewResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.previewStart, request) as Promise<StartHumanPreviewResult>,
+    stopPreview: (request: HumanPreviewWorkspaceRequest): Promise<HumanPreviewSummary | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.previewStop, request) as Promise<HumanPreviewSummary | null>,
+    restartPreview: (request: HumanPreviewWorkspaceRequest): Promise<StartHumanPreviewResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.previewRestart, request) as Promise<StartHumanPreviewResult>,
+    onPreviewUpdated: (listener: HumanPreviewUpdatedListener): (() => void) => {
+      const handler = (_event: unknown, payload: unknown): void => {
+        if (isHumanPreviewUpdatedEvent(payload)) {
+          listener(payload)
+        }
+      }
+      ipcRenderer.on(IPC_CHANNELS.previewUpdated, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.previewUpdated, handler)
+      }
+    }
+  }
 }
 
 function createWorkerToolsApi(): WorkerToolsApi {
@@ -639,7 +692,15 @@ const starkApi: StarkApi = {
           relativePath
         }) as Promise<WorkspaceTextFile>,
       writeTextFile: (request: WorkspaceTextFileWriteRequest): Promise<WorkspaceTextFileWriteResult> =>
-        ipcRenderer.invoke(IPC_CHANNELS.workspaceFilesWriteTextFile, request) as Promise<WorkspaceTextFileWriteResult>
+        ipcRenderer.invoke(IPC_CHANNELS.workspaceFilesWriteTextFile, request) as Promise<WorkspaceTextFileWriteResult>,
+      createTextFile: (request: WorkspaceCreateRequest): Promise<WorkspaceCrudResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.workspaceFilesCreateTextFile, request) as Promise<WorkspaceCrudResult>,
+      createDirectory: (request: WorkspaceCreateRequest): Promise<WorkspaceCrudResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.workspaceFilesCreateDirectory, request) as Promise<WorkspaceCrudResult>,
+      setEntryName: (request: WorkspaceSetEntryNameRequest): Promise<WorkspaceCrudResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.workspaceFilesSetEntryName, request) as Promise<WorkspaceCrudResult>,
+      moveToTrash: (request: WorkspacePathRequest): Promise<WorkspaceCrudResult> =>
+        ipcRenderer.invoke(IPC_CHANNELS.workspaceFilesMoveToTrash, request) as Promise<WorkspaceCrudResult>
     },
     search: (request: WorkspaceSearchRequest): Promise<WorkspaceSearchResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.workspaceSearch, request) as Promise<WorkspaceSearchResult>,
@@ -672,6 +733,7 @@ const starkApi: StarkApi = {
   capabilities: createCapabilitiesApi(),
   workerTools: createWorkerToolsApi(),
   runtimes: createRuntimesApi(),
+  preview: createPreviewApi(),
   usage: createUsageApi(),
   account: createAccountApi(),
   extensions: createExtensionsApi(),

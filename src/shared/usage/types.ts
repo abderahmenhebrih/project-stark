@@ -96,9 +96,32 @@ export interface UsageSummary {
   readonly heartThresholdRoutingEnabled: boolean
 }
 
+/**
+ * Per-session usage over the same window: actual cumulative session
+ * metrics from provider-reported usage only. Nulls mean the provider
+ * did not report that value — never estimates, never zeros dressed
+ * as knowledge.
+ */
+export interface SessionUsageSummary {
+  readonly sessionId: number
+  readonly calls: number
+  readonly inputTokens: number | null
+  readonly outputTokens: number | null
+  readonly totalTokens: number | null
+  /** Latest provider-reported input-token count, or null when unreported. */
+  readonly latestInputTokens: number | null
+  readonly telemetryComplete: boolean
+}
+
+/** Session-scoped usage request: session id only. */
+export interface SessionUsageRequest {
+  readonly sessionId: number
+}
+
 /** Usage slice of the preload bridge (`window.stark.usage`). */
 export interface UsageApi {
   getConfig: () => Promise<UsageConfig>
   updateConfig: (config: UpdateUsageConfigRequest) => Promise<UsageConfig>
   getSummary: () => Promise<UsageSummary>
+  getSessionSummary: (request: SessionUsageRequest) => Promise<SessionUsageSummary>
 }

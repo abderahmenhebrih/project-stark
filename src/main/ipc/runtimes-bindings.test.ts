@@ -31,7 +31,7 @@ function openHarness(): { db: DatabaseSync; dir: string; bindings: ReturnType<ty
 }
 
 describe('runtime IPC bindings', () => {
-  it('exposes exactly five management channels and no spawn surface', () => {
+  it('exposes worker channels plus human-preview channels, never a program surface', () => {
     const { db, dir, bindings } = openHarness()
     try {
       assert.deepEqual(
@@ -41,14 +41,24 @@ describe('runtime IPC bindings', () => {
           IPC_CHANNELS.runtimesListRecent,
           IPC_CHANNELS.runtimesStop,
           IPC_CHANNELS.runtimesOpenPreview,
-          IPC_CHANNELS.runtimesReloadPreview
+          IPC_CHANNELS.runtimesReloadPreview,
+          IPC_CHANNELS.previewDetect,
+          IPC_CHANNELS.previewGet,
+          IPC_CHANNELS.previewStart,
+          IPC_CHANNELS.previewStop,
+          IPC_CHANNELS.previewRestart
         ].sort()
       )
       const names = bindings.map((b) => b.channel).join(' ')
-      assert.ok(!names.includes('start'))
       assert.ok(!names.includes('spawn'))
       assert.ok(!names.includes('execute'))
       assert.ok(!names.includes('kill'))
+      // Human start derives the dev script main-side: no channel may
+      // smuggle program, args, URLs, or PIDs.
+      for (const channel of bindings.map((b) => b.channel)) {
+        assert.ok(!channel.includes('program'))
+        assert.ok(!channel.includes('pid'))
+      }
     } finally {
       db.close()
       rmSync(dir, { recursive: true, force: true })
@@ -89,6 +99,41 @@ describe('runtime IPC bindings', () => {
           return true
         }
       )
+    } finally {
+      db.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('human preview channels take workspace ids only with safe errors', async () => {
+    const { db, dir, bindings } = openHarness()
+    try {
+      const detect = bindings.find((b) => b.channel === IPC_CHANNELS.previewDetect)
+      const get = bindings.find((b) => b.channel === IPC_CHANNELS.previewGet)
+      const start = bindings.find((b) => b.channel === IPC_CHANNELS.previewStart)
+      const stop = bindings.find((b) => b.channel === IPC_CHANNELS.previewStop)
+      const restart = bindings.find((b) => b.channel === IPC_CHANNELS.previewRestart)
+      assert.ok(detect && get && start && stop && restart)
+      // The harness project has no package.json: honest no-preview.
+      assert.deepEqual(await detect.invoke({ workspaceId: 1 }, undefined as never), {
+        workspaceId: 1,
+        script: null,
+        packageManager: null,
+        program: null,
+        args: [],
+        reason: 'no-package-json'
+      })
+      assert.equal(await get.invoke({ workspaceId: 1 }, undefined as never), null)
+      assert.deepEqual(await start.invoke({ workspaceId: 1 }, undefined as never), { status: 'no-preview', preview: null })
+      assert.equal(await stop.invoke({ workspaceId: 1 }, undefined as never), null)
+      // Unknown workspaces and smuggled fields fail with safe copy.
+      await assert.rejects(
+        detect.invoke({ workspaceId: 999 }, undefined as never),
+        /We couldn’t load the project runtime\./
+      )
+      await assert.rejects(start.invoke({ workspaceId: 1, program: 'evil' }, undefined as never))
+      await assert.rejects(start.invoke({ workspaceId: 1, url: 'http://evil:9999/' }, undefined as never))
+      await assert.rejects(restart.invoke(null, undefined as never))
     } finally {
       db.close()
       rmSync(dir, { recursive: true, force: true })

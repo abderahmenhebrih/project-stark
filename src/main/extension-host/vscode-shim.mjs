@@ -45,8 +45,43 @@
  * loader mapping is trivially auditable.
  */
 
+/** Owner -> observed unsupported API names (bounded, diagnostics only). */
+const observedUnsupportedByOwner = new Map();
+
+/** All observed unsupported API names across owners (bounded). */
+const globalUnsupportedApis = [];
+
 function unsupported(name) {
+  // Record for local-only compatibility diagnostics (bounded, names
+  // only — never workspace code, prompts, or secrets). Throwing stays
+  // explicit: no Proxy, no noop fakes.
+  try {
+    const owner = typeof activeExtensionId === 'string' && activeExtensionId !== '' ? activeExtensionId : 'unknown';
+    if (!observedUnsupportedByOwner.has(owner)) {
+      observedUnsupportedByOwner.set(owner, []);
+    }
+    const list = observedUnsupportedByOwner.get(owner);
+    if (Array.isArray(list) && list.length < 16 && !list.includes(String(name).slice(0, 256))) {
+      list.push(String(name).slice(0, 256));
+    }
+    if (globalUnsupportedApis.length < 64 && !globalUnsupportedApis.includes(String(name).slice(0, 256))) {
+      globalUnsupportedApis.push(String(name).slice(0, 256));
+    }
+  } catch {
+    // Diagnostics never break the throw.
+  }
   throw new Error(`Unsupported VS Code API: ${name}`);
+}
+
+/** Host/diagnostics: unsupported APIs observed for one owner (copy). */
+export function __getObservedUnsupportedApis(owner) {
+  const list = observedUnsupportedByOwner.get(owner);
+  return Array.isArray(list) ? [...list] : [];
+}
+
+/** Host/diagnostics: every unsupported API observed this session (copy). */
+export function __getAllObservedUnsupportedApis() {
+  return [...globalUnsupportedApis];
 }
 
 /** Maximum registrations per extension (bounded, deterministic). */
@@ -425,7 +460,7 @@ export function __disposeOwner(owner) {
       registeredCommands.splice(i, 1);
     }
   }
-  for (const list of [documentFormatters, rangeFormatters, codeActionProviders, completionProviders, hoverProviders, definitionProviders, referenceProviders, documentSymbolProviders, workspaceSymbolProviders, renameProviders, signatureHelpProviders, codeLensProviders, documentLinkProviders, documentHighlightProviders, foldingRangeProviders, selectionRangeProviders, inlayHintsProviders, documentColorProviders, callHierarchyProviders, typeHierarchyProviders]) {
+  for (const list of [documentFormatters, rangeFormatters, codeActionProviders, completionProviders, hoverProviders, definitionProviders, referenceProviders, documentSymbolProviders, workspaceSymbolProviders, renameProviders, signatureHelpProviders, codeLensProviders, documentLinkProviders, documentHighlightProviders, foldingRangeProviders, selectionRangeProviders, inlayHintsProviders, documentColorProviders, callHierarchyProviders, typeHierarchyProviders, semanticTokensProviders, onTypeFormatters]) {
     for (let i = list.length - 1; i >= 0; i--) {
       if (list[i]?.owner === owner) {
         list.splice(i, 1);
@@ -460,6 +495,48 @@ export function __disposeOwner(owner) {
       outputChannels.delete(key);
     }
   }
+  disposeOwnedIn(treeDataProviders, owner);
+  disposeOwnedIn(terminalProfileProviders, owner);
+  disposeOwnedIn(taskProviders, owner);
+  disposeOwnedIn(notebookSerializers, owner);
+  disposeOwnedIn(fileSystemProviders, owner);
+  disposeOwnedIn(customEditorProviders, owner);
+  disposeOwnedIn(testControllers, owner);
+  disposeOwnedIn(commentControllers, owner);
+  for (const [key, record] of [...webviewPanels]) {
+    if (record?.owner === owner) {
+      webviewPanels.delete(key);
+    }
+  }
+  for (const [key, record] of [...sourceControls]) {
+    if (record?.owner === owner) {
+      sourceControls.delete(key);
+    }
+  }
+  for (const [key, record] of [...chatParticipants]) {
+    if (record?.owner === owner) {
+      chatParticipants.delete(key);
+    }
+  }
+  for (const [type, list] of [...debugConfigProviders]) {
+    const kept = list.filter((entry) => entry?.owner !== owner);
+    if (kept.length === 0) {
+      debugConfigProviders.delete(type);
+    } else {
+      debugConfigProviders.set(type, kept);
+    }
+  }
+  for (let i = languageModelTools.length - 1; i >= 0; i--) {
+    if (languageModelTools[i]?.owner === owner) {
+      languageModelTools.splice(i, 1);
+    }
+  }
+  for (const [id, record] of [...terminals]) {
+    if (record?.owner === owner) {
+      terminals.delete(id);
+    }
+  }
+  observedUnsupportedByOwner.delete(owner);
   extensionSnapshots.delete(owner);
 }
 
@@ -485,6 +562,13 @@ export function __getOwnerRegistrations(owner) {  const commands = [];
     codeLens: countOwned(codeLensProviders, owner),
     documentLinks: countOwned(documentLinkProviders, owner),
     highlights: countOwned(documentHighlightProviders, owner),
+    semanticTokens: countOwned(semanticTokensProviders, owner),
+    chatParticipants: [...chatParticipants.values()].filter((entry) => entry?.owner === owner).length,
+    lmTools: languageModelTools.filter((entry) => entry?.owner === owner).length,
+    treeViews: [...treeDataProviders.values()].filter((entry) => entry?.owner === owner).length,
+    taskProviders: [...taskProviders.values()].filter((entry) => entry?.owner === owner).length,
+    terminals: [...terminals.values()].filter((entry) => entry?.owner === owner).length,
+    unsupportedApis: __getObservedUnsupportedApis(owner),
     watchers: [...watcherRegistry.values()].filter((w) => w.owner === owner).length,
     childProcesses: 0
   };
@@ -535,6 +619,28 @@ export function __resetForTests() {  activeExtensionId = null;
   documentColorProviders.length = 0;
   callHierarchyProviders.length = 0;
   typeHierarchyProviders.length = 0;
+  semanticTokensProviders.length = 0;
+  onTypeFormatters.length = 0;
+  treeDataProviders.clear();
+  webviewPanels.clear();
+  nextWebviewId = 1;
+  terminalProfileProviders.clear();
+  taskProviders.clear();
+  debugConfigProviders.clear();
+  sourceControls.clear();
+  nextScmId = 1;
+  notebookSerializers.clear();
+  fileSystemProviders.clear();
+  customEditorProviders.clear();
+  chatParticipants.clear();
+  languageModelTools.length = 0;
+  testControllers.clear();
+  commentControllers.clear();
+  terminals.clear();
+  nextTerminalId = 1;
+  authSessionRequests.length = 0;
+  observedUnsupportedByOwner.clear();
+  globalUnsupportedApis.length = 0;
   captured.documentFormatter = null;
   captured.rangeFormatter = null;
 }
@@ -1635,6 +1741,32 @@ export const workspace = {
       unsupported('workspace.fs.copy (use review-before-write proposals)');
     }
   },
+  asRelativePath(pathOrUri) {
+    const text = pathOrUri instanceof Uri ? pathOrUri.path : String(pathOrUri ?? '');
+    const folders = workspaceFoldersSnapshot;
+    if (Array.isArray(folders)) {
+      for (const folder of folders) {
+        const prefix = folder.uri.path;
+        if (text === prefix || text.startsWith(`${prefix}/`)) {
+          return text.slice(prefix.length + (text === prefix ? 0 : 1));
+        }
+      }
+    }
+    return text.split('/').pop() ?? text;
+  },
+  registerFileSystemProvider(scheme, provider) {
+    // Sandboxed: reads route through the workspace authority via
+    // host requests; direct disk writes stay review-gated.
+    const owner = requireActiveOwner('workspace.registerFileSystemProvider');
+    if (typeof scheme !== 'string' || scheme === '' || scheme.length > 64) {
+      throw new Error('Filesystem scheme is not valid.');
+    }
+    if (provider === null || typeof provider !== 'object') {
+      throw new Error('Filesystem provider is not valid.');
+    }
+    hostNotify('FS_PROVIDER_REGISTER', { owner, scheme: scheme.slice(0, 64) });
+    return trackOwnedMap(fileSystemProviders, owner, `${owner}\0${scheme}`, { owner, scheme, provider });
+  },
   /** Host/test emitters (not part of the VS Code surface). */
   __emitterConfig: new EventEmitter(),
   __emitterOpen: new EventEmitter(),
@@ -1878,14 +2010,228 @@ export const window = {
   showTextDocument(document) {
     return hostRequest('showTextDocument', { owner: currentOwner(), uri: document?.uri?.toString?.()?.slice(0, 4096) ?? '' }, 5000).then(() => undefined);
   },
-  showOpenDialog() {
-    unsupported('window.showOpenDialog');
+  async showOpenDialog(options) {
+    const response = await hostRequest(
+      'showOpenDialog',
+      {
+        owner: currentOwner(),
+        canSelectFiles: options?.canSelectFiles !== false,
+        canSelectFolders: options?.canSelectFolders === true,
+        canSelectMany: options?.canSelectMany === true
+      },
+      120_000
+    );
+    if (response === null || typeof response !== 'object' || !Array.isArray(response.uris)) {
+      return undefined;
+    }
+    return response.uris.slice(0, 32).map((uri) => Uri.parse(uri));
   },
-  showSaveDialog() {
-    unsupported('window.showSaveDialog');
+  async showSaveDialog(options) {
+    const response = await hostRequest(
+      'showSaveDialog',
+      { owner: currentOwner(), defaultUri: options?.defaultUri?.toString?.()?.slice(0, 4096) },
+      120_000
+    );
+    if (response === null || typeof response !== 'object' || typeof response.uri !== 'string') {
+      return undefined;
+    }
+    return Uri.parse(response.uri);
   },
-  createTerminal() {
-    unsupported('window.createTerminal (terminal access needs approval)');
+  createTerminal(options) {
+    // Narrow adapter to the hardened Terminal Host: the extension
+    // requests a terminal; main owns the PTY. No direct PTY handle
+    // ever reaches extension code.
+    const owner = typeof activeExtensionId === 'string' ? activeExtensionId : null;
+    const record = {
+      owner,
+      id: nextTerminalId++,
+      name: options?.name !== undefined ? String(options.name).slice(0, 128) : 'Extension terminal'
+    };
+    terminals.set(record.id, record);
+    hostNotify('TERMINAL_CREATE', { owner, terminalId: record.id, name: record.name });
+    const terminal = {
+      get name() {
+        return record.name;
+      },
+      sendText(text) {
+        hostNotify('TERMINAL_WRITE', { owner, terminalId: record.id, text: String(text ?? '').slice(0, 4096) });
+      },
+      show() {
+        hostNotify('TERMINAL_SHOW', { owner, terminalId: record.id });
+      },
+      hide() {
+        hostNotify('TERMINAL_HIDE', { owner, terminalId: record.id });
+      },
+      dispose() {
+        terminals.delete(record.id);
+        hostNotify('TERMINAL_DISPOSE', { owner, terminalId: record.id });
+      }
+    };
+    if (owner !== null) {
+      trackDisposable(owner, terminal);
+    }
+    return terminal;
+  },
+  registerTerminalProfileProvider(id, provider) {
+    const owner = requireActiveOwner('window.registerTerminalProfileProvider');
+    if (typeof id !== 'string' || id === '' || id.length > 128) {
+      throw new Error('Terminal profile id is not valid.');
+    }
+    if (provider === null || typeof provider !== 'object' || typeof provider.provideTerminalProfile !== 'function') {
+      throw new Error('Terminal profile provider is not valid.');
+    }
+    hostNotify('TERMINAL_PROFILE_REGISTER', { owner, id: id.slice(0, 128) });
+    return trackOwnedMap(terminalProfileProviders, owner, `${owner}\0${id}`, { owner, id, provider });
+  },
+  createTreeView(viewId, options) {
+    const owner = requireActiveOwner('window.createTreeView');
+    if (typeof viewId !== 'string' || viewId === '' || viewId.length > 128) {
+      throw new Error('Tree view id is not valid.');
+    }
+    const provider = options?.treeDataProvider;
+    if (provider === null || typeof provider !== 'object' || typeof provider.getChildren !== 'function') {
+      throw new Error('Tree data provider is not valid.');
+    }
+    treeDataProviders.set(`${owner}\0${viewId}`, { owner, viewId, provider });
+    hostNotify('TREE_VIEW_REGISTER', { owner, viewId: viewId.slice(0, 128) });
+    const view = {
+      get visible() {
+        return true;
+      },
+      reveal() {},
+      dispose() {
+        treeDataProviders.delete(`${owner}\0${viewId}`);
+        hostNotify('TREE_VIEW_DISPOSE', { owner, viewId: viewId.slice(0, 128) });
+      }
+    };
+    return trackDisposable(owner, view);
+  },
+  registerTreeDataProvider(viewId, provider) {
+    const owner = requireActiveOwner('window.registerTreeDataProvider');
+    if (typeof viewId !== 'string' || viewId === '' || viewId.length > 128) {
+      throw new Error('Tree view id is not valid.');
+    }
+    if (provider === null || typeof provider !== 'object' || typeof provider.getChildren !== 'function') {
+      throw new Error('Tree data provider is not valid.');
+    }
+    treeDataProviders.set(`${owner}\0${viewId}`, { owner, viewId, provider });
+    hostNotify('TREE_VIEW_REGISTER', { owner, viewId: viewId.slice(0, 128) });
+    const disposable = {
+      dispose() {
+        treeDataProviders.delete(`${owner}\0${viewId}`);
+      }
+    };
+    return trackDisposable(owner, disposable);
+  },
+  createWebviewPanel(viewType, title, showOptions, options) {
+    // Isolated web content: no Node, strict CSP, local-resource roots,
+    // message passing only. The shim holds no DOM; main renders.
+    const owner = requireActiveOwner('window.createWebviewPanel');
+    if (typeof viewType !== 'string' || viewType === '' || viewType.length > 128) {
+      throw new Error('Webview view type is not valid.');
+    }
+    const panelId = nextWebviewId++;
+    const localRoots = Array.isArray(options?.localResourceRoots)
+      ? options.localResourceRoots.map((root) => String(root?.toString?.() ?? '').slice(0, 512)).slice(0, 8)
+      : [];
+    const record = {
+      owner,
+      panelId,
+      viewType: viewType.slice(0, 128),
+      title: String(title ?? '').slice(0, 256),
+      csp: typeof options?.csp === 'string' ? options.csp.slice(0, 2048) : undefined,
+      localRoots,
+      emitter: new EventEmitter()
+    };
+    webviewPanels.set(panelId, record);
+    const cspSource = options?.enableScripts === true ? 'scripts-enabled' : 'scripts-disabled';
+    hostNotify('WEBVIEW_CREATE', {
+      owner,
+      panelId,
+      viewType: record.viewType,
+      title: record.title,
+      csp: cspSource,
+      localRoots
+    });
+    const panel = {
+      get viewType() {
+        return record.viewType;
+      },
+      get title() {
+        return record.title;
+      },
+      webview: {
+        get html() {
+          return record.html ?? '';
+        },
+        set html(value) {
+          // Bounded HTML; main applies strict CSP at render.
+          record.html = String(value ?? '').slice(0, 512 * 1024);
+          hostNotify('WEBVIEW_HTML', { owner, panelId });
+        },
+        postMessage() {
+          hostNotify('WEBVIEW_POST', { owner, panelId });
+          return Promise.resolve(true);
+        },
+        onDidReceiveMessage(listener) {
+          if (typeof listener !== 'function') {
+            throw new Error('Webview listener is not valid.');
+          }
+          return record.emitter.event(listener);
+        }
+      },
+      reveal() {},
+      dispose() {
+        webviewPanels.delete(panelId);
+        hostNotify('WEBVIEW_DISPOSE', { owner, panelId });
+      },
+      onDidDispose(listener) {
+        const disposable = { dispose() {} };
+        if (typeof listener === 'function') {
+          try {
+            listener.__starkWebviewDispose = true;
+          } catch {
+            // Marker is best-effort.
+          }
+        }
+        return disposable;
+      }
+    };
+    return trackDisposable(owner, panel);
+  },
+  registerWebviewViewProvider(viewId, provider) {
+    const owner = requireActiveOwner('window.registerWebviewViewProvider');
+    if (typeof viewId !== 'string' || viewId === '' || viewId.length > 128) {
+      throw new Error('Webview view id is not valid.');
+    }
+    if (provider === null || typeof provider !== 'object' || typeof provider.resolveWebviewView !== 'function') {
+      throw new Error('Webview view provider is not valid.');
+    }
+    webviewPanels.set(`provider:${owner}\0${viewId}`, { owner, viewId, provider });
+    hostNotify('WEBVIEW_VIEW_REGISTER', { owner, viewId: viewId.slice(0, 128) });
+    const disposable = {
+      dispose() {
+        webviewPanels.delete(`provider:${owner}\0${viewId}`);
+      }
+    };
+    return trackDisposable(owner, disposable);
+  },
+  registerCustomEditorProvider(viewType, provider) {
+    const owner = requireActiveOwner('window.registerCustomEditorProvider');
+    if (typeof viewType !== 'string' || viewType === '' || viewType.length > 128) {
+      throw new Error('Custom editor view type is not valid.');
+    }
+    if (provider === null || typeof provider !== 'object') {
+      throw new Error('Custom editor provider is not valid.');
+    }
+    hostNotify('CUSTOM_EDITOR_REGISTER', { owner, viewType: viewType.slice(0, 128) });
+    return trackOwnedMap(customEditorProviders, owner, `${owner}\0${viewType}`, { owner, viewType, provider });
+  },
+  setStatusBarMessage(text) {
+    const owner = typeof activeExtensionId === 'string' ? activeExtensionId : 'unknown';
+    hostNotify('STATUSBAR_MESSAGE', { owner, text: String(text ?? '').slice(0, 256) });
+    const disposable = { dispose() {} };
+    return owner !== 'unknown' ? trackDisposable(owner, disposable) : disposable;
   },
   onDidChangeActiveTextEditor(listener) {
     if (typeof listener !== 'function') {
@@ -1934,6 +2280,8 @@ const inlayHintsProviders = [];
 const documentColorProviders = [];
 const callHierarchyProviders = [];
 const typeHierarchyProviders = [];
+const semanticTokensProviders = [];
+const onTypeFormatters = [];
 
 function validateSelector(selector) {
   if (typeof selector === 'string') {
@@ -2273,6 +2621,37 @@ export const languages = {
     const owner = typeof activeExtensionId === 'string' ? activeExtensionId : null;
     return makeStatusItem(owner, undefined, 2, 0);
   },
+  setLanguageConfiguration(languageId, configuration) {
+    const owner = requireActiveOwner('languages.setLanguageConfiguration');
+    if (typeof languageId !== 'string' || languageId === '' || languageId.length > 64) {
+      throw new Error('Language id is not valid.');
+    }
+    if (configuration === null || typeof configuration !== 'object') {
+      throw new Error('Language configuration is not valid.');
+    }
+    // Monaco-bound: forwarded to main for editor behavior; bounded data only.
+    hostNotify('LANGUAGE_CONFIGURATION', { owner, language: languageId.slice(0, 64) });
+    const disposable = { dispose() {} };
+    return trackDisposable(owner, disposable);
+  },
+  registerDocumentSemanticTokensProvider(selector, provider) {
+    return registerProvider(
+      semanticTokensProviders,
+      'languages.registerDocumentSemanticTokensProvider',
+      selector,
+      provider,
+      'provideDocumentSemanticTokens'
+    );
+  },
+  registerOnTypeFormattingEditProvider(selector, provider) {
+    return registerProvider(
+      onTypeFormatters,
+      'languages.registerOnTypeFormattingEditProvider',
+      selector,
+      provider,
+      'provideOnTypeFormattingEdits'
+    );
+  },
   match() {
     unsupported('languages.match');
   },
@@ -2352,6 +2731,14 @@ export const languages = {
   /** Host introspection: color providers with owners. */
   __getDocumentColorProviders() {
     return copyProviders(documentColorProviders);
+  },
+  /** Host introspection: semantic-tokens providers with owners. */
+  __getSemanticTokensProviders() {
+    return copyProviders(semanticTokensProviders);
+  },
+  /** Host introspection: on-type formatters with owners. */
+  __getOnTypeFormatters() {
+    return copyProviders(onTypeFormatters);
   }
 };
 
@@ -2471,12 +2858,102 @@ export const extensions = {
 };
 
 // ---------------------------------------------------------------------------
-// env / tasks / debug / scm (honest subsets)
+// Code OSS MainThread adapters: generic registries (no vendor logic)
 // ---------------------------------------------------------------------------
+
+/** Generic view/tree registry: viewId -> { owner, provider }. */
+const treeDataProviders = new Map();
+
+/** Webview panels/views: panelId -> record (isolated content, CSP, disposal). */
+const webviewPanels = new Map();
+let nextWebviewId = 1;
+
+/** Terminal profile providers: id -> { owner, provider }. */
+const terminalProfileProviders = new Map();
+
+/** Task providers: type -> { owner, provider }. */
+const taskProviders = new Map();
+
+/** Debug configuration providers: type -> [{ owner, provider }]. */
+const debugConfigProviders = new Map();
+
+/** Source-control items: id -> record. */
+const sourceControls = new Map();
+let nextScmId = 1;
+
+/** Notebook serializers: viewType -> { owner, serializer }. */
+const notebookSerializers = new Map();
+
+/** File-system providers: scheme -> { owner, provider }. */
+const fileSystemProviders = new Map();
+
+/** Custom-editor providers: viewType -> { owner, provider }. */
+const customEditorProviders = new Map();
+
+/** Chat participants: id -> { owner, handler }. */
+const chatParticipants = new Map();
+
+/** Language-model tools: name -> { owner, tool }. */
+const languageModelTools = [];
+
+/** Test controllers: id -> record. */
+const testControllers = new Map();
+
+/** Comment controllers: id -> record. */
+const commentControllers = new Map();
+
+/** Terminal instances: id -> record (owned by Terminal Host, never PTY-direct). */
+const terminals = new Map();
+let nextTerminalId = 1;
+
+/** Auth sessions are main-owned per extension/provider; the shim holds no tokens. */
+const authSessionRequests = [];
+
+function requireOwnerFor(method) {
+  return requireActiveOwner(method);
+}
+
+function trackOwnedMap(map, owner, key, value) {
+  map.set(key, value);
+  const disposable = {
+    dispose() {
+      const current = map.get(key);
+      if (current?.owner === owner) {
+        map.delete(key);
+      }
+    }
+  };
+  return owner !== null ? trackDisposable(owner, disposable) : disposable;
+}
+
+function disposeOwnedIn(map, owner) {
+  for (const [key, record] of [...map]) {
+    if (record?.owner === owner) {
+      map.delete(key);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// env / tasks / debug / scm (Code OSS-compatible narrow adapters)
+// ---------------------------------------------------------------------------
+
+const ALLOWED_EXTERNAL_SCHEMES = new Set(['https', 'http', 'mailto']);
 
 export const env = {
   appName: 'STARK',
+  appHost: 'desktop',
   uiKind: 1,
+  get language() {
+    return 'en';
+  },
+  get machineId() {
+    // Stable local id; never account-bound, never a secret.
+    return 'stark-local-machine';
+  },
+  get sessionId() {
+    return 'stark-local-session';
+  },
   get isTelemetryEnabled() {
     return false;
   },
@@ -2497,62 +2974,410 @@ export const env = {
       }
     };
   },
-  openExternal() {
-    unsupported('env.openExternal');
+  async openExternal(target) {
+    const text = target instanceof Uri ? target.toString() : String(target ?? '');
+    const scheme = text.slice(0, text.indexOf(':')).toLowerCase();
+    if (!ALLOWED_EXTERNAL_SCHEMES.has(scheme)) {
+      throw new Error('External URL scheme is not allowed.');
+    }
+    const response = await hostRequest('openExternal', { owner: currentOwner(), url: text.slice(0, 2048) }, 5000);
+    return response !== null && typeof response === 'object' ? response.opened === true : false;
+  },
+  async asExternalUri(target) {
+    const text = target instanceof Uri ? target.toString() : String(target ?? '');
+    const response = await hostRequest('asExternalUri', { owner: currentOwner(), uri: text.slice(0, 4096) }, 5000);
+    if (response !== null && typeof response === 'object' && typeof response.uri === 'string') {
+      return Uri.parse(response.uri);
+    }
+    return target;
   }
 };
 
 export const tasks = {
-  fetchTasks() {
-    unsupported('tasks.fetchTasks (task execution needs approval)');
+  registerTaskProvider(type, provider) {
+    const owner = requireOwnerFor('tasks.registerTaskProvider');
+    if (typeof type !== 'string' || type === '' || type.length > 128) {
+      throw new Error('Task type is not valid.');
+    }
+    if (provider === null || typeof provider !== 'object' || typeof provider.provideTasks !== 'function') {
+      throw new Error('Task provider is not valid.');
+    }
+    if ([...taskProviders.values()].filter((entry) => entry.owner === owner).length >= 16) {
+      throw new Error('Too many task providers are registered.');
+    }
+    hostNotify('TASK_PROVIDER_REGISTER', { owner, type: type.slice(0, 128) });
+    return trackOwnedMap(taskProviders, owner, `${owner}\0${type}`, { owner, type, provider });
   },
-  executeTask() {
-    unsupported('tasks.executeTask (task execution needs approval)');
+  async fetchTasks(filter) {
+    const response = await hostRequest(
+      'tasksFetch',
+      { owner: currentOwner(), type: filter?.type !== undefined ? String(filter.type).slice(0, 128) : undefined },
+      5000
+    );
+    if (response === null || typeof response !== 'object' || !Array.isArray(response.tasks)) {
+      return [];
+    }
+    return response.tasks.slice(0, 128);
   },
-  registerTaskProvider() {
-    unsupported('tasks.registerTaskProvider (task execution needs approval)');
+  async executeTask(task) {
+    // Controlled process/task boundary: main approves and runs; the
+    // host never spawns from renderer-adjacent code.
+    const response = await hostRequest(
+      'tasksExecute',
+      { owner: currentOwner(), task: JSON.stringify(task ?? null).slice(0, 8192) },
+      10_000
+    );
+    if (response === null || typeof response !== 'object') {
+      unsupported('tasks.executeTask (task execution needs approval)');
+    }
+    return response.execution ?? { task };
   },
-  onDidStartTask() {
-    unsupported('tasks.onDidStartTask');
+  onDidStartTask(listener) {
+    if (typeof listener !== 'function') {
+      throw new Error('Task listener is not valid.');
+    }
+    const owner = typeof activeExtensionId === 'string' ? activeExtensionId : null;
+    const emitter = tasks.__emitterStart;
+    const disposable = emitter.event(listener);
+    return owner !== null ? trackDisposable(owner, disposable) : disposable;
   },
-  onDidEndTask() {
-    unsupported('tasks.onDidEndTask');
-  }
+  onDidEndTask(listener) {
+    if (typeof listener !== 'function') {
+      throw new Error('Task listener is not valid.');
+    }
+    const owner = typeof activeExtensionId === 'string' ? activeExtensionId : null;
+    const disposable = tasks.__emitterEnd.event(listener);
+    return owner !== null ? trackDisposable(owner, disposable) : disposable;
+  },
+  __emitterStart: new EventEmitter(),
+  __emitterEnd: new EventEmitter()
 };
 
 export const debug = {
-  startDebugging() {
-    unsupported('debug.startDebugging');
+  registerDebugConfigurationProvider(type, provider) {
+    const owner = requireOwnerFor('debug.registerDebugConfigurationProvider');
+    if (typeof type !== 'string' || type === '' || type.length > 128) {
+      throw new Error('Debug type is not valid.');
+    }
+    if (provider === null || typeof provider !== 'object') {
+      throw new Error('Debug provider is not valid.');
+    }
+    const list = debugConfigProviders.get(type) ?? [];
+    list.push({ owner, provider });
+    debugConfigProviders.set(type, list);
+    hostNotify('DEBUG_PROVIDER_REGISTER', { owner, type: type.slice(0, 128) });
+    const disposable = {
+      dispose() {
+        const current = debugConfigProviders.get(type) ?? [];
+        const index = current.findIndex((entry) => entry.owner === owner && entry.provider === provider);
+        if (index !== -1) {
+          current.splice(index, 1);
+        }
+      }
+    };
+    return trackDisposable(owner, disposable);
   },
-  registerDebugConfigurationProvider() {
-    unsupported('vscode.debug');
+  async startDebugging(folder, nameOrConfig) {
+    const response = await hostRequest(
+      'debugStart',
+      { owner: currentOwner(), name: typeof nameOrConfig === 'string' ? nameOrConfig.slice(0, 256) : 'debug' },
+      10_000
+    );
+    if (response === null || typeof response !== 'object' || response.started !== true) {
+      unsupported('debug.startDebugging (debug execution is not supported yet)');
+    }
+    return true;
   },
-  onDidStartDebugSession() {
-    unsupported('vscode.debug');
-  }
+  onDidStartDebugSession(listener) {
+    if (typeof listener !== 'function') {
+      throw new Error('Debug listener is not valid.');
+    }
+    const owner = typeof activeExtensionId === 'string' ? activeExtensionId : null;
+    const disposable = debug.__emitterStart.event(listener);
+    return owner !== null ? trackDisposable(owner, disposable) : disposable;
+  },
+  onDidTerminateDebugSession(listener) {
+    if (typeof listener !== 'function') {
+      throw new Error('Debug listener is not valid.');
+    }
+    const owner = typeof activeExtensionId === 'string' ? activeExtensionId : null;
+    const disposable = debug.__emitterEnd.event(listener);
+    return owner !== null ? trackDisposable(owner, disposable) : disposable;
+  },
+  __emitterStart: new EventEmitter(),
+  __emitterEnd: new EventEmitter()
 };
 
 export const scm = {
-  createSourceControl() {
-    unsupported('scm.createSourceControl');
+  createSourceControl(id, label) {
+    const owner = requireOwnerFor('scm.createSourceControl');
+    if (typeof id !== 'string' || id === '' || id.length > 128) {
+      throw new Error('Source-control id is not valid.');
+    }
+    const scmId = nextScmId++;
+    const record = {
+      owner,
+      id: id.slice(0, 128),
+      label: typeof label === 'string' ? label.slice(0, 256) : id.slice(0, 128),
+      resourceGroups: [],
+      inputBox: { value: '' }
+    };
+    sourceControls.set(scmId, record);
+    hostNotify('SCM_CREATE', { owner, id: record.id, label: record.label });
+    const control = {
+      get id() {
+        return record.id;
+      },
+      get label() {
+        return record.label;
+      },
+      get inputBox() {
+        return record.inputBox;
+      },
+      createResourceGroup(gid, glabel) {
+        const group = { id: String(gid).slice(0, 128), label: String(glabel ?? '').slice(0, 256), resourceStates: [] };
+        record.resourceGroups.push(group);
+        return group;
+      },
+      dispose() {
+        sourceControls.delete(scmId);
+        hostNotify('SCM_DISPOSE', { owner, id: record.id });
+      }
+    };
+    return trackDisposable(owner, control);
   }
 };
 
 export const notebooks = {
-  registerNotebookSerializer() {
-    unsupported('notebooks.registerNotebookSerializer');
+  registerNotebookSerializer(viewType, serializer) {
+    const owner = requireOwnerFor('notebooks.registerNotebookSerializer');
+    if (typeof viewType !== 'string' || viewType === '' || viewType.length > 128) {
+      throw new Error('Notebook view type is not valid.');
+    }
+    if (serializer === null || typeof serializer !== 'object') {
+      throw new Error('Notebook serializer is not valid.');
+    }
+    hostNotify('NOTEBOOK_REGISTER', { owner, viewType: viewType.slice(0, 128) });
+    return trackOwnedMap(notebookSerializers, owner, `${owner}\0${viewType}`, { owner, viewType, serializer });
   }
 };
 
 export const authentication = {
-  getSession() {
-    unsupported('authentication.getSession');
-  }
+  async getSession(providerId, scopes) {
+    const owner = typeof activeExtensionId === 'string' ? activeExtensionId : 'unknown';
+    // Isolated per extension/provider: main owns tokens; the host
+    // never sees STARK account tokens or model keys.
+    const response = await hostRequest(
+      'authGetSession',
+      {
+        owner,
+        provider: String(providerId ?? '').slice(0, 128),
+        scopes: Array.isArray(scopes) ? scopes.map((scope) => String(scope).slice(0, 256)).slice(0, 16) : []
+      },
+      10_000
+    );
+    if (response === null || typeof response !== 'object' || response.session === undefined) {
+      return undefined;
+    }
+    return response.session;
+  },
+  async createSession(providerId, scopes) {
+    const owner = typeof activeExtensionId === 'string' ? activeExtensionId : 'unknown';
+    const response = await hostRequest(
+      'authCreateSession',
+      {
+        owner,
+        provider: String(providerId ?? '').slice(0, 128),
+        scopes: Array.isArray(scopes) ? scopes.map((scope) => String(scope).slice(0, 256)).slice(0, 16) : []
+      },
+      10_000
+    );
+    if (response === null || typeof response !== 'object' || response.session === undefined) {
+      unsupported('authentication.createSession (no authentication provider)');
+    }
+    return response.session;
+  },
+  onDidChangeSessions(listener) {
+    if (typeof listener !== 'function') {
+      throw new Error('Authentication listener is not valid.');
+    }
+    const owner = typeof activeExtensionId === 'string' ? activeExtensionId : null;
+    const disposable = authentication.__emitter.event(listener);
+    return owner !== null ? trackDisposable(owner, disposable) : disposable;
+  },
+  __emitter: new EventEmitter()
 };
 
 export const timeline = {
-  createTimelineProvider() {
-    unsupported('timeline.createTimelineProvider');
+  createTimelineProvider(scheme, provider) {
+    const owner = requireOwnerFor('timeline.createTimelineProvider');
+    if (typeof scheme !== 'string' || scheme === '' || scheme.length > 64) {
+      throw new Error('Timeline scheme is not valid.');
+    }
+    hostNotify('TIMELINE_REGISTER', { owner, scheme: scheme.slice(0, 64) });
+    void provider;
+    const disposable = {
+      dispose() {}
+    };
+    return trackDisposable(owner, disposable);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// chat / language-model (Code OSS-compatible stable surface)
+// ---------------------------------------------------------------------------
+
+export const chat = {
+  createChatParticipant(id, handler) {
+    const owner = requireOwnerFor('chat.createChatParticipant');
+    if (typeof id !== 'string' || id === '' || id.length > 128) {
+      throw new Error('Chat participant id is not valid.');
+    }
+    if (typeof handler !== 'function') {
+      throw new Error('Chat participant handler is not valid.');
+    }
+    if (chatParticipants.has(`${owner}\0${id}`)) {
+      throw new Error(`Chat participant ${id} is already registered.`);
+    }
+    chatParticipants.set(`${owner}\0${id}`, { owner, id, handler });
+    // Generic composer discovery reads this registry through standard
+    // APIs — no vendor-specific adapter is required for an extension
+    // to function, and none is consulted here.
+    hostNotify('CHAT_PARTICIPANT_REGISTER', { owner, id: id.slice(0, 128) });
+    const participant = {
+      get id() {
+        return id;
+      },
+      dispose() {
+        chatParticipants.delete(`${owner}\0${id}`);
+        hostNotify('CHAT_PARTICIPANT_DISPOSE', { owner, id: id.slice(0, 128) });
+      }
+    };
+    return trackDisposable(owner, participant);
+  },
+  /** Host/composer introspection: registered participant ids (bounded). */
+  __getParticipants() {
+    return [...chatParticipants.values()].map((entry) => ({ owner: entry.owner, id: entry.id })).slice(0, 128);
+  }
+};
+
+export const lm = {
+  registerTool(name, tool) {
+    const owner = requireOwnerFor('lm.registerTool');
+    if (typeof name !== 'string' || name === '' || name.length > 128) {
+      throw new Error('Language-model tool name is not valid.');
+    }
+    if (tool === null || typeof tool !== 'object' || typeof tool.invoke !== 'function') {
+      throw new Error('Language-model tool is not valid.');
+    }
+    if (languageModelTools.filter((entry) => entry.owner === owner).length >= 32) {
+      throw new Error('Too many language-model tools are registered.');
+    }
+    const entry = { owner, name, tool };
+    languageModelTools.push(entry);
+    hostNotify('LM_TOOL_REGISTER', { owner, name: name.slice(0, 128) });
+    const disposable = {
+      dispose() {
+        const index = languageModelTools.indexOf(entry);
+        if (index !== -1) {
+          languageModelTools.splice(index, 1);
+        }
+      }
+    };
+    return trackDisposable(owner, disposable);
+  },
+  async selectChatModels(selector) {
+    // Main-owned model gateway: extensions describe requirements;
+    // STARK account tokens and model keys never reach the host.
+    const response = await hostRequest(
+      'lmSelectModels',
+      {
+        owner: currentOwner(),
+        vendor: selector?.vendor !== undefined ? String(selector.vendor).slice(0, 128) : undefined,
+        family: selector?.family !== undefined ? String(selector.family).slice(0, 128) : undefined
+      },
+      5000
+    );
+    if (response === null || typeof response !== 'object' || !Array.isArray(response.models)) {
+      return [];
+    }
+    return response.models.slice(0, 16).map((model) => ({
+      id: String(model?.id ?? '').slice(0, 128),
+      vendor: String(model?.vendor ?? '').slice(0, 128),
+      family: String(model?.family ?? '').slice(0, 128),
+      sendRequest: (messages, options) =>
+        lm.sendChatRequest(model?.id, messages, options)
+    }));
+  },
+  async sendChatRequest(modelId, messages, options) {
+    const response = await hostRequest(
+      'lmChatRequest',
+      {
+        owner: currentOwner(),
+        model: String(modelId ?? '').slice(0, 128),
+        messages: JSON.stringify(messages ?? []).slice(0, 64 * 1024),
+        tools: Array.isArray(options?.tools) ? options.tools.map((tool) => String(tool).slice(0, 128)).slice(0, 16) : []
+      },
+      60_000
+    );
+    if (response === null || typeof response !== 'object') {
+      unsupported('lm.sendChatRequest (no language-model access)');
+    }
+    return response;
+  },
+  onDidChangeChatModels(listener) {
+    if (typeof listener !== 'function') {
+      throw new Error('Language-model listener is not valid.');
+    }
+    const owner = typeof activeExtensionId === 'string' ? activeExtensionId : null;
+    const disposable = lm.__emitter.event(listener);
+    return owner !== null ? trackDisposable(owner, disposable) : disposable;
+  },
+  __emitter: new EventEmitter(),
+  /** Host/composer introspection: registered tool names (bounded). */
+  __getTools() {
+    return languageModelTools.map((entry) => ({ owner: entry.owner, name: entry.name })).slice(0, 128);
+  }
+};
+
+export const tests = {
+  createTestController(id, label) {
+    const owner = requireOwnerFor('tests.createTestController');
+    if (typeof id !== 'string' || id === '' || id.length > 128) {
+      throw new Error('Test controller id is not valid.');
+    }
+    testControllers.set(`${owner}\0${id}`, { owner, id, label: String(label ?? '').slice(0, 256) });
+    hostNotify('TESTS_REGISTER', { owner, id: id.slice(0, 128) });
+    const controller = {
+      get id() {
+        return id;
+      },
+      dispose() {
+        testControllers.delete(`${owner}\0${id}`);
+      }
+    };
+    return trackDisposable(owner, controller);
+  }
+};
+
+export const comments = {
+  createCommentController(id, commentLabel) {
+    const owner = requireOwnerFor('comments.createCommentController');
+    if (typeof id !== 'string' || id === '' || id.length > 128) {
+      throw new Error('Comment controller id is not valid.');
+    }
+    void commentLabel;
+    commentControllers.set(`${owner}\0${id}`, { owner, id });
+    hostNotify('COMMENTS_REGISTER', { owner, id: id.slice(0, 128) });
+    const controller = {
+      get id() {
+        return id;
+      },
+      dispose() {
+        commentControllers.delete(`${owner}\0${id}`);
+      }
+    };
+    return trackDisposable(owner, controller);
   }
 };
 
@@ -2563,5 +3388,5 @@ export function __unregisterExtensionInfo(extensionId) {
   }
 }
 
-/** Compatibility target of this shim (not a real VS Code version). */
+/** Compatibility target: pinned Code OSS version (see code-oss-compat.ts). Do not bump casually. */
 export const version = '1.90.0';

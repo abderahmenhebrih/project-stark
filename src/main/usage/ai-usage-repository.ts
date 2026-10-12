@@ -546,8 +546,85 @@ export class AiUsageRepository {
     })
   }
 
-  /** One bounded startup pass: `started` leftovers become `interrupted`. */
-  markStartedAsInterrupted(now: number): { interrupted: number } {
+  /**
+   * Per-session aggregates over the window: one row per provider/model
+   * for exactly one coding session. Counts every reserved attempt as
+   * an outbound STARK call; token sums cover finalized successes with
+   * reported totals only. Provider-reported counts only — never
+   * estimates.
+   */
+  summarizeSessionWindow(sessionId: number, sinceMs: number): UsageAggregateRow[] {
+    const rows: unknown = this.db
+      .prepare(
+        'SELECT provider_id, model, ' +
+          'COUNT(*) AS calls, ' +
+          "SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS successes, " +
+          'SUM(input_tokens) AS input_tokens, ' +
+          'SUM(output_tokens) AS output_tokens, ' +
+          'SUM(total_tokens) AS total_tokens, ' +
+          "SUM(CASE WHEN status = 'success' AND total_tokens IS NOT NULL THEN 1 ELSE 0 END) AS successes_with_tokens " +
+          'FROM ai_usage_events WHERE session_id = ? AND created_at >= ? GROUP BY provider_id, model ORDER BY MAX(created_at) DESC'
+      )
+      .all(sessionId, sinceMs)
+    if (!Array.isArray(rows)) {
+      throw new DatabaseError('stored usage aggregate rows are invalid')
+    }
+    return rows.map((row: unknown) => {
+      if (!isRecord(row)) {
+        throw new DatabaseError('stored usage aggregate row is invalid')
+      }
+      const providerId = row['provider_id']
+      const model = row['model']
+      const calls = row['calls']
+      const successes = row['successes']
+      const successesWithTokens = row['successes_with_tokens']
+      if (
+        typeof providerId !== 'string' ||
+        typeof model !== 'string' ||
+        typeof calls !== 'number' ||
+        typeof successes !== 'number' ||
+        typeof successesWithTokens !== 'number'
+      ) {
+        throw new DatabaseError('stored usage aggregate row is invalid')
+      }
+      return {
+        providerId,
+        model,
+        calls,
+        successes,
+        failures: 0,
+        rateLimitFailures: 0,
+        inputTokens: asNullableNumber(row['input_tokens'], 'aggregate row'),
+        outputTokens: asNullableNumber(row['output_tokens'], 'aggregate row'),
+        totalTokens: asNullableNumber(row['total_tokens'], 'aggregate row'),
+        successesWithTotalTokens: successesWithTokens
+      }
+    })
+  }
+
+  /**
+   * Latest provider-reported input-token count for one session in the
+   * window (newest finalized success carrying input_tokens), or null
+   * when the provider never reported one. Drives the Context section —
+   * actual latest usage, never an invented context window.
+   */
+  latestSessionInputTokens(sessionId: number, sinceMs: number): number | null {
+    const row: unknown = this.db
+      .prepare(
+        "SELECT input_tokens AS inputTokens FROM ai_usage_events WHERE session_id = ? AND created_at >= ? " +
+          "AND status = 'success' AND input_tokens IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1"
+      )
+      .get(sessionId, sinceMs)
+    if (row === undefined) {
+      return null
+    }
+    if (!isRecord(row)) {
+      throw new DatabaseError('stored usage aggregate row is invalid')
+    }
+    return asNullableNumber(row['inputTokens'], 'aggregate row')
+  }
+
+  /** One bounded startup pass: `started` leftovers become `interrupted`. */  markStartedAsInterrupted(now: number): { interrupted: number } {
     const result = this.db
       .prepare("UPDATE ai_usage_events SET status = 'interrupted', completed_at = ? WHERE status = 'started'")
       .run(now)

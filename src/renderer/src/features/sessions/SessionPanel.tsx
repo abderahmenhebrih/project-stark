@@ -64,6 +64,7 @@ import type { SettingsSection } from '../settings/settings-section'
 import { UiIcon } from '../../components/icons/UiIcon'
 import { StarkMark } from '../../components/StarkMark'
 import type { ExtensionAgentProviderInfo } from '../../../../shared/extension-agents/types'
+import { canSendWithProvider, providerReadiness, type ProviderReadiness } from './provider-readiness'
 import {
   STARK_EFFORT_LABELS,
   STARK_EFFORT_TOOLTIPS,
@@ -201,10 +202,12 @@ export interface SessionChromeSnapshot {
   readonly effort: StarkEffort
   /** Display label for the target (STARK or the provider's own name). */
   readonly agentLabel: string
-  /** Provider truth for Usage Status (configured/not configured). */
-  readonly providerConfigured: boolean
+  /** Provider truth for Usage Status (canonical readiness — banner and sidebar share this). */
+  readonly providerStatus: ProviderReadiness
   /** Actual current model id, or null when none is selected. */
   readonly providerModel: string | null
+  /** Created-at of the selected session, or null when none is selected. */
+  readonly selectedSessionCreatedAt: number | null
   /** Product plan label for Usage Status (e.g. "STARK Free"). */
   readonly planLabel: string
   /** Real local 24h usage summary, or null while unloaded. */
@@ -548,7 +551,11 @@ export function SessionPanel({
     }
   }, [targetMenuOpen, effortMenuOpen])
 
-  const aiReady = provider.configured && provider.selectedModel !== null
+  // Canonical provider readiness: the session banner AND the Usage
+  // sidebar render from this one value, so "not connected" and
+  // "configured" can never contradict each other.
+  const readiness = providerReadiness(provider.configured, provider.selectedModel)
+  const aiReady = canSendWithProvider(readiness)
 
   function scrollToBottom(): void {
     const element = messagesScrollRef.current
@@ -744,6 +751,18 @@ export function SessionPanel({
       })
     }
   }
+
+  // Usage live updates: when an AI call settles, reload the local
+  // summary so the Usage sidebar reflects the just-finished call
+  // without reopening anything. Existing state/subscription only —
+  // no polling.
+  const wasSendingRef = useRef(false)
+  useEffect(() => {
+    if (wasSendingRef.current && !state.sending) {
+      void refreshUsageSummary(workspaceId)
+    }
+    wasSendingRef.current = state.sending
+  }, [workspaceId, state.sending])
 
   async function handleSaveUsage(): Promise<void> {
     if (usage.saving) {
@@ -2368,8 +2387,9 @@ export function SessionPanel({
         agentTarget,
         effort,
         agentLabel: agentTargetLabel(agentTarget, providers),
-        providerConfigured: provider.configured,
+        providerStatus: readiness,
         providerModel: provider.selectedModel,
+        selectedSessionCreatedAt: selectedSession?.createdAt ?? null,
         planLabel: sponsorProductEntitlements.planLabel,
         usageSummary: usage.summary,
         runtimePreviewUrl: runtime.active?.previewUrl ?? null
@@ -2399,6 +2419,8 @@ export function SessionPanel({
     providers,
     provider.configured,
     provider.selectedModel,
+    readiness,
+    selectedSession?.createdAt,
     sponsorProductEntitlements.planLabel,
     usage.summary,
     runtime.active
@@ -2415,6 +2437,23 @@ export function SessionPanel({
       <p className="session__notice" role="status">
         {aiReady ? (
           `OpenAI · ${provider.selectedModel ?? ''}`
+        ) : readiness === 'needs-model' ? (
+          <>
+            {'AI provider configured — select a model to connect.'}
+            {onOpenSettings !== undefined && (
+              <>
+                {' '}
+                <button
+                  className="explorer__secondary"
+                  type="button"
+                  onClick={() => onOpenSettings('models')}
+                  aria-label="Select AI model"
+                >
+                  Select model
+                </button>
+              </>
+            )}
+          </>
         ) : (
           <>
             {'Local session — AI provider not connected yet.'}

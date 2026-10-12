@@ -60,6 +60,8 @@ export type ExplorerAction =
   | { readonly type: 'file-failed'; readonly path: string; readonly message: string }
   /** Clears the active file preview (pane X): tree and workspace stay intact. */
   | { readonly type: 'preview-cleared' }
+  /** Collapses every expanded directory (header action; cached listings stay). */
+  | { readonly type: 'collapse-all' }
 
 function without<T>(values: readonly T[], value: T): T[] {
   return values.filter((entry) => entry !== value)
@@ -146,6 +148,12 @@ export function explorerReducer(state: ExplorerState, action: ExplorerAction): E
     }
     case 'preview-cleared': {
       return { ...state, selectedPath: null, preview: null }
+    }
+    case 'collapse-all': {
+      if (state.expanded.length === 0) {
+        return state
+      }
+      return { ...state, expanded: [] }
     }
   }
 }

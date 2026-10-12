@@ -31,19 +31,28 @@ export const EXTENSION_MANIFEST_MAX_CATEGORY_LENGTH = 64
 export const EXTENSION_MANIFEST_MAX_KINDS = 8
 export const EXTENSION_MANIFEST_MAX_CONTRIBUTES_KEYS = 32
 export const EXTENSION_MANIFEST_MAX_CONTRIBUTES_BYTES = 16 * 1024
+export const EXTENSION_MANIFEST_MAX_KEYWORDS = 32
+export const EXTENSION_MANIFEST_MAX_DEPENDENCIES = 64
+export const EXTENSION_MANIFEST_MAX_PACK_ENTRIES = 64
 
 export interface NormalizedExtensionManifest {
   readonly name: string
   readonly publisher: string
   readonly version: string
   readonly displayName: string
+  readonly description: string | null
   readonly main: string | null
   readonly browser: string | null
+  readonly icon: string | null
+  readonly license: string | null
+  readonly keywords: readonly string[]
+  readonly categories: readonly string[]
   readonly activationEvents: readonly string[]
   readonly enginesVscode: string | null
   readonly extensionKind: readonly string[]
-  readonly categories: readonly string[]
-  /** Bounded contributes subset (data only, never executed). */
+  readonly extensionPack: readonly string[]
+  readonly extensionDependencies: readonly string[]
+  /** Bounded contributes subset (data only, never executed; unknown keys preserved). */
   readonly contributes: Record<string, unknown> | null
 }
 
@@ -202,20 +211,46 @@ export function normalizeManifestData(raw: unknown, identity: ValidatedInstallId
   }
   const extensionKind = normalizeStringArray(raw['extensionKind'], EXTENSION_MANIFEST_MAX_KINDS, EXTENSION_MANIFEST_MAX_CATEGORY_LENGTH)
   const categories = normalizeStringArray(raw['categories'], EXTENSION_MANIFEST_MAX_CATEGORIES, EXTENSION_MANIFEST_MAX_CATEGORY_LENGTH)
+  const keywords = normalizeStringArray(raw['keywords'], EXTENSION_MANIFEST_MAX_KEYWORDS, EXTENSION_MANIFEST_MAX_CATEGORY_LENGTH)
+  const extensionPack = normalizeStringArray(raw['extensionPack'], EXTENSION_MANIFEST_MAX_PACK_ENTRIES, 256)
+  const extensionDependencies = normalizeStringArray(
+    raw['extensionDependencies'],
+    EXTENSION_MANIFEST_MAX_DEPENDENCIES,
+    256
+  )
+  const description = raw['description'] === undefined ? null : boundedString(raw['description'], 2048)
+  const icon = raw['icon'] === undefined ? null : boundedString(raw['icon'], EXTENSION_MANIFEST_MAX_PATH_LENGTH)
+  const license = raw['license'] === undefined ? null : boundedString(raw['license'], EXTENSION_MANIFEST_MAX_PATH_LENGTH)
+  if (
+    (raw['description'] !== undefined && description === null && typeof raw['description'] === 'string') ||
+    (raw['icon'] !== undefined && icon === null && typeof raw['icon'] === 'string') ||
+    (raw['license'] !== undefined && license === null && typeof raw['license'] === 'string')
+  ) {
+    // Overlong display-only fields degrade to null rather than failing
+    // the manifest: identity and executability are what gate activation.
+  }
   const contributes = normalizeContributes(raw['contributes'])
   // `scripts.*` / install hooks are never normalized and never
   // executed: activation loads only the resolved `main` entrypoint.
+  // Unknown `contributes` keys are PRESERVED (forward compatibility) —
+  // the compat analyzer decides support, never the parser.
   return {
     name: identity.name,
     publisher: identity.namespace,
     version: identity.version,
     displayName,
+    description: typeof description === 'string' ? description : null,
     main,
     browser,
+    icon: typeof icon === 'string' ? icon : null,
+    license: typeof license === 'string' ? license : null,
+    keywords,
+    categories,
     activationEvents,
     enginesVscode,
     extensionKind,
-    categories,
+    extensionPack,
+    extensionDependencies,
     contributes
   }
 }

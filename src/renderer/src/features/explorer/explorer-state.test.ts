@@ -20,6 +20,18 @@ describe('explorer state', () => {
     assert.deepEqual(collapsed.expanded, [])
   })
 
+  it('collapses all folders without dropping cached listings', () => {
+    const start = { ...initialExplorerState(), workspaceId: 4 }
+    const loaded = explorerReducer(
+      explorerReducer(start, { type: 'toggle', path: 'src' }),
+      { type: 'directory-loaded', workspaceId: 4, path: 'src', entries: [fileEntry('a.txt', 'src')] }
+    )
+    const collapsed = explorerReducer(loaded, { type: 'collapse-all' })
+    assert.deepEqual(collapsed.expanded, [])
+    assert.deepEqual(collapsed.entries['src'], [fileEntry('a.txt', 'src')])
+    assert.deepEqual(explorerReducer(collapsed, { type: 'collapse-all' }), collapsed)
+  })
+
   it('changing workspace clears prior explorer state', () => {
     const start = { ...initialExplorerState(), workspaceId: 4 }
     const loaded = explorerReducer(start, {

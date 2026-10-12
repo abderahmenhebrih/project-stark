@@ -833,6 +833,183 @@ button.explorer__attach:hover {
   white-space: nowrap;
 }
 
+.explorer__secondary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Destructive confirm action (Move to Trash): danger fill. */
+.explorer__danger {
+  padding: var(--stark-space-xs) var(--stark-space-sm);
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--stark-danger);
+  border: 1px solid transparent;
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.explorer__danger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Explorer tree header actions: compact icon-only row above the
+   project root (New File, New Folder, Refresh, Collapse All). */
+.explorer__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 4px;
+}
+
+.explorer__actions-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--stark-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.explorer__action-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: var(--stark-text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+}
+
+.explorer__action-btn:hover:not(:disabled) {
+  color: var(--stark-text);
+  background: var(--stark-elevated);
+}
+
+.explorer__action-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.explorer__action-btn:focus-visible {
+  outline: 2px solid var(--stark-accent);
+  outline-offset: 1px;
+}
+
+/* Inline CRUD notice (success/error copy for file operations). */.explorer__crud-notice {
+  margin: 0 4px 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--stark-text-dim);
+  background: var(--stark-elevated);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-sm);
+}
+
+.explorer__crud-notice--error {
+  color: var(--stark-danger);
+}
+
+/* Inline create/rename row: icon plus an editable name field. */
+.explorer__inline-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 2px 8px 2px 22px;
+}
+
+.explorer__inline-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--stark-text);
+  background: var(--stark-bg);
+  border: 1px solid var(--stark-accent);
+  border-radius: var(--stark-radius-sm);
+  padding: 1px 6px;
+}
+
+.explorer__inline-input:focus {
+  outline: none;
+}
+
+.explorer__row--menu {
+  background: var(--stark-elevated);
+}
+
+/* STARK-owned tree context menu (portal; never browser-native). */.explorer__menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--stark-surface);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-md);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+}
+
+.explorer__menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--stark-text);
+  background: transparent;
+  border: none;
+  border-radius: var(--stark-radius-sm);
+  cursor: pointer;
+  text-align: left;
+}
+
+.explorer__menu-item:hover {
+  background: var(--stark-elevated);
+}
+
+.explorer__menu-item:focus-visible {
+  outline: 2px solid var(--stark-accent);
+  outline-offset: -2px;
+}
+
+/* Delete confirmation dialog (portal backdrop + card). */
+.explorer__confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.explorer__confirm-backdrop .explorer__confirm {
+  width: min(360px, calc(100vw - 48px));
+  background: var(--stark-surface);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-lg);
+  padding: var(--stark-space-md);
+  gap: 8px;
+}
+
 /* Narrow: one primary surface at a time, never three squeezed columns. */
 @media (max-width: 1099px) {
   .workspace__narrow-switch {

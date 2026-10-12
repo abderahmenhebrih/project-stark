@@ -3,8 +3,6 @@ import { createPortal } from 'react-dom'
 import { StarkMark } from '../components/StarkMark'
 import { useBrandAssets } from '../features/styles/use-brand-assets'
 import { UiIcon } from '../components/icons/UiIcon'
-import { STARK_EFFORT_LABELS, type AgentTarget, type StarkEffort } from '../../../shared/agent-target/types'
-import type { UsageSummary } from '../../../shared/usage/types'
 import type { SessionChromeSession } from '../features/sessions/SessionPanel'
 import './AppChrome.css'
 
@@ -41,20 +39,9 @@ interface AppChromeProps {
   readonly onSwitchWorkspace: () => void
   /** Opens the integrated localhost Live Review in the secondary pane. */
   readonly onOpenLiveReview: () => void
-  /** Real product plan label mirrored from SessionPanel (e.g. STARK Free). */
-  readonly planLabel: string
-  /** Composer agent target mirrored from SessionPanel. */
-  readonly agentTarget: AgentTarget
-  /** Display label for the target (STARK or the provider's own name). */
-  readonly agentLabel: string
-  /** STARK effort mirrored from SessionPanel (STARK runs only). */
-  readonly effort: StarkEffort
-  /** Provider truth mirrored from SessionPanel (configured/not). */
-  readonly providerConfigured: boolean
-  /** Actual current model id, or null when none is selected. */
-  readonly providerModel: string | null
-  /** Real local 24h usage summary, or null while unloaded. */
-  readonly usageSummary: UsageSummary | null
+  /** Docked Usage sidebar visibility (shell-owned layout, not a popover). */
+  readonly usageOpen: boolean
+  readonly onToggleUsage: () => void
 }
 
 interface SessionOptionsMenuProps {
@@ -208,154 +195,6 @@ function SessionOptionsMenu({
   )
 }
 
-interface UsageStatusMenuProps {
-  /** Anchor rect captured from the Usage button when the popover opened. */
-  readonly anchor: { readonly right: number; readonly bottom: number; readonly top: number }
-  readonly planLabel: string
-  readonly agentTarget: AgentTarget
-  readonly agentLabel: string
-  readonly effort: StarkEffort
-  readonly providerConfigured: boolean
-  readonly providerModel: string | null
-  readonly usageSummary: UsageSummary | null
-  readonly onClose: () => void
-  /** Focus returns here on close (the Usage button). */
-  readonly returnFocus: () => void
-}
-
-/**
- * Usage Status popover: compact, anchored to AppChrome, never leaves
- * the current work. Reads ONLY real mirrored state — plan, target,
- * effort, provider/model truth, and the local 24h ledger. Anything
- * unknown renders as unavailable/not reported/not tracked yet: no
- * invented limits, costs, or token counts. No secrets (the summary
- * carries counts only, never keys).
- */
-function UsageStatusMenu({
-  anchor,
-  planLabel,
-  agentTarget,
-  agentLabel,
-  effort,
-  providerConfigured,
-  providerModel,
-  usageSummary,
-  onClose,
-  returnFocus
-}: UsageStatusMenuProps): ReactElement | null {
-  const menuRef = useRef<HTMLDivElement | null>(null)
-  const [placement, setPlacement] = useState<{ readonly top: number; readonly left: number } | null>(null)
-
-  useLayoutEffect(() => {
-    function place(): void {
-      const element = menuRef.current
-      const width = element?.offsetWidth ?? 280
-      const height = element?.offsetHeight ?? 260
-      const margin = 8
-      let left = Math.min(anchor.right - width, window.innerWidth - width - margin)
-      left = Math.max(margin, left)
-      let top = anchor.bottom + 4
-      if (top + height > window.innerHeight - margin) {
-        top = anchor.top - height - 4
-      }
-      top = Math.max(margin, top)
-      setPlacement((prev) => (prev !== null && prev.top === top && prev.left === left ? prev : { top, left }))
-    }
-    place()
-    window.addEventListener('resize', place)
-    window.addEventListener('scroll', place, true)
-    return () => {
-      window.removeEventListener('resize', place)
-      window.removeEventListener('scroll', place, true)
-    }
-  }, [anchor])
-
-  useEffect(() => {
-    function handlePointer(event: PointerEvent): void {
-      const target = event.target as Node | null
-      if (target !== null && menuRef.current !== null && menuRef.current.contains(target)) {
-        return
-      }
-      onClose()
-    }
-    function handleKey(event: KeyboardEvent): void {
-      if (event.key === 'Escape') {
-        event.stopPropagation()
-        onClose()
-      }
-    }
-    document.addEventListener('pointerdown', handlePointer)
-    document.addEventListener('keydown', handleKey, true)
-    menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
-    return () => {
-      document.removeEventListener('pointerdown', handlePointer)
-      document.removeEventListener('keydown', handleKey, true)
-      returnFocus()
-    }
-  }, [onClose, returnFocus])
-
-  const rows = usageSummary?.models ?? []
-  const hasUsage = rows.length > 0
-  const totalCalls = rows.reduce((sum, row) => sum + row.calls24h, 0)
-  const telemetryComplete = hasUsage && rows.every((row) => row.tokenTelemetryComplete)
-  const totalTokens = rows.reduce((sum, row) => sum + (row.totalTokens24h ?? 0), 0)
-
-  return createPortal(
-    <div
-      ref={menuRef}
-      className="app-chrome__menu app-chrome__menu--portal app-chrome__usage"
-      role="dialog"
-      aria-label="Usage status"
-      style={placement === null ? { visibility: 'hidden' } : { top: placement.top, left: placement.left }}
-    >
-      <p className="app-chrome__menu-label">Usage</p>
-      <dl className="app-chrome__usage-list">
-        <div className="app-chrome__usage-row">
-          <dt>Plan</dt>
-          <dd>{planLabel}</dd>
-        </div>
-        <div className="app-chrome__usage-row">
-          <dt>Agent</dt>
-          <dd>{agentTarget.kind === 'stark' ? 'STARK' : agentLabel}</dd>
-        </div>
-        <div className="app-chrome__usage-row">
-          <dt>Effort</dt>
-          <dd>{agentTarget.kind === 'stark' ? STARK_EFFORT_LABELS[effort] : 'Managed by extension'}</dd>
-        </div>
-        <div className="app-chrome__usage-row">
-          <dt>Provider</dt>
-          <dd>{providerConfigured ? 'OpenAI · configured' : 'Not configured'}</dd>
-        </div>
-        <div className="app-chrome__usage-row">
-          <dt>Model</dt>
-          <dd>{providerModel ?? 'Not reported'}</dd>
-        </div>
-        <div className="app-chrome__usage-row">
-          <dt>Local calls (24h)</dt>
-          <dd>{hasUsage ? String(totalCalls) : 'Not reported'}</dd>
-        </div>
-        <div className="app-chrome__usage-row">
-          <dt>Local tokens (24h)</dt>
-          <dd>{telemetryComplete ? `${String(totalTokens)} tokens` : 'Not reported'}</dd>
-        </div>
-        <div className="app-chrome__usage-row">
-          <dt>Run cost</dt>
-          <dd>Not tracked yet</dd>
-        </div>
-        <div className="app-chrome__usage-row">
-          <dt>Attachments</dt>
-          <dd>Not tracked yet</dd>
-        </div>
-      </dl>
-      <span className="app-chrome__menu-divider" aria-hidden="true" />
-      <button className="app-chrome__menu-item" type="button" onClick={onClose} aria-label="Close usage status">
-        Close
-      </button>
-    </div>,
-    document.body
-  )
-}
-
 /**
  * Single desktop chrome row (60–64px): workspace-tools menu,
  * STARK identity, clickable workspace name (secondary-brand accent,
@@ -394,23 +233,15 @@ export function AppChrome({
   onContinueLooplink,
   onSwitchWorkspace,
   onOpenLiveReview,
-  planLabel,
-  agentTarget,
-  agentLabel,
-  effort,
-  providerConfigured,
-  providerModel,
-  usageSummary
+  usageOpen,
+  onToggleUsage
 }: AppChromeProps): ReactElement {
   const [menuOpen, setMenuOpen] = useState(false)
-  const [usageOpen, setUsageOpen] = useState(false)
   // Style-aware brand assets (Settings → Styles). Same 26px geometry —
   // only the asset family changes with the selected style.
   const brand = useBrandAssets()
   const optionsButtonRef = useRef<HTMLButtonElement | null>(null)
-  const usageButtonRef = useRef<HTMLButtonElement | null>(null)
   const [anchor, setAnchor] = useState<{ readonly left: number; readonly bottom: number; readonly top: number } | null>(null)
-  const [usageAnchor, setUsageAnchor] = useState<{ readonly right: number; readonly bottom: number; readonly top: number } | null>(null)
 
   function openMenu(): void {
     const rect = optionsButtonRef.current?.getBoundingClientRect()
@@ -428,24 +259,6 @@ export function AppChrome({
 
   const returnFocusToOptions = useCallback(() => {
     optionsButtonRef.current?.focus()
-  }, [])
-
-  function openUsage(): void {
-    const rect = usageButtonRef.current?.getBoundingClientRect()
-    if (rect !== undefined) {
-      setUsageAnchor({ right: rect.right, bottom: rect.bottom, top: rect.top })
-    } else {
-      setUsageAnchor({ right: window.innerWidth - 8, bottom: 64, top: 8 })
-    }
-    setUsageOpen(true)
-  }
-
-  const closeUsage = useCallback(() => {
-    setUsageOpen(false)
-  }, [])
-
-  const returnFocusToUsage = useCallback(() => {
-    usageButtonRef.current?.focus()
   }, [])
 
   return (
@@ -602,12 +415,10 @@ export function AppChrome({
           <UiIcon name="settings" size={22} />
         </button>
         <button
-          ref={usageButtonRef}
           className="app-chrome__control"
           type="button"
-          onClick={() => (usageOpen ? closeUsage() : openUsage())}
+          onClick={onToggleUsage}
           aria-expanded={usageOpen}
-          aria-haspopup="dialog"
           aria-label="Usage status"
           title="Usage status"
         >
@@ -632,20 +443,6 @@ export function AppChrome({
           {accountInitial}
         </button>
       </div>
-      {usageOpen && usageAnchor !== null && (
-        <UsageStatusMenu
-          anchor={usageAnchor}
-          planLabel={planLabel}
-          agentTarget={agentTarget}
-          agentLabel={agentLabel}
-          effort={effort}
-          providerConfigured={providerConfigured}
-          providerModel={providerModel}
-          usageSummary={usageSummary}
-          onClose={closeUsage}
-          returnFocus={returnFocusToUsage}
-        />
-      )}
     </header>
   )
 }

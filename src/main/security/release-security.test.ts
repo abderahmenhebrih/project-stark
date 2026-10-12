@@ -170,9 +170,19 @@ describe('release security matrix (Stage 30)', () => {
     assert.equal(isLegalMode('terminal.execute', 'ask'), true)
   })
 
-  it('11. runtime requires exact approval (no auto-start surface)', () => {
+  it('11. runtime requires exact approval (no worker auto-start surface)', () => {
     const bindings = executableLines(join(root(), 'src', 'main', 'ipc', 'runtimes.ts')).join('\n')
-    assert.ok(!bindings.includes('start'), 'no renderer runtime-start channel may exist')
+    // No worker execute/spawn surface may exist: starts route only
+    // through approved runtime_start or an explicit human Start click.
+    assert.ok(!bindings.includes('spawn'), 'no renderer runtime-spawn channel may exist')
+    assert.ok(!bindings.includes('execute'), 'no renderer runtime-execute channel may exist')
+    // The worker path still gates on exact approval (unchanged).
+    const service = executableLines(join(root(), 'src', 'main', 'project-runtime', 'project-runtime-service.ts')).join('\n')
+    assert.ok(service.includes("decision !== 'requires_approval'"), 'worker starts must still require exact approval')
+    // Human preview channels stay workspace-scoped: no program, args,
+    // URL, or PID may cross from the renderer.
+    assert.ok(bindings.includes('parseWorkspaceScope'), 'preview channels must stay workspace-scoped')
+    assert.ok(!bindings.includes('program'), 'preview channels must not smuggle programs')
   })
 
   it('12/13/14. Worker budget=4, turns<=5, Tool Work calls<=7', () => {

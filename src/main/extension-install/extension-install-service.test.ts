@@ -117,6 +117,90 @@ function goodZip(): Buffer {
   ])
 }
 
+/**
+ * Minimal DEFLATED-method ZIP builder (test data only): entries carry
+ * honest sizes with raw-deflate payloads so yauzl validates the
+ * structure and STARK's own guards (ratio, totals) decide.
+ */
+function buildDeflatedZip(entries: readonly { name: string; data: Buffer; compressed: Buffer }[]): Buffer {
+  const chunks: Buffer[] = []
+  const central: Buffer[] = []
+  let offset = 0
+  for (const entry of entries) {
+    const name = Buffer.from(entry.name, 'utf8')
+    const crc = crc32(entry.data)
+    const header = Buffer.alloc(30)
+    header.writeUInt32LE(0x04034b50, 0)
+    header.writeUInt16LE(20, 4)
+    header.writeUInt16LE(0x0800, 6)
+    header.writeUInt16LE(8, 8)
+    header.writeUInt16LE(0, 10)
+    header.writeUInt16LE(0, 12)
+    header.writeUInt32LE(crc, 14)
+    header.writeUInt32LE(entry.compressed.length, 18)
+    header.writeUInt32LE(entry.data.length, 22)
+    header.writeUInt16LE(name.length, 26)
+    header.writeUInt16LE(0, 28)
+    chunks.push(header, name, entry.compressed)
+    const record = Buffer.alloc(46)
+    record.writeUInt32LE(0x02014b50, 0)
+    record.writeUInt16LE(63, 4)
+    record.writeUInt16LE(20, 6)
+    record.writeUInt16LE(0x0800, 8)
+    record.writeUInt16LE(8, 10)
+    record.writeUInt16LE(0, 12)
+    record.writeUInt16LE(0, 14)
+    record.writeUInt32LE(crc, 16)
+    record.writeUInt32LE(entry.compressed.length, 20)
+    record.writeUInt32LE(entry.data.length, 24)
+    record.writeUInt16LE(name.length, 28)
+    record.writeUInt16LE(0, 30)
+    record.writeUInt16LE(0, 32)
+    record.writeUInt16LE(0, 34)
+    record.writeUInt16LE(0, 36)
+    record.writeUInt32LE((0o100644 << 16) >>> 0, 38)
+    record.writeUInt32LE(offset, 42)
+    central.push(record, name)
+    offset += header.length + name.length + entry.compressed.length
+  }
+  const centralStart = offset
+  const centralSize = central.reduce((sum, part) => sum + part.length, 0)
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0)
+  end.writeUInt16LE(0, 4)
+  end.writeUInt16LE(0, 6)
+  end.writeUInt16LE(entries.length, 8)
+  end.writeUInt16LE(entries.length, 10)
+  end.writeUInt32LE(centralSize, 12)
+  end.writeUInt32LE(centralStart, 16)
+  end.writeUInt16LE(0, 20)
+  return Buffer.concat([...chunks, ...central, end])
+}
+
+/**
+ * Forges the FIRST entry's declared sizes without allocating payload
+ * bytes: patches the local header (uncompressed at +22) and the first
+ * central-directory record (compressed at +20, uncompressed at +24).
+ * Lets header guards be tested without huge allocations. NOTE: only
+ * valid when the forged sizes stay internally consistent for the
+ * stored method (yauzl validates stored size pairs on read); for
+ * inconsistent pairs (zip bombs) use buildDeflatedZip below.
+ */
+function forgeFirstEntrySizes(zip: Buffer, compressedSize: number, uncompressedSize: number): Buffer {
+  const patched = Buffer.from(zip)
+  // Local header: signature PK\x03\x04 at 0; uncompressed size at +22.
+  patched.writeUInt32LE(uncompressedSize, 22)
+  // First central record: scan for PK\x01\x02.
+  for (let i = 0; i + 4 <= patched.length; i += 1) {
+    if (patched[i] === 0x50 && patched[i + 1] === 0x4b && patched[i + 2] === 0x01 && patched[i + 3] === 0x02) {
+      patched.writeUInt32LE(compressedSize, i + 20)
+      patched.writeUInt32LE(uncompressedSize, i + 24)
+      break
+    }
+  }
+  return patched
+}
+
 const DOWNLOAD_URL = 'https://open-vsx.org/api/esbenp/prettier-vscode/12.4.0/file/x.vsix'
 
 function metadataFetch(calls: string[], downloadUrl: string = DOWNLOAD_URL): InstallFetch {
@@ -329,28 +413,72 @@ describe('safe extraction', () => {
     }
   })
 
-  it('rejects single files over 50 MiB by header', async () => {
+  it('rejects single files over the per-file bound by header (forged size, no huge alloc)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'stark-ext-bigfile-'))
     try {
       const archive = join(dir, 'big.vsix')
-      writeFileSync(archive, buildZip([{ name: 'extension/big.bin', data: Buffer.alloc(51 * 1024 * 1024, 9) }]))
+      const patched = forgeFirstEntrySizes(goodZip(), 600 * 1024 * 1024, 600 * 1024 * 1024)
+      writeFileSync(archive, patched)
       const staging = join(dir, 'staging')
       mkdirSync(staging, { recursive: true })
       await assert.rejects(extractVsix(archive, staging), /limits/)
-      assert.deepEqual(readdirSync(staging), [])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  it('rejects extracted totals over 200 MiB by streamed bytes', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-bomb-'))
+  it('accepts legitimate large packages over the old 50 MiB gate when otherwise safe', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-large-ok-'))
     try {
-      const files = Array.from({ length: 201 }, (_, i) => ({
+      // 60 MiB of stored bytes: blocked by the old 50 MiB policy,
+      // accepted under the 1 GiB / 2 GiB bounded policy.
+      const files = Array.from({ length: 60 }, (_, i) => ({
         name: `extension/part${i}.bin`,
         data: Buffer.alloc(1024 * 1024, i % 251)
       }))
+      const archive = join(dir, 'large.vsix')
+      writeFileSync(archive, buildZip(files))
+      const staging = join(dir, 'staging')
+      mkdirSync(staging, { recursive: true })
+      await extractVsix(archive, staging)
+      assert.ok(existsSync(join(staging, 'extension', 'part0.bin')))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects zip bombs via the compression-ratio guard', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-ratio-'))
+    try {
       const archive = join(dir, 'bomb.vsix')
+      // Honest highly-compressible deflated payload: 12 MiB of zeros
+      // deflates to ~12 KiB (~1000x ratio, above the 200x guard and
+      // above the 10 MiB floor). Sizes stay consistent so yauzl
+      // accepts the structure and the ratio guard rejects it.
+      const { deflateRawSync } = await import('node:zlib')
+      const raw = Buffer.alloc(12 * 1024 * 1024, 0)
+      const compressed = deflateRawSync(raw)
+      assert.ok(
+        raw.length > compressed.length * 200,
+        `fixture must exceed the ratio guard (got ${raw.length}/${compressed.length})`
+      )
+      writeFileSync(archive, buildDeflatedZip([{ name: 'extension/bomb.bin', data: raw, compressed }]))
+      const staging = join(dir, 'staging')
+      mkdirSync(staging, { recursive: true })
+      await assert.rejects(extractVsix(archive, staging), /limits/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects too many nested archives', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stark-ext-nested-'))
+    try {
+      const files = Array.from({ length: 9 }, (_, i) => ({
+        name: `extension/nested${i}.zip`,
+        data: Buffer.alloc(16, i)
+      }))
+      const archive = join(dir, 'nested.vsix')
       writeFileSync(archive, buildZip(files))
       const staging = join(dir, 'staging')
       mkdirSync(staging, { recursive: true })
@@ -544,7 +672,7 @@ describe('install pipeline', () => {
       toPublicExtensionInstallError(new ExtensionInstallError('Package exceeds the size limit.', { code: 'package_too_large' })).message,
       PACKAGE_TOO_LARGE_COPY
     )
-    assert.ok(PACKAGE_TOO_LARGE_COPY.includes('50 MiB'))
+    assert.ok(PACKAGE_TOO_LARGE_COPY.includes('1 GiB'))
     for (const code of ['network_error', 'timeout', 'invalid_download_source', 'invalid_archive', 'manifest_mismatch', 'storage_error'] as const) {
       const publicError = toPublicExtensionInstallError(new ExtensionInstallError('internal detail /tmp/x 500', { code }))
       assert.equal(publicError.message, GENERIC_INSTALL_COPY)
@@ -575,7 +703,7 @@ describe('install pipeline', () => {
       const big: InstallFetch = async () => ({
         ok: true,
         status: 200,
-        headers: { get: (name: string) => (name === 'content-length' ? String(60 * 1024 * 1024) : null) },
+        headers: { get: (name: string) => (name === 'content-length' ? String(2 * 1024 * 1024 * 1024 + 1) : null) },
         json: async (): Promise<unknown> => ({}),
         body: null
       })
@@ -594,7 +722,7 @@ describe('install pipeline', () => {
     }
   })
 
-  it('streaming cap aborts bodies without Content-Length', async () => {
+  it('streaming bodies under the 1 GiB cap pass the size gate (extraction still validates)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'stark-ext-stream-'))
     try {
       const { Readable } = await import('node:stream')
@@ -621,11 +749,12 @@ describe('install pipeline', () => {
         return metadataFetch([])(url, { headers: {}, signal: AbortSignal.timeout(1000) })
       }
       const service = new ExtensionInstallService(dir, streaming)
-      await assert.rejects(
-        service.install({ namespace: 'esbenp', name: 'prettier-vscode', version: '12.4.0' }),
-        /exceeds the size limit/
-      )
-      assert.ok(chunks <= 52)
+      // 61 MiB is far under the 1 GiB compressed cap, so the download
+      // completes; the random bytes are not a valid VSIX, so the
+      // install still fails closed at extraction — never silently.
+      await assert.rejects(service.install({ namespace: 'esbenp', name: 'prettier-vscode', version: '12.4.0' }))
+      // All chunks flowed: the size gate did not abort early.
+      assert.ok(chunks > 60)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

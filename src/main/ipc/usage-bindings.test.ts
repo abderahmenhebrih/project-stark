@@ -38,12 +38,12 @@ function openHarness(): { db: DatabaseSync; bindings: ReturnType<typeof createUs
 }
 
 describe('usage IPC bindings', () => {
-  it('exposes exactly three local usage channels', () => {
+  it('exposes exactly four local usage channels', () => {
     const { db, bindings } = openHarness()
     try {
       assert.deepEqual(
         [...bindings.map((binding) => binding.channel)].sort(),
-        [IPC_CHANNELS.usageGetConfig, IPC_CHANNELS.usageUpdateConfig, IPC_CHANNELS.usageGetSummary].sort()
+        [IPC_CHANNELS.usageGetConfig, IPC_CHANNELS.usageUpdateConfig, IPC_CHANNELS.usageGetSummary, IPC_CHANNELS.usageGetSessionSummary].sort()
       )
       const names = bindings.map((binding) => binding.channel).join(' ')
       assert.ok(!names.includes('record'))
@@ -92,6 +92,25 @@ describe('usage IPC bindings', () => {
       assert.equal(report.models[0]?.tokenTelemetryComplete, true)
       await assert.rejects(update.invoke({ heartThresholdRoutingEnabled: true, limits: [], alternates: [], extra: 1 }, undefined as never))
       await assert.rejects(summary.invoke({ workspaceId: 1 }, undefined as never))
+    } finally {
+      db.close()
+    }
+  })
+
+  it('serves per-session summaries with strict session-only shapes', async () => {
+    const { db, bindings } = openHarness()
+    try {
+      const session = bindings.find((binding) => binding.channel === IPC_CHANNELS.usageGetSessionSummary)
+      assert.ok(session)
+      const empty = (await session.invoke({ sessionId: 1 }, undefined as never)) as { sessionId: number; calls: number; latestInputTokens: null }
+      assert.equal(empty.sessionId, 1)
+      assert.equal(empty.calls, 0)
+      assert.equal(empty.latestInputTokens, null)
+      // Malformed session scopes fail closed with the invalid-request copy.
+      await assert.rejects(session.invoke({ sessionId: 0 }, undefined as never), /The usage request is invalid\./)
+      await assert.rejects(session.invoke({ sessionId: '1' }, undefined as never), /The usage request is invalid\./)
+      await assert.rejects(session.invoke({ sessionId: 1, model: 'm' }, undefined as never), /The usage request is invalid\./)
+      await assert.rejects(session.invoke(null, undefined as never), /The usage request is invalid\./)
     } finally {
       db.close()
     }

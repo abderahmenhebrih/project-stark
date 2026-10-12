@@ -1,15 +1,21 @@
 /**
- * Demand-driven activation-event engine (Step 8, main-side, pure).
+ * Demand-driven activation-event engine (Code OSS-compatible, main-side, pure).
  *
  * Manifest `activationEvents` are parsed here as DATA ONLY and evaluated
  * only when the matching trigger actually occurs — there is no startup
  * sweep that blindly executes installed extensions. Supported stable
- * events:
+ * events (Code OSS semantics where practical):
  *
  * - `onLanguage:<id>` — a document with that language id opens
  * - `onCommand:<command>` — that command is invoked
  * - `workspaceContains:<pattern>` — the workspace root contains a match
  * - `onStartupFinished` — after startup completes (explicit only)
+ * - `onView:<viewId>`, `onUri`, `onFileSystem:<scheme>`,
+ *   `onDebug[:type]`, `onCustomEditor:<viewType>`,
+ *   `onWebviewPanel:<viewType>`, `onTerminalProfile:<id>`,
+ *   `onTaskType:<type>`, `onNotebook:<type>`,
+ *   `onAuthenticationRequest:<provider>`, `onSearch:<scheme>`,
+ *   `onEditSession`, `onChatParticipant:<id>`
  *
  * The unrestricted `*` event NEVER auto-activates: such extensions
  * require explicit trust/manual activation. Unknown events are recorded
@@ -37,6 +43,19 @@ export type ActivationEventKind =
   | 'onCommand'
   | 'workspaceContains'
   | 'onStartupFinished'
+  | 'onView'
+  | 'onUri'
+  | 'onFileSystem'
+  | 'onDebug'
+  | 'onCustomEditor'
+  | 'onWebviewPanel'
+  | 'onTerminalProfile'
+  | 'onTaskType'
+  | 'onNotebook'
+  | 'onAuthenticationRequest'
+  | 'onSearch'
+  | 'onEditSession'
+  | 'onChatParticipant'
   | 'star'
   | 'other'
 
@@ -63,14 +82,66 @@ export function parseActivationEvent(raw: unknown): ParsedActivationEvent {
   if (raw === 'onStartupFinished') {
     return { raw, kind: 'onStartupFinished', value: '' }
   }
-  for (const prefix of ['onLanguage:', 'onCommand:', 'workspaceContains:'] as const) {
+  if (raw === 'onUri') {
+    return { raw, kind: 'onUri', value: '' }
+  }
+  if (raw === 'onEditSession') {
+    return { raw, kind: 'onEditSession', value: '' }
+  }
+  for (const prefix of [
+    'onLanguage:',
+    'onCommand:',
+    'workspaceContains:',
+    'onView:',
+    'onFileSystem:',
+    'onDebug',
+    'onCustomEditor:',
+    'onWebviewPanel:',
+    'onTerminalProfile:',
+    'onTaskType:',
+    'onNotebook:',
+    'onAuthenticationRequest:',
+    'onSearch:',
+    'onChatParticipant:'
+  ] as const) {
+    if (raw === 'onDebug' && prefix === 'onDebug') {
+      return { raw, kind: 'onDebug', value: '' }
+    }
     if (raw.startsWith(prefix)) {
       const value = raw.slice(prefix.length)
+      // onDebug allows bare `onDebug` plus `onDebug:<type>`.
+      if (prefix === 'onDebug' && (value === '' || value === ':resolve' || value.startsWith(':'))) {
+        return { raw, kind: 'onDebug', value: value.startsWith(':') ? value.slice(1) : '' }
+      }
       if (value === '' || value.length > 128 || value.includes('\0')) {
         return { raw, kind: 'other', value: '' }
       }
       const kind: ActivationEventKind =
-        prefix === 'onLanguage:' ? 'onLanguage' : prefix === 'onCommand:' ? 'onCommand' : 'workspaceContains'
+        prefix === 'onLanguage:'
+          ? 'onLanguage'
+          : prefix === 'onCommand:'
+            ? 'onCommand'
+            : prefix === 'workspaceContains:'
+              ? 'workspaceContains'
+              : prefix === 'onView:'
+                ? 'onView'
+                : prefix === 'onFileSystem:'
+                  ? 'onFileSystem'
+                  : prefix === 'onCustomEditor:'
+                    ? 'onCustomEditor'
+                    : prefix === 'onWebviewPanel:'
+                      ? 'onWebviewPanel'
+                      : prefix === 'onTerminalProfile:'
+                        ? 'onTerminalProfile'
+                        : prefix === 'onTaskType:'
+                          ? 'onTaskType'
+                          : prefix === 'onNotebook:'
+                            ? 'onNotebook'
+                            : prefix === 'onAuthenticationRequest:'
+                              ? 'onAuthenticationRequest'
+                              : prefix === 'onSearch:'
+                                ? 'onSearch'
+                                : 'onChatParticipant'
       return { raw, kind, value }
     }
   }
@@ -91,6 +162,30 @@ export interface ActivationIndex {
   readonly startupFinished: readonly string[]
   /** Bounded (extensionId, pattern) pairs for workspaceContains. */
   readonly workspacePatterns: readonly { readonly extensionId: string; readonly pattern: string }[]
+  /** View id → sorted extension ids (`onView`). */
+  readonly byView: ReadonlyMap<string, readonly string[]>
+  /** File-system scheme → sorted extension ids (`onFileSystem`). */
+  readonly byFileSystem: ReadonlyMap<string, readonly string[]>
+  /** Debug type → sorted extension ids (`onDebug`, '' = any). */
+  readonly byDebug: ReadonlyMap<string, readonly string[]>
+  /** Custom-editor viewType → sorted extension ids. */
+  readonly byCustomEditor: ReadonlyMap<string, readonly string[]>
+  /** Webview-panel viewType → sorted extension ids. */
+  readonly byWebviewPanel: ReadonlyMap<string, readonly string[]>
+  /** Terminal-profile id → sorted extension ids. */
+  readonly byTerminalProfile: ReadonlyMap<string, readonly string[]>
+  /** Task type → sorted extension ids. */
+  readonly byTaskType: ReadonlyMap<string, readonly string[]>
+  /** Notebook type → sorted extension ids. */
+  readonly byNotebook: ReadonlyMap<string, readonly string[]>
+  /** Auth provider id → sorted extension ids. */
+  readonly byAuthentication: ReadonlyMap<string, readonly string[]>
+  /** Chat participant id → sorted extension ids. */
+  readonly byChatParticipant: ReadonlyMap<string, readonly string[]>
+  /** Extensions declaring onUri (sorted). */
+  readonly onUri: readonly string[]
+  /** Extensions declaring onEditSession (sorted). */
+  readonly onEditSession: readonly string[]
 }
 
 /**
@@ -102,8 +197,27 @@ export interface ActivationIndex {
 export function buildActivationIndex(entries: readonly ActivationIndexEntry[]): ActivationIndex {
   const byLanguage = new Map<string, string[]>()
   const byCommand = new Map<string, string[]>()
+  const byView = new Map<string, string[]>()
+  const byFileSystem = new Map<string, string[]>()
+  const byDebug = new Map<string, string[]>()
+  const byCustomEditor = new Map<string, string[]>()
+  const byWebviewPanel = new Map<string, string[]>()
+  const byTerminalProfile = new Map<string, string[]>()
+  const byTaskType = new Map<string, string[]>()
+  const byNotebook = new Map<string, string[]>()
+  const byAuthentication = new Map<string, string[]>()
+  const byChatParticipant = new Map<string, string[]>()
+  const onUriSet = new Set<string>()
+  const onEditSessionSet = new Set<string>()
   const startup = new Set<string>()
   const workspacePatterns: { extensionId: string; pattern: string }[] = []
+  function addBucket(map: Map<string, string[]>, key: string, id: string): void {
+    const bucket = map.get(key) ?? []
+    if (bucket.length < ACTIVATION_INDEX_MAX_CANDIDATES && !bucket.includes(id)) {
+      bucket.push(id)
+      map.set(key, bucket)
+    }
+  }
   const scanned = entries.slice(0, ACTIVATION_INDEX_MAX_EXTENSIONS)
   for (const entry of scanned) {
     if (typeof entry.extensionId !== 'string' || entry.extensionId === '') {
@@ -147,6 +261,75 @@ export function buildActivationIndex(entries: readonly ActivationIndexEntry[]): 
         }
         continue
       }
+      if (parsed.kind === 'onView') {
+        if (seen.has(`view:${parsed.value}`)) continue
+        seen.add(`view:${parsed.value}`)
+        addBucket(byView, parsed.value, entry.extensionId)
+        continue
+      }
+      if (parsed.kind === 'onFileSystem' || parsed.kind === 'onSearch') {
+        const key = parsed.kind === 'onSearch' ? `search:${parsed.value}` : parsed.value
+        if (seen.has(key)) continue
+        seen.add(key)
+        addBucket(byFileSystem, parsed.value, entry.extensionId)
+        continue
+      }
+      if (parsed.kind === 'onDebug') {
+        if (seen.has(`debug:${parsed.value}`)) continue
+        seen.add(`debug:${parsed.value}`)
+        addBucket(byDebug, parsed.value, entry.extensionId)
+        continue
+      }
+      if (parsed.kind === 'onCustomEditor') {
+        if (seen.has(`ce:${parsed.value}`)) continue
+        seen.add(`ce:${parsed.value}`)
+        addBucket(byCustomEditor, parsed.value, entry.extensionId)
+        continue
+      }
+      if (parsed.kind === 'onWebviewPanel') {
+        if (seen.has(`wp:${parsed.value}`)) continue
+        seen.add(`wp:${parsed.value}`)
+        addBucket(byWebviewPanel, parsed.value, entry.extensionId)
+        continue
+      }
+      if (parsed.kind === 'onTerminalProfile') {
+        if (seen.has(`tp:${parsed.value}`)) continue
+        seen.add(`tp:${parsed.value}`)
+        addBucket(byTerminalProfile, parsed.value, entry.extensionId)
+        continue
+      }
+      if (parsed.kind === 'onTaskType') {
+        if (seen.has(`tt:${parsed.value}`)) continue
+        seen.add(`tt:${parsed.value}`)
+        addBucket(byTaskType, parsed.value, entry.extensionId)
+        continue
+      }
+      if (parsed.kind === 'onNotebook') {
+        if (seen.has(`nb:${parsed.value}`)) continue
+        seen.add(`nb:${parsed.value}`)
+        addBucket(byNotebook, parsed.value, entry.extensionId)
+        continue
+      }
+      if (parsed.kind === 'onAuthenticationRequest') {
+        if (seen.has(`auth:${parsed.value}`)) continue
+        seen.add(`auth:${parsed.value}`)
+        addBucket(byAuthentication, parsed.value, entry.extensionId)
+        continue
+      }
+      if (parsed.kind === 'onChatParticipant') {
+        if (seen.has(`chat:${parsed.value}`)) continue
+        seen.add(`chat:${parsed.value}`)
+        addBucket(byChatParticipant, parsed.value, entry.extensionId)
+        continue
+      }
+      if (parsed.kind === 'onUri') {
+        onUriSet.add(entry.extensionId)
+        continue
+      }
+      if (parsed.kind === 'onEditSession') {
+        onEditSessionSet.add(entry.extensionId)
+        continue
+      }
       // workspaceContains: one bounded pair per distinct pattern.
       if (seen.has(`ws:${parsed.value}`)) {
         continue
@@ -163,11 +346,26 @@ export function buildActivationIndex(entries: readonly ActivationIndexEntry[]): 
   for (const bucket of byCommand.values()) {
     bucket.sort()
   }
+  for (const bucket of [byView, byFileSystem, byDebug, byCustomEditor, byWebviewPanel, byTerminalProfile, byTaskType, byNotebook, byAuthentication, byChatParticipant]) {
+    for (const b of bucket.values()) b.sort()
+  }
   return {
     byLanguage,
     byCommand,
     startupFinished: [...startup].sort().slice(0, ACTIVATION_INDEX_MAX_CANDIDATES),
-    workspacePatterns
+    workspacePatterns,
+    byView,
+    byFileSystem,
+    byDebug,
+    byCustomEditor,
+    byWebviewPanel,
+    byTerminalProfile,
+    byTaskType,
+    byNotebook,
+    byAuthentication,
+    byChatParticipant,
+    onUri: [...onUriSet].sort().slice(0, ACTIVATION_INDEX_MAX_CANDIDATES),
+    onEditSession: [...onEditSessionSet].sort().slice(0, ACTIVATION_INDEX_MAX_CANDIDATES)
   }
 }
 
@@ -190,6 +388,22 @@ export function extensionsForCommand(index: ActivationIndex, commandId: string):
 /** Extensions explicitly declaring onStartupFinished. */
 export function extensionsForStartupFinished(index: ActivationIndex): readonly string[] {
   return index.startupFinished
+}
+
+/** Generic bucket lookup for Code OSS triggers (view, fs, debug, editors, panels, profiles, tasks, notebooks, auth, chat). */
+export function extensionsForTrigger(
+  index: ActivationIndex,
+  bucket: 'byView' | 'byFileSystem' | 'byDebug' | 'byCustomEditor' | 'byWebviewPanel' | 'byTerminalProfile' | 'byTaskType' | 'byNotebook' | 'byAuthentication' | 'byChatParticipant',
+  key: string
+): readonly string[] {
+  if (typeof key !== 'string' || key === '') {
+    // `onDebug` bare form matches any debug trigger.
+    if (bucket === 'byDebug' && key === '') {
+      return index.byDebug.get('') ?? []
+    }
+    return []
+  }
+  return index[bucket].get(key) ?? []
 }
 
 function globToRegExp(glob: string): RegExp | null {

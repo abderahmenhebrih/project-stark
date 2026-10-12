@@ -58,6 +58,8 @@ import { ImageGenerationService } from '../image-generation/image-generation-ser
 import { ExtensionRegistryService } from '../extension-registry/extension-registry-service'
 import { ExtensionIconService } from '../extension-icons/extension-icon-service'
 import { SettingsService } from '../settings/settings-service'
+import { trashToSystem } from '../workspace-files/system-trash'
+import { WorkspaceCrudService } from '../workspace-files/workspace-crud-service'
 import { WorkspaceFileWriteService } from '../workspace-files/workspace-file-write-service'
 import { WorkspaceFilesService } from '../workspace-files/workspace-files-service'
 import { WorkspaceSearchService } from '../workspace-search/workspace-search-service'
@@ -78,6 +80,8 @@ export interface ApplicationServices {
   readonly workspaceService: WorkspaceService
   readonly workspaceFilesService: WorkspaceFilesService
   readonly workspaceFileWriteService: WorkspaceFileWriteService
+  /** Direct human file operations (Explorer CRUD → Trash). Always present. */
+  readonly workspaceCrudService: WorkspaceCrudService
   readonly workspaceSearchService: WorkspaceSearchService
   readonly changeTransactionService: ChangeTransactionService
   readonly terminalService: TerminalService
@@ -249,6 +253,10 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
   const usageTracker = usageStore === undefined ? undefined : new AiUsageTracker(usageStore)
   const usage = usageService === undefined || usageTracker === undefined ? undefined : { tracker: usageTracker, service: usageService }
   const workspaceFilesService = new WorkspaceFilesService(deps.workspaces)
+  // Direct human file operations: main-owned CRUD with system-Trash
+  // semantics. The Trash function is Electron's shell.trashItem in
+  // production; tests inject fakes into the service.
+  const workspaceCrudService = new WorkspaceCrudService(deps.workspaces, (absolutePath) => trashToSystem(absolutePath))
   const workspaceSearchService = new WorkspaceSearchService(deps.workspaces)
   const extensionIconService = new ExtensionIconService()
   const extensionRegistryService = new ExtensionRegistryService(undefined, extensionIconService)
@@ -534,6 +542,7 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
     workspaceService: new WorkspaceService(deps.workspaces),
     workspaceFilesService,
     workspaceFileWriteService: fileWriteService,
+    workspaceCrudService,
     workspaceSearchService,
     extensionRegistryService,
     extensionIconService,

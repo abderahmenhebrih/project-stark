@@ -78,3 +78,39 @@ export class WorkspaceFileWriteError extends WorkspaceFilesError {
     super('workspace file could not be saved', options)
   }
 }
+
+/** A direct human create/leaf-name change hit an existing entry. */
+export class WorkspaceEntryExistsError extends WorkspaceFilesError {
+  override readonly name = 'WorkspaceEntryExistsError'
+
+  constructor() {
+    super('workspace target already exists')
+  }
+}
+
+/** A direct human operation targeted the workspace root itself. */
+export class WorkspaceRootProtectedError extends WorkspaceFilesError {
+  override readonly name = 'WorkspaceRootProtectedError'
+
+  constructor() {
+    super('workspace root is protected')
+  }
+}
+
+/** A leaf name failed validation (separators, reserved names, length). */
+export class WorkspaceInvalidNameError extends WorkspaceFilesError {
+  override readonly name = 'WorkspaceInvalidNameError'
+
+  constructor() {
+    super('workspace leaf name is invalid')
+  }
+}
+
+/** Moving a target to the system Trash failed. Nothing was deleted. */
+export class WorkspaceTrashError extends WorkspaceFilesError {
+  override readonly name = 'WorkspaceTrashError'
+
+  constructor(options?: { cause?: unknown }) {
+    super('workspace target could not be moved to trash', options)
+  }
+}

@@ -1,5 +1,6 @@
 import type { ProviderRegistry } from '../ai/provider-adapter'
 import type {
+  SessionUsageSummary,
   UsageConfig,
   UsageModelSummary,
   UsageRouteDecision,
@@ -256,6 +257,49 @@ export class AiUsageService {
       truncated,
       windowMs: USAGE_WINDOW_MS,
       heartThresholdRoutingEnabled: this.store.findSettings()?.thresholdRoutingEnabled ?? false
+    }
+  }
+
+  /**
+   * Bounded per-session summary over the same 24-hour window: actual
+   * cumulative session metrics from provider-reported usage only.
+   * Unknown sessions yield an honest empty summary (zeros for counts,
+   * nulls for tokens) — never an error, never estimates.
+   */
+  getSessionSummary(rawSessionId: unknown): SessionUsageSummary {
+    if (typeof rawSessionId !== 'number' || !Number.isInteger(rawSessionId) || rawSessionId <= 0) {
+      throw new InvalidUsageRequestError('The usage request is invalid.')
+    }
+    const now = this.now()
+    const rows = this.store.summarizeSessionWindow(rawSessionId, now - USAGE_WINDOW_MS)
+    let calls = 0
+    let successes = 0
+    let successesWithTokens = 0
+    let inputTokens: number | null = null
+    let outputTokens: number | null = null
+    let totalTokens: number | null = null
+    for (const row of rows) {
+      calls += row.calls
+      successes += row.successes
+      successesWithTokens += row.successesWithTotalTokens
+      if (row.inputTokens !== null) {
+        inputTokens = (inputTokens ?? 0) + row.inputTokens
+      }
+      if (row.outputTokens !== null) {
+        outputTokens = (outputTokens ?? 0) + row.outputTokens
+      }
+      if (row.totalTokens !== null) {
+        totalTokens = (totalTokens ?? 0) + row.totalTokens
+      }
+    }
+    return {
+      sessionId: rawSessionId,
+      calls,
+      inputTokens: successes === 0 ? 0 : inputTokens,
+      outputTokens: successes === 0 ? 0 : outputTokens,
+      totalTokens: successes === 0 ? 0 : totalTokens,
+      latestInputTokens: this.store.latestSessionInputTokens(rawSessionId, now - USAGE_WINDOW_MS),
+      telemetryComplete: successes === 0 || successesWithTokens === successes
     }
   }
 

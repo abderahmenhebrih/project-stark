@@ -80,8 +80,8 @@ type Shim = {
     keys: () => string[]
     update: (key: string, value: unknown) => Promise<void>
   }
-  tasks: { executeTask: () => void }
-  debug: { startDebugging: () => void }
+  tasks: { executeTask: (task?: unknown) => Promise<unknown> }
+  debug: { startDebugging: (folder?: unknown, name?: unknown) => Promise<unknown> }
   version: string
 }
 
@@ -291,10 +291,12 @@ describe('vscode shim storage, diagnostics, watchers, and edits', () => {
     shim.__clearActiveExtensionId()
   })
 
-  it('marks terminal/debug namespaces honestly unsupported', async () => {
+  it('routes debug/task execution through the controlled boundary (honest without main)', async () => {
     const shim = await freshShim()
-    assert.throws(() => shim.tasks.executeTask(), /Unsupported VS Code API/)
-    assert.throws(() => shim.debug.startDebugging(), /Unsupported VS Code API/)
+    // Without a host connection both reject with an explicit
+    // compatibility error — never fake success.
+    await assert.rejects(shim.tasks.executeTask({}), /Unsupported VS Code API/)
+    await assert.rejects(shim.debug.startDebugging(undefined, 'x'), /Unsupported VS Code API/)
     assert.equal(shim.version, '1.90.0')
   })
 

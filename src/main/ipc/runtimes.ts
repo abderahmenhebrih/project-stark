@@ -1,5 +1,10 @@
 import { IPC_CHANNELS } from '../../shared/constants'
-import type { ProjectRuntimeSummary } from '../../shared/project-runtime/types'
+import type {
+  DetectPreviewResult,
+  HumanPreviewSummary,
+  ProjectRuntimeSummary,
+  StartHumanPreviewResult
+} from '../../shared/project-runtime/types'
 import type { ProjectRuntimeService } from '../project-runtime/project-runtime-service'
 import { toPublicProjectRuntimeError } from '../project-runtime/project-runtime-errors'
 import { InvalidWorkerToolRequestError } from '../worker-tools/worker-tool-errors'
@@ -40,11 +45,14 @@ function parseRuntimeRef(payload: unknown): { workspaceId: number; runtimeId: nu
 }
 
 /**
- * Project-runtime management IPC (Stage 26): exactly five read/stop/
- * preview channels. No spawn, no execute, no program/args/URL/PID
- * surface — starting a runtime is reachable only through an approved
- * Worker runtime_start. Stopping and preview are direct human actions
- * needing no AI approval.
+ * Project-runtime management IPC: five worker-runtime read/stop/
+ * preview channels plus five human-preview channels (detect, get,
+ * start, stop, restart). No spawn, no execute, no program/args/URL/PID
+ * surface — worker starts route only through an approved Worker
+ * runtime_start, and human starts derive the dev script main-side
+ * from the workspace package.json (the renderer sends workspace ids
+ * only). Stopping and preview are direct human actions needing no AI
+ * approval.
  */
 export function createRuntimeBindings(service: ProjectRuntimeService): readonly IpcBinding[] {
   return [
@@ -98,6 +106,51 @@ export function createRuntimeBindings(service: ProjectRuntimeService): readonly 
             const ref = parseRuntimeRef(payload)
             return service.reloadPreview({ workspaceId: ref.workspaceId, runtimeId: ref.runtimeId })
           })
+          .catch((error: unknown) => {
+            throw toPublicProjectRuntimeError('preview', error)
+          })
+    },
+    {
+      channel: IPC_CHANNELS.previewDetect,
+      invoke: (payload): Promise<DetectPreviewResult> =>
+        Promise.resolve()
+          .then(() => service.detectHumanPreview(parseWorkspaceScope(payload)))
+          .catch((error: unknown) => {
+            throw toPublicProjectRuntimeError('read', error)
+          })
+    },
+    {
+      channel: IPC_CHANNELS.previewGet,
+      invoke: (payload): Promise<HumanPreviewSummary | null> =>
+        Promise.resolve()
+          .then(() => service.getHumanPreview(parseWorkspaceScope(payload)))
+          .catch((error: unknown) => {
+            throw toPublicProjectRuntimeError('read', error)
+          })
+    },
+    {
+      channel: IPC_CHANNELS.previewStart,
+      invoke: (payload): Promise<StartHumanPreviewResult> =>
+        Promise.resolve()
+          .then(() => service.startHumanPreview({ workspaceId: parseWorkspaceScope(payload), now: Date.now() }))
+          .catch((error: unknown) => {
+            throw toPublicProjectRuntimeError('preview', error)
+          })
+    },
+    {
+      channel: IPC_CHANNELS.previewStop,
+      invoke: (payload): Promise<HumanPreviewSummary | null> =>
+        Promise.resolve()
+          .then(() => service.stopHumanPreview({ workspaceId: parseWorkspaceScope(payload), now: Date.now() }))
+          .catch((error: unknown) => {
+            throw toPublicProjectRuntimeError('stop', error)
+          })
+    },
+    {
+      channel: IPC_CHANNELS.previewRestart,
+      invoke: (payload): Promise<StartHumanPreviewResult> =>
+        Promise.resolve()
+          .then(() => service.restartHumanPreview({ workspaceId: parseWorkspaceScope(payload), now: Date.now() }))
           .catch((error: unknown) => {
             throw toPublicProjectRuntimeError('preview', error)
           })

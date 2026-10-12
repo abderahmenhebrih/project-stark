@@ -116,6 +116,10 @@ const EXPECTED_PRODUCTION_CHANNELS: readonly string[] = [
   IPC_CHANNELS.workspaceFilesListDirectory,
   IPC_CHANNELS.workspaceFilesReadTextFile,
   IPC_CHANNELS.workspaceFilesWriteTextFile,
+  IPC_CHANNELS.workspaceFilesCreateTextFile,
+  IPC_CHANNELS.workspaceFilesCreateDirectory,
+  IPC_CHANNELS.workspaceFilesSetEntryName,
+  IPC_CHANNELS.workspaceFilesMoveToTrash,
   IPC_CHANNELS.workspaceSearch,
   IPC_CHANNELS.changesCreate,
   IPC_CHANNELS.changesGet,
@@ -171,9 +175,15 @@ const EXPECTED_PRODUCTION_CHANNELS: readonly string[] = [
   IPC_CHANNELS.runtimesStop,
   IPC_CHANNELS.runtimesOpenPreview,
   IPC_CHANNELS.runtimesReloadPreview,
+  IPC_CHANNELS.previewDetect,
+  IPC_CHANNELS.previewGet,
+  IPC_CHANNELS.previewStart,
+  IPC_CHANNELS.previewStop,
+  IPC_CHANNELS.previewRestart,
   IPC_CHANNELS.usageGetConfig,
   IPC_CHANNELS.usageUpdateConfig,
   IPC_CHANNELS.usageGetSummary,
+  IPC_CHANNELS.usageGetSessionSummary,
   IPC_CHANNELS.accountGetStatus,
   IPC_CHANNELS.accountStartSignIn,
   IPC_CHANNELS.accountCancelSignIn,
@@ -259,6 +269,7 @@ describe('authoritative production IPC surface', () => {
         workspaceService: services.workspaceService,
         workspaceFilesService: services.workspaceFilesService,
         workspaceFileWriteService: services.workspaceFileWriteService,
+        workspaceCrudService: services.workspaceCrudService,
         workspaceSearchService: services.workspaceSearchService,
         changeTransactionService: services.changeTransactionService,
         terminalService: services.terminalService,
@@ -344,7 +355,7 @@ describe('authoritative production IPC surface', () => {
     // Channels outside createIpcBindings by design: getAppInfo is
     // registered directly, terminal data/exit and runtime/account updates are
     // main-to-renderer events, never invoke bindings.
-    for (const standalone of [IPC_CHANNELS.getAppInfo, IPC_CHANNELS.terminalData, IPC_CHANNELS.terminalExit, IPC_CHANNELS.runtimeUpdated, IPC_CHANNELS.accountUpdated, IPC_CHANNELS.extensionsEvent]) {
+    for (const standalone of [IPC_CHANNELS.getAppInfo, IPC_CHANNELS.terminalData, IPC_CHANNELS.terminalExit, IPC_CHANNELS.runtimeUpdated, IPC_CHANNELS.previewUpdated, IPC_CHANNELS.accountUpdated, IPC_CHANNELS.extensionsEvent]) {
       assert.ok(all.delete(standalone), `${standalone} must exist`)
     }
     assert.deepEqual([...all].sort(), [...EXPECTED_PRODUCTION_CHANNELS].sort())
@@ -397,9 +408,18 @@ describe('authoritative production IPC surface', () => {
       'IPC_CHANNELS.runtimesReloadPreview',
       'createRuntimesApi()',
       'runtimes: createRuntimesApi()',
+      'IPC_CHANNELS.previewDetect',
+      'IPC_CHANNELS.previewGet',
+      'IPC_CHANNELS.previewStart',
+      'IPC_CHANNELS.previewStop',
+      'IPC_CHANNELS.previewRestart',
+      'IPC_CHANNELS.previewUpdated',
+      'createPreviewApi()',
+      'preview: createPreviewApi()',
       'IPC_CHANNELS.usageGetConfig',
       'IPC_CHANNELS.usageUpdateConfig',
       'IPC_CHANNELS.usageGetSummary',
+      'IPC_CHANNELS.usageGetSessionSummary',
       'createUsageApi()',
       'usage: createUsageApi()',
       'IPC_CHANNELS.accountGetStatus',
@@ -448,6 +468,7 @@ describe('authoritative production IPC surface', () => {
     assert.ok(!source.includes("'stark:worker-tools:"), 'preload must not hardcode worker-tool channel names')
     assert.ok(!source.includes("'stark:runtimes:"), 'preload must not hardcode runtime channel names')
     assert.ok(!source.includes("'stark:runtime:"), 'preload must not hardcode runtime event names')
+    assert.ok(!source.includes("'stark:preview:"), 'preload must not hardcode preview channel names')
     assert.ok(!source.includes("'stark:account:complete"), 'preload must not hardcode OAuth completion channels')
     assert.ok(!source.includes("'stark:extensions:"), 'preload must not hardcode extension channel names')
     assert.ok(!source.includes("'stark:voice:"), 'preload must not hardcode voice channel names')

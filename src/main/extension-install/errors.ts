@@ -17,8 +17,8 @@ export type ExtensionInstallErrorCode =
   | 'manifest_mismatch'
   | 'storage_error'
 
-/** Safe renderer copy for oversized packages (names the standing 50 MiB policy). */
-export const PACKAGE_TOO_LARGE_COPY = 'Extension package exceeds STARK’s 50 MiB safety limit.'
+/** Safe renderer copy for oversized packages (names the standing 1 GiB policy). */
+export const PACKAGE_TOO_LARGE_COPY = 'Extension package exceeds STARK’s 1 GiB safety limit.'
 
 /** Safe generic renderer copy for every other install failure. */
 export const GENERIC_INSTALL_COPY = 'We couldn’t install this extension.'

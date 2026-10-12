@@ -126,6 +126,6 @@ describe('generic manifest normalization', () => {
       IDENTITY
     )
     const keys = Object.keys(source).sort()
-    assert.deepEqual(keys, ['activationEvents', 'browser', 'categories', 'contributes', 'displayName', 'enginesVscode', 'extensionKind', 'main', 'name', 'publisher', 'version'])
+    assert.deepEqual(keys, ['activationEvents', 'browser', 'categories', 'contributes', 'description', 'displayName', 'enginesVscode', 'extensionDependencies', 'extensionKind', 'extensionPack', 'icon', 'keywords', 'license', 'main', 'name', 'publisher', 'version'])
   })
 })

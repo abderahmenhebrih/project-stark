@@ -29,7 +29,25 @@ describe('activation events engine', () => {
     })
     assert.equal(parseActivationEvent('onStartupFinished').kind, 'onStartupFinished')
     assert.equal(parseActivationEvent('*').kind, 'star')
-    assert.equal(parseActivationEvent('onView:explorer').kind, 'other')
+    // Code OSS trigger set: views, URIs, filesystems, debug, editors,
+    // panels, profiles, tasks, notebooks, auth, chat.
+    assert.deepEqual(parseActivationEvent('onView:explorer'), {
+      raw: 'onView:explorer',
+      kind: 'onView',
+      value: 'explorer'
+    })
+    assert.equal(parseActivationEvent('onUri').kind, 'onUri')
+    assert.equal(parseActivationEvent('onFileSystem:memfs').kind, 'onFileSystem')
+    assert.equal(parseActivationEvent('onDebug').kind, 'onDebug')
+    assert.equal(parseActivationEvent('onDebug:node').kind, 'onDebug')
+    assert.equal(parseActivationEvent('onCustomEditor:csv').kind, 'onCustomEditor')
+    assert.equal(parseActivationEvent('onWebviewPanel:preview').kind, 'onWebviewPanel')
+    assert.equal(parseActivationEvent('onTerminalProfile:zsh').kind, 'onTerminalProfile')
+    assert.equal(parseActivationEvent('onTaskType:npm').kind, 'onTaskType')
+    assert.equal(parseActivationEvent('onNotebook:jupyter').kind, 'onNotebook')
+    assert.equal(parseActivationEvent('onAuthenticationRequest:github').kind, 'onAuthenticationRequest')
+    assert.equal(parseActivationEvent('onChatParticipant:helper').kind, 'onChatParticipant')
+    assert.equal(parseActivationEvent('bogus:event').kind, 'other')
     assert.equal(parseActivationEvent('').kind, 'other')
   })
 

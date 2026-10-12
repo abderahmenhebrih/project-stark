@@ -2,11 +2,15 @@ import { DatabaseError } from '../database/errors'
 import {
   FileTooLargeError,
   UnsupportedFileError,
+  WorkspaceEntryExistsError,
   WorkspaceEntryTypeError,
   WorkspaceFileConflictError,
   WorkspaceFileWriteError,
+  WorkspaceInvalidNameError,
   WorkspacePathNotFoundError,
-  WorkspacePathOutsideRootError
+  WorkspacePathOutsideRootError,
+  WorkspaceRootProtectedError,
+  WorkspaceTrashError
 } from '../workspace-files/errors'
 import { InvalidSearchQueryError } from '../workspace-search/errors'
 
@@ -59,6 +63,10 @@ export type WorkspaceOperation =
   | 'read-text-file'
   | 'write-text-file'
   | 'search'
+  | 'create-text-file'
+  | 'create-directory'
+  | 'set-entry-name'
+  | 'move-to-trash'
 
 /**
  * Maps any service-layer failure to a renderer-safe Error carrying
@@ -83,6 +91,24 @@ export function toPublicError(operation: WorkspaceOperation, error: unknown): Er
   if (error instanceof WorkspaceFileWriteError) {
     return new Error('We couldn’t save this file.')
   }
+  if (error instanceof WorkspaceEntryExistsError) {
+    if (operation === 'set-entry-name') {
+      return new Error('Another item with that name already exists.')
+    }
+    return new Error('An item with that name already exists.')
+  }
+  if (error instanceof WorkspaceRootProtectedError) {
+    if (operation === 'move-to-trash') {
+      return new Error('The project folder itself can’t be moved to Trash.')
+    }
+    return new Error('The project folder itself can’t be renamed.')
+  }
+  if (error instanceof WorkspaceInvalidNameError) {
+    return new Error('That name isn’t valid. Use a plain file or folder name.')
+  }
+  if (error instanceof WorkspaceTrashError) {
+    return new Error('We couldn’t move this to Trash.')
+  }
   if (
     error instanceof WorkspacePathNotFoundError ||
     error instanceof WorkspacePathOutsideRootError ||
@@ -97,6 +123,15 @@ export function toPublicError(operation: WorkspaceOperation, error: unknown): Er
     if (operation === 'list-directory') {
       return new Error('We couldn’t read this folder.')
     }
+    if (operation === 'create-text-file' || operation === 'create-directory') {
+      return new Error('We couldn’t create this item.')
+    }
+    if (operation === 'set-entry-name') {
+      return new Error('We couldn’t rename this item.')
+    }
+    if (operation === 'move-to-trash') {
+      return new Error('That item is no longer there.')
+    }
   }
   if (error instanceof InvalidWorkspaceError) {
     if (operation === 'list-directory') {
@@ -110,6 +145,15 @@ export function toPublicError(operation: WorkspaceOperation, error: unknown): Er
   }
   if (operation === 'search') {
     return new Error('We couldn’t search this project.')
+  }
+  if (operation === 'create-text-file' || operation === 'create-directory') {
+    return new Error('We couldn’t create this item.')
+  }
+  if (operation === 'set-entry-name') {
+    return new Error('We couldn’t rename this item.')
+  }
+  if (operation === 'move-to-trash') {
+    return new Error('We couldn’t move this to Trash.')
   }
   return new Error('We couldn’t open that project folder.')
 }
@@ -132,6 +176,15 @@ export function toPublicError(operation: WorkspaceOperation, error: unknown): Er
     if (operation === 'search') {
       return new Error('We couldn’t search this project.')
     }
+    if (operation === 'create-text-file' || operation === 'create-directory') {
+      return new Error('We couldn’t create this item.')
+    }
+    if (operation === 'set-entry-name') {
+      return new Error('We couldn’t rename this item.')
+    }
+    if (operation === 'move-to-trash') {
+      return new Error('We couldn’t move this to Trash.')
+    }
     return new Error('We couldn’t open that project folder.')
   }
   if (operation === 'get-current' || operation === 'list-recent') {
@@ -148,6 +201,15 @@ export function toPublicError(operation: WorkspaceOperation, error: unknown): Er
     }
     if (operation === 'search') {
       return new Error('We couldn’t search this project.')
+    }
+    if (operation === 'create-text-file' || operation === 'create-directory') {
+      return new Error('We couldn’t create this item.')
+    }
+    if (operation === 'set-entry-name') {
+      return new Error('We couldn’t rename this item.')
+    }
+    if (operation === 'move-to-trash') {
+      return new Error('We couldn’t move this to Trash.')
     }
     return new Error('We couldn’t open that project folder.')
   }

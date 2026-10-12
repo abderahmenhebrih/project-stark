@@ -74,4 +74,38 @@ export interface WorkspaceFilesApi {
   listDirectory: (workspaceId: number, relativePath: string) => Promise<WorkspaceDirectoryListing>
   readTextFile: (workspaceId: number, relativePath: string) => Promise<WorkspaceTextFile>
   writeTextFile: (request: WorkspaceTextFileWriteRequest) => Promise<WorkspaceTextFileWriteResult>
+  createTextFile: (request: WorkspaceCreateRequest) => Promise<WorkspaceCrudResult>
+  createDirectory: (request: WorkspaceCreateRequest) => Promise<WorkspaceCrudResult>
+  setEntryName: (request: WorkspaceSetEntryNameRequest) => Promise<WorkspaceCrudResult>
+  moveToTrash: (request: WorkspacePathRequest) => Promise<WorkspaceCrudResult>
+}
+
+/**
+ * Direct human create request: the parent directory plus a single
+ * leaf name. Renderer supplies only the persisted workspace id, the
+ * parent relative path, and the leaf name — never an absolute path.
+ * Exclusive semantics: an existing target fails instead of merging.
+ */
+export interface WorkspaceCreateRequest {
+  readonly workspaceId: number
+  readonly parentPath: string
+  readonly name: string
+}
+
+/**
+ * Direct human leaf-name change inside the SAME parent (not a move).
+ * Renderer supplies the entry's current relative path plus the new
+ * leaf name. Overwriting another entry is refused.
+ */
+export interface WorkspaceSetEntryNameRequest {
+  readonly workspaceId: number
+  readonly relativePath: string
+  readonly newName: string
+}
+
+/** Result of one direct human file operation (no AI transaction). */
+export interface WorkspaceCrudResult {
+  readonly workspaceId: number
+  readonly relativePath: string
+  readonly kind: WorkspaceEntryKind
 }

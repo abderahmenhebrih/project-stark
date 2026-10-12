@@ -37,6 +37,10 @@ export interface CompatibilityInput {
   readonly activationFailed: boolean
   /** The failure category when activationFailed (bounded, e.g. `timeout`). */
   readonly failureCode: string | null
+  /** Optional engines.vscode classification detail (forwarded, never invented). */
+  readonly engineDetail?: string | null
+  /** Optional license notice (e.g. host-use restriction). */
+  readonly licenseNotice?: string | null
 }
 
 export interface CompatibilityResult {
@@ -72,19 +76,24 @@ const PARTIAL_CONTRIBUTIONS: Record<string, string> = {
   webviews: 'Uses webviews, which STARK shows with limited support',
   customEditors: 'Uses a custom editor, which STARK shows with limited support',
   views: 'Contributes views, which STARK shows with limited support',
+  viewsContainers: 'Contributes view containers, which STARK shows with limited support',
   taskDefinitions: 'Contributes tasks, which need approval in STARK',
-  problemMatchers: 'Contributes problem matchers, which need approval in STARK'
+  problemMatchers: 'Contributes problem matchers, which need approval in STARK',
+  // Narrow adapters route these through STARK boundaries (terminal
+  // host, isolated auth store, controlled task execution, review
+  // proposals): usable with limits, never full VS Code parity.
+  terminal: 'Uses terminal contributions, which STARK maps through the hardened terminal host',
+  authentication: 'Uses authentication contributions, which STARK isolates per provider',
+  comments: 'Uses comments, which STARK shows with limited support',
+  timeline: 'Uses a timeline, which STARK shows with limited support',
+  scm: 'Uses source-control contributions, which STARK shows with limited support'
 }
 
 /** Contribution classes STARK reports Unsupported (no silent faking). */
 const UNSUPPORTED_CONTRIBUTIONS: Record<string, string> = {
   debuggers: 'Requires the debugger API, which STARK does not support',
   breakpoints: 'Requires the debugger API, which STARK does not support',
-  terminal: 'Requires the full terminal API, which STARK only partly supports',
   notebooks: 'Requires the notebook API, which STARK does not support',
-  authentication: 'Requires account authentication, which STARK does not support',
-  comments: 'Requires the comments API, which STARK does not support',
-  timeline: 'Requires the timeline API, which STARK does not support',
   fileSystemProviders: 'Requires a virtual filesystem, which STARK does not support',
   proposed: 'Requires proposed APIs, which STARK does not support'
 }
@@ -173,6 +182,13 @@ export function analyzeCompatibility(input: CompatibilityInput): CompatibilityRe
         ? `Last activation failed (${input.failureCode.slice(0, 48)})`
         : 'Last activation failed'
     )
+  }
+  if (typeof input.engineDetail === 'string' && input.engineDetail !== '') {
+    level = level === 'compatible' ? 'partial' : level
+    pushReason(reasons, seen, input.engineDetail.slice(0, 160))
+  }
+  if (typeof input.licenseNotice === 'string' && input.licenseNotice !== '') {
+    pushReason(reasons, seen, input.licenseNotice.slice(0, 160))
   }
   return { level, reasons }
 }

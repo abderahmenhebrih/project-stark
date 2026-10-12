@@ -1,4 +1,4 @@
-import type { UsageApi, UsageConfig, UsageSummary, UpdateUsageConfigRequest } from '../../../shared/usage/types'
+import type { SessionUsageSummary, UsageApi, UsageConfig, UsageSummary, UpdateUsageConfigRequest } from '../../../shared/usage/types'
 import { getStarkApi } from './stark-api'
 
 /**
@@ -40,4 +40,12 @@ export function getUsageSummary(): Promise<UsageSummary> {
     return unavailable()
   }
   return api()
+}
+
+export function getSessionUsageSummary(sessionId: number): Promise<SessionUsageSummary> {
+  const api = getUsageApi()?.getSessionSummary
+  if (api === undefined) {
+    return unavailable()
+  }
+  return api({ sessionId })
 }

@@ -48,7 +48,7 @@ describe('terminal activity owns the drawer', () => {
     assert.ok(!branch.includes('<TreeNode'), 'terminal drawer must not render the project tree')
     const treeAt = explorer.indexOf("activity === 'explorer'")
     assert.ok(treeAt >= 0 && treeAt < branchAt, 'explorer tree must stay on the explorer activity')
-    const treeBranch = explorer.slice(treeAt, treeAt + 400)
+    const treeBranch = explorer.slice(treeAt, treeAt + 4000)
     assert.ok(treeBranch.includes('<TreeNode') || explorer.includes('TreeNode path=""'), 'returning to Explorer must restore the tree')
   })
 

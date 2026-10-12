@@ -505,11 +505,11 @@ export function ExtensionsPanel({ workspaceId, rootPath }: ExtensionsPanelProps)
       // Main returns normalized safe copy only: the standing size
       // policy names itself, everything else stays a calm failure.
       const copy = failedMessages[entry.id] ?? 'Install failed'
-      const tooLarge = copy.includes('50 MiB safety limit')
+      const tooLarge = copy.includes('1 GiB safety limit')
       return (
         <span className="extensions__install-failed">
           <span className="extensions__install-failed-copy">
-            {tooLarge ? 'Extension package exceeds STARK’s 50 MiB safety limit.' : 'Install failed'}
+            {tooLarge ? 'Extension package exceeds STARK’s 1 GiB safety limit.' : 'Install failed'}
           </span>
           <button className="extensions__retry" type="button" onClick={() => handleInstall(entry)}>
             Retry

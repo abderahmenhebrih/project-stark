@@ -83,6 +83,10 @@ describe('generic target model (no vendor union)', () => {
     )
     const chrome = readSource('src', 'renderer', 'src', 'layouts', 'AppChrome.tsx')
     assertNoVendors(chrome, 'AppChrome.tsx')
-    assert.ok(chrome.includes('Managed by extension'), 'effort fallback must be generic')
+    // The effort fallback lives on the docked Usage sidebar (the old
+    // popover is gone); it must stay generic, never vendor-shaped.
+    const sidebar = readSource('src', 'renderer', 'src', 'layouts', 'UsageSidebar.tsx')
+    assertNoVendors(sidebar, 'UsageSidebar.tsx')
+    assert.ok(sidebar.includes('Managed by extension'), 'effort fallback must be generic')
   })
 })

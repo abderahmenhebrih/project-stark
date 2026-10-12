@@ -7,24 +7,32 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronsDownUp,
   CircleAlert,
   Ellipsis,
+  FilePlus,
   FileText,
   Folder,
   FolderOpen,
+  FolderPlus,
   GitBranch,
   Info,
   Menu,
   Mic,
   MonitorPlay,
   Paperclip,
+  Pencil,
+  Play,
   Plus,
   Puzzle,
   RefreshCw,
+  RotateCcw,
   Search,
   Settings,
+  Square,
   Star,
   Terminal,
+  Trash2,
   TriangleAlert,
   X,
   type LucideIcon
@@ -69,6 +77,14 @@ export type UiIconName =
   | 'mic'
   | 'paperclip'
   | 'file'
+  | 'file-plus'
+  | 'folder-plus'
+  | 'collapse-all'
+  | 'play'
+  | 'stop'
+  | 'restart'
+  | 'trash'
+  | 'rename'
   | 'check'
   | 'info'
   | 'warning'
@@ -99,6 +115,14 @@ const ICONS: Record<UiIconName, LucideIcon> = {
   mic: Mic,
   paperclip: Paperclip,
   file: FileText,
+  'file-plus': FilePlus,
+  'folder-plus': FolderPlus,
+  'collapse-all': ChevronsDownUp,
+  play: Play,
+  stop: Square,
+  restart: RotateCcw,
+  trash: Trash2,
+  rename: Pencil,
   check: Check,
   info: Info,
   warning: TriangleAlert,

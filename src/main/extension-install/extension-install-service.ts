@@ -37,17 +37,31 @@ import {
 /** Single-attempt network bound per request (metadata + package). */
 export const EXTENSION_INSTALL_TIMEOUT_MS = 30_000
 
-/** Maximum compressed VSIX bytes accepted. */
-export const EXTENSION_INSTALL_MAX_VSIX_BYTES = 50 * 1024 * 1024
+/** Maximum compressed VSIX bytes accepted (large AI agents install; zip bombs do not). */
+export const EXTENSION_INSTALL_MAX_VSIX_BYTES = 1024 * 1024 * 1024
 
 /** Maximum total extracted bytes accepted. */
-export const EXTENSION_INSTALL_MAX_EXTRACTED_BYTES = 200 * 1024 * 1024
+export const EXTENSION_INSTALL_MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024
 
-/** Maximum archive entries inspected. */
-export const EXTENSION_INSTALL_MAX_ENTRIES = 10_000
+/** Maximum archive entries inspected (safe high bound for large extensions; fits non-ZIP64 VSIX). */
+export const EXTENSION_INSTALL_MAX_ENTRIES = 50_000
 
 /** Maximum single extracted file bytes. */
-export const EXTENSION_INSTALL_MAX_ENTRY_BYTES = 50 * 1024 * 1024
+export const EXTENSION_INSTALL_MAX_ENTRY_BYTES = 512 * 1024 * 1024
+
+/**
+ * Compression-ratio guard: entries whose uncompressed size exceeds
+ * this multiple of their compressed size (and exceed the floor below)
+ * are rejected as probable zip bombs. Legitimate large extensions
+ * (mostly shipped uncompressed JS) sit far below this ratio.
+ */
+export const EXTENSION_INSTALL_MAX_COMPRESSION_RATIO = 200
+
+/** Uncompressed-size floor before the ratio guard applies. */
+export const EXTENSION_INSTALL_COMPRESSION_RATIO_FLOOR_BYTES = 10 * 1024 * 1024
+
+/** Maximum nested archives (`*.zip`/`*.vsix` inside the package) tolerated. */
+export const EXTENSION_INSTALL_MAX_NESTED_ARCHIVES = 8
 
 /** Maximum archive entry path length (code units). */
 export const EXTENSION_INSTALL_MAX_PATH_LENGTH = 512
@@ -1016,9 +1030,9 @@ export class ExtensionInstallService {
    * Bounded package download with manual redirect validation. The
    * initial metadata-resolved URL plus every hop must satisfy the
    * redirect allowlist (registry origin, or the single confirmed
-   * official asset host with an identity-pinned path; max 3 hops);
-   * the body streams through a byte counter capped at 50 MiB whether
-   * or not Content-Length is present.
+   *   official asset host with an identity-pinned path; max 3 hops);
+   *   the body streams through a byte counter capped at 1 GiB whether
+   *   or not Content-Length is present.
    */
   private async downloadPackage(url: string, tmpFile: string, identity: ValidatedInstallIdentity): Promise<string> {
     let current = url
@@ -1252,13 +1266,19 @@ function unixFileType(externalAttributes: number): number {
  * files and directories only; ownership/device metadata dropped.
  */
 export async function extractVsix(archivePath: string, stagingDir: string): Promise<void> {
-  const zipfile = await yauzl.openPromise(archivePath, { lazyEntries: true, strictFileNames: true })
+  let zipfile: yauzl.ZipFile
+  try {
+    zipfile = await yauzl.openPromise(archivePath, { lazyEntries: true, strictFileNames: true })
+  } catch (error: unknown) {
+    throw new ExtensionInstallError('Archive entry could not be read.', { cause: error, code: 'invalid_archive' })
+  }
   try {
     if (zipfile.entryCount > EXTENSION_INSTALL_MAX_ENTRIES) {
       throw new ExtensionInstallError('Archive exceeds its limits.', { code: 'package_too_large' })
     }
     let seen = 0
     let totalBytes = 0
+    let nestedArchives = 0
     for (;;) {
       const entry = await readNextEntry(zipfile)
       if (entry === null) {
@@ -1284,6 +1304,24 @@ export async function extractVsix(archivePath: string, stagingDir: string): Prom
       }
       if (entry.uncompressedSize > EXTENSION_INSTALL_MAX_ENTRY_BYTES) {
         throw new ExtensionInstallError('Archive exceeds its limits.', { code: 'package_too_large' })
+      }
+      // Compression-ratio guard (zip-bomb detection): highly
+      // compressible entries above the floor are rejected even when
+      // under the absolute caps.
+      if (
+        entry.uncompressedSize >= EXTENSION_INSTALL_COMPRESSION_RATIO_FLOOR_BYTES &&
+        entry.compressedSize >= 0 &&
+        entry.uncompressedSize > entry.compressedSize * EXTENSION_INSTALL_MAX_COMPRESSION_RATIO
+      ) {
+        throw new ExtensionInstallError('Archive exceeds its limits.', { code: 'package_too_large' })
+      }
+      // Nested-archive explosion bound: count (never extract
+      // recursively here) embedded archives.
+      if (/\.(zip|vsix|jar|tgz|tar\.gz)$/i.test(name)) {
+        nestedArchives += 1
+        if (nestedArchives > EXTENSION_INSTALL_MAX_NESTED_ARCHIVES) {
+          throw new ExtensionInstallError('Archive exceeds its limits.', { code: 'package_too_large' })
+        }
       }
       totalBytes = await streamEntry(zipfile, entry, dest, totalBytes)
     }

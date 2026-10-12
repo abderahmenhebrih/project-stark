@@ -87,3 +87,66 @@ export interface ProjectRuntimesApi {
 export function previewUrlForPort(port: number): string {
   return `http://127.0.0.1:${String(port)}/`
 }
+
+/** Lifecycle of one human (Live Review) preview. Memory-only, never persisted. */
+export type HumanPreviewState = 'starting' | 'running' | 'stopped' | 'failed'
+
+/** Renderer-safe human preview summary: bounded tails, no PID/env/paths. */
+export interface HumanPreviewSummary {
+  readonly workspaceId: number
+  readonly state: HumanPreviewState
+  /** Detected package.json script (`dev`, `preview`, `serve`, `start`). */
+  readonly script: string
+  readonly packageManager: 'npm' | 'pnpm' | 'yarn' | 'bun'
+  readonly program: string
+  readonly args: readonly string[]
+  /** Discovered loopback URL, or null until the server prints one. */
+  readonly url: string | null
+  readonly stdoutTail: string
+  readonly stderrTail: string
+  readonly logsTruncated: boolean
+  readonly startedAt: number
+  readonly endedAt: number | null
+  /** Sanitized failure/note copy, or null. Never raw stacks or secrets. */
+  readonly error: string | null
+}
+
+/** Explicit human Start outcome: already-running reuses, unknown projects report honestly. */
+export interface StartHumanPreviewResult {
+  readonly status: 'started' | 'active' | 'no-preview' | 'failed'
+  readonly preview: HumanPreviewSummary | null
+}
+
+/** Detection result for one workspace: launch plan or an honest reason. */
+export interface DetectPreviewResult {
+  readonly workspaceId: number
+  readonly script: string | null
+  readonly packageManager: 'npm' | 'pnpm' | 'yarn' | 'bun' | null
+  readonly program: string | null
+  readonly args: readonly string[]
+  /** Machine-readable reason when script is null: `no-package-json` | `invalid-manifest` | `no-preview-script`. */
+  readonly reason: string | null
+}
+
+/** Workspace-only request: main derives every run fact itself. */
+export interface HumanPreviewWorkspaceRequest {
+  readonly workspaceId: number
+}
+
+/** Live update pushed main → renderer for human previews (no polling). */
+export interface HumanPreviewUpdatedEvent {
+  readonly workspaceId: number
+  readonly preview: HumanPreviewSummary | null
+}
+
+export type HumanPreviewUpdatedListener = (event: HumanPreviewUpdatedEvent) => void
+
+/** Human-preview slice of the preload bridge (`window.stark.preview`). */
+export interface HumanPreviewApi {
+  detectPreview: (request: HumanPreviewWorkspaceRequest) => Promise<DetectPreviewResult>
+  getPreview: (request: HumanPreviewWorkspaceRequest) => Promise<HumanPreviewSummary | null>
+  startPreview: (request: HumanPreviewWorkspaceRequest) => Promise<StartHumanPreviewResult>
+  stopPreview: (request: HumanPreviewWorkspaceRequest) => Promise<HumanPreviewSummary | null>
+  restartPreview: (request: HumanPreviewWorkspaceRequest) => Promise<StartHumanPreviewResult>
+  onPreviewUpdated: (listener: HumanPreviewUpdatedListener) => (() => void)
+}

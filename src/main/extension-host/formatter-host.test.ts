@@ -143,7 +143,9 @@ describe('vscode shim (audited explicit surface)', () => {
       '__disposeOwner',
       '__getActiveExtensionId',
       '__getAllDiagnostics',
+      '__getAllObservedUnsupportedApis',
       '__getCommandOwner',
+      '__getObservedUnsupportedApis',
       '__getOwnerRegistrations',
       '__registerExtensionInfo',
       '__resetForTests',
@@ -155,14 +157,18 @@ describe('vscode shim (audited explicit surface)', () => {
       '__setWorkspaceFolders',
       '__unregisterExtensionInfo',
       'authentication',
+      'chat',
       'commands',
+      'comments',
       'debug',
       'env',
       'extensions',
       'languages',
+      'lm',
       'notebooks',
       'scm',
       'tasks',
+      'tests',
       'timeline',
       'version',
       'window',
@@ -183,13 +189,16 @@ describe('vscode shim (audited explicit surface)', () => {
       __setActiveExtensionId: (id: string) => void
       __clearActiveExtensionId: () => void
       __resetForTests: () => void
-      window: { showOpenDialog: () => void }
+      window: { showOpenDialog: () => Promise<unknown>; showSaveDialog: () => Promise<unknown> }
       workspace: { isTrusted: boolean; workspaceFolders: unknown; getWorkspaceFolder: () => unknown; getConfiguration: (s: string) => { get: (k: string, d: unknown) => unknown } }
       CodeActionKind: { SourceFixAll: { append: (p: string) => { value: string } } }
     }>(SHIM_PATH)
     shim.__resetForTests()
     assert.throws(() => shim.languages.match(), /Unsupported VS Code API: languages\.match/)
-    assert.throws(() => shim.window.showOpenDialog(), /Unsupported VS Code API: window\.showOpenDialog/)
+    // Dialogs route through the host; without a connection they
+    // resolve undefined (never fabricate paths, never throw sync).
+    assert.equal(await shim.window.showOpenDialog(), undefined)
+    assert.equal(await shim.window.showSaveDialog(), undefined)
     // commands.executeCommand now dispatches owner-aware registrations
     // with a nesting bound (unknown commands reject honestly).
     shim.__setActiveExtensionId('fixture.exec@1.0.0')

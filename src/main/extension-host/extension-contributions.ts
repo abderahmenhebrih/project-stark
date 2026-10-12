@@ -24,6 +24,8 @@ export const CONTRIB_MAX_KEYBINDINGS = 256
 export const CONTRIB_MAX_CONFIG_PROPS = 256
 export const CONTRIB_MAX_STRING = 256
 export const CONTRIB_MAX_PATH = 512
+export const CONTRIB_MAX_VIEWS = 64
+export const CONTRIB_MAX_VIEW_CONTAINERS = 32
 /** Maximum jsonValidation entries per extension (bounded). */
 export const CONTRIB_MAX_JSON_VALIDATION = 32
 /** Maximum fileMatch patterns per jsonValidation entry (bounded). */
@@ -94,6 +96,12 @@ export interface JsonValidationContribution {
   readonly url: string
 }
 
+export interface ViewContribution {
+  readonly id: string
+  readonly name: string
+  readonly container: string
+}
+
 export interface ParsedContributions {
   readonly languages: readonly LanguageContribution[]
   readonly grammars: readonly GrammarContribution[]
@@ -106,6 +114,10 @@ export interface ParsedContributions {
   readonly configuration: ReadonlyMap<string, ConfigProperty>
   /** Validated JSON-schema mappings (`contributes.jsonValidation`). */
   readonly jsonValidation: readonly JsonValidationContribution[]
+  /** Generic view contributions (`contributes.views`: container → views). */
+  readonly views: readonly ViewContribution[]
+  /** Generic view-container ids (`contributes.viewsContainers`). */
+  readonly viewsContainers: readonly string[]
   /** Other (non-declarative) contribution keys present, for compat. */
   readonly otherKeys: readonly string[]
 }
@@ -395,6 +407,8 @@ export function parseContributions(contributes: unknown): ParsedContributions {
       keybindings: [],
       configuration: new Map(),
       jsonValidation: [],
+      views: [],
+      viewsContainers: [],
       otherKeys: []
     }
   }
@@ -407,7 +421,11 @@ export function parseContributions(contributes: unknown): ParsedContributions {
     'commands',
     'keybindings',
     'configuration',
-    'jsonValidation'
+    'jsonValidation',
+    'views',
+    'viewsContainers',
+    'menus',
+    'colors'
   ])
   return {
     languages: parseLanguages(contributes['languages']),
@@ -419,10 +437,76 @@ export function parseContributions(contributes: unknown): ParsedContributions {
     keybindings: parseKeybindings(contributes['keybindings']),
     configuration: parseConfiguration(contributes['configuration']),
     jsonValidation: parseJsonValidation(contributes['jsonValidation']),
+    views: parseViews(contributes['views']),
+    viewsContainers: parseViewsContainers(contributes['viewsContainers']),
     otherKeys: Object.keys(contributes)
       .filter((key) => !known.has(key))
       .slice(0, 32)
   }
+}
+
+/**
+ * Parses generic `contributes.views` (`{ <container>: [{ id, name }] }`)
+ * for renderer tree rendering. Data only; providers still register at
+ * runtime via `window.registerTreeDataProvider`. Bounded, drops
+ * malformed entries.
+ */
+export function parseViews(value: unknown): readonly ViewContribution[] {
+  if (!isRecord(value)) {
+    return []
+  }
+  const out: ViewContribution[] = []
+  for (const [container, list] of Object.entries(value)) {
+    if (out.length >= CONTRIB_MAX_VIEWS) {
+      break
+    }
+    if (container === '' || container.length > 128 || container.includes('\0')) {
+      continue
+    }
+    if (!Array.isArray(list)) {
+      continue
+    }
+    for (const entry of list.slice(0, CONTRIB_MAX_VIEWS)) {
+      if (out.length >= CONTRIB_MAX_VIEWS) {
+        break
+      }
+      if (!isRecord(entry)) {
+        continue
+      }
+      const id = boundedText(entry['id'], 128)
+      const name = boundedText(entry['name'], CONTRIB_MAX_STRING)
+      if (id === null || name === null) {
+        continue
+      }
+      out.push({ id, name, container: container.slice(0, 128) })
+    }
+  }
+  return out
+}
+
+/** Parses `contributes.viewsContainers` ids (data only, bounded). */
+export function parseViewsContainers(value: unknown): readonly string[] {
+  if (!isRecord(value)) {
+    return []
+  }
+  const out: string[] = []
+  for (const locations of Object.values(value)) {
+    if (!Array.isArray(locations)) {
+      continue
+    }
+    for (const entry of locations) {
+      if (out.length >= CONTRIB_MAX_VIEW_CONTAINERS) {
+        break
+      }
+      if (isRecord(entry) && typeof entry['id'] === 'string') {
+        const id = boundedText(entry['id'], 128)
+        if (id !== null && !out.includes(id)) {
+          out.push(id)
+        }
+      }
+    }
+  }
+  return out
 }
 
 /**

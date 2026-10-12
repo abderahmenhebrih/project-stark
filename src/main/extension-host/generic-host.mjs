@@ -514,6 +514,8 @@ function createExtensionContext({ shim, extensionId, extensionBase, manifest, st
     extensionPath: extensionBase,
     globalStorageUri: Uri.file(path.join(storageRoot, 'global')),
     workspaceStorageUri: Uri.file(path.join(storageRoot, 'workspace')),
+    storageUri: Uri.file(path.join(storageRoot, 'workspace')),
+    logUri: Uri.file(path.join(storeRoot, 'extension-logs', safeStorageDirName(extensionId))),
     globalState: new shim.Memento(extensionId, 'global', snapshotStorageScope(storeRoot, extensionId, 'global-state.json')),
     workspaceState: new shim.Memento(extensionId, 'workspace', snapshotStorageScope(storeRoot, extensionId, 'workspace-state.json')),
     extensionMode: 1,
@@ -535,12 +537,49 @@ function createExtensionContext({ shim, extensionId, extensionBase, manifest, st
       return path.join(extensionBase, relativePath);
     }
   };
-  // Explicit failure for secrets: no suitable secure primitive exists
-  // in the host, so plaintext is never substituted.
+  // Secrets: main-owned protected storage path per extension. The
+  // host never holds unrelated STARK secrets; values round-trip only
+  // through correlated HOST_REQUEST calls answered by main from its
+  // protected store (never snapshots, never env).
+  const secretsOwner = extensionId;
+  const secretsApi = {
+    async get(key) {
+      if (typeof key !== 'string' || key === '' || key.length > 256 || key.includes('\0')) {
+        throw new Error('Secret key is not valid.');
+      }
+      const response = await requestFromMain('secretsGet', { owner: secretsOwner, key }, 5000);
+      if (response === null || typeof response !== 'object' || typeof response.value !== 'string') {
+        return undefined;
+      }
+      return response.value.slice(0, 4096);
+    },
+    async store(key, value) {
+      if (typeof key !== 'string' || key === '' || key.length > 256 || key.includes('\0')) {
+        throw new Error('Secret key is not valid.');
+      }
+      if (typeof value !== 'string' || value.length > 4096) {
+        throw new Error('Secret value is not valid.');
+      }
+      postToMain('EXTENSION_NOTIFY', { notify: 'SECRETS_WRITE', owner: secretsOwner, key });
+      await requestFromMain('secretsStore', { owner: secretsOwner, key, value }, 5000);
+    },
+    async delete(key) {
+      if (typeof key !== 'string' || key === '' || key.length > 256) {
+        throw new Error('Secret key is not valid.');
+      }
+      await requestFromMain('secretsDelete', { owner: secretsOwner, key }, 5000);
+    },
+    onDidChange(listener) {
+      if (typeof listener !== 'function') {
+        throw new Error('Secret listener is not valid.');
+      }
+      return { dispose() {} };
+    }
+  };
   Object.defineProperties(context, {
     secrets: {
       get() {
-        throw new Error('Unsupported VS Code API: ExtensionContext.secrets');
+        return secretsApi;
       }
     }
   });

@@ -85,9 +85,9 @@ export async function activate() {
 `
 
 const UNSUPPORTED_ENTRY = `
-import { window } from 'vscode';
+import { languages } from 'vscode';
 export async function activate() {
-  window.showOpenDialog();
+  languages.match();
 }
 `
 
@@ -210,13 +210,13 @@ describe('generic host registry', () => {
       assert.equal(channel.posts[0]?.type, 'EXTENSION_ACTIVATION_ERROR')
       const payload = channel.posts[0]?.payload as Record<string, unknown>
       assert.equal(payload['code'], 'unsupported-api')
-      assert.ok(typeof payload['unsupportedApi'] === 'string' && (payload['unsupportedApi'] as string).includes('window.showOpenDialog'))
+      assert.ok(typeof payload['unsupportedApi'] === 'string' && (payload['unsupportedApi'] as string).includes('languages.match'))
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
   })
 
-  it('provides a bounded explicit ExtensionContext (storage works, secrets fail)', async () => {
+  it('provides a bounded explicit ExtensionContext (storage works, secrets are main-owned)', async () => {
     const root = mkdtempSync(join(tmpdir(), 'stark-generic-context-'))
     try {
       const host = await loadHost()
@@ -234,12 +234,14 @@ export async function activate(context) {
   if (!Array.isArray(context.globalState.keys()) || !context.globalState.keys().includes('greeting')) throw new Error('keys broken');
   await context.workspaceState.update('wkey', 42);
   if (context.workspaceState.get('wkey') !== 42) throw new Error('workspaceState broken');
-  // Secrets have no suitable secure primitive in the host: explicit failure.
-  let threw = false;
-  try { void context.secrets; } catch (e) {
-    if (String(e?.message ?? '').startsWith('Unsupported VS Code API:')) threw = true;
-  }
-  if (!threw) throw new Error('missing explicit failure for secrets');
+  // Secrets are main-owned protected storage: the context exposes
+  // get/store/delete backed by correlated host requests (never STARK
+  // account tokens, never snapshots). Access itself never throws.
+  if (typeof context.secrets.get !== 'function') throw new Error('secrets.get missing');
+  if (typeof context.secrets.store !== 'function') throw new Error('secrets.store missing');
+  if (typeof context.secrets.delete !== 'function') throw new Error('secrets.delete missing');
+  if (!context.storageUri) throw new Error('storageUri missing');
+  if (!context.logUri) throw new Error('logUri missing');
   commands.registerCommand('fixture-ctx.ok', () => 1);
 }
 `
