@@ -225,6 +225,18 @@ export interface AiProviderAdapter {
 }
 
 /**
+ * Main-owned hosted-session seam for the STARK provider. Implemented
+ * outside the AI domain (this interface carries no cloud imports):
+ * returns a valid account access token for exactly one hosted call.
+ * Implementations throw StarkHostedSignInRequiredError when no usable
+ * session exists and StarkHostedUnavailableError when auth is
+ * unconfigured. Callers drop the reference immediately after use.
+ */
+export interface HostedSessionProvider {
+  getAccessToken(): Promise<string>
+}
+
+/**
  * Explicit provider registry. Adapters are registered in code — no
  * dynamic module loading, no renderer-defined providers.
  */

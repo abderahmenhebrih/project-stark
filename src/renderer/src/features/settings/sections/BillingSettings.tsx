@@ -1,6 +1,5 @@
-import { useEffect, useState, type ReactElement } from 'react'
-import type { CloudAccountStatus } from '../../../../../shared/cloud-account/types'
-import { getAccountStatus, subscribeAccountUpdates } from '../../../lib/account-api'
+import type { ReactElement } from 'react'
+import { useAccountStatus } from '../../account/use-account-status'
 import {
   FAIR_USE_FOOTNOTE,
   FREE_BILLING_MODELS,
@@ -25,35 +24,6 @@ interface BillingSettingsProps {
 
 function logoFor(styleId: 'free' | 'magma' | 'frost' | 'void'): string {
   return styleAssetUrls(styleId).fullLogoUrl
-}
-
-function useAccountStatus(): CloudAccountStatus | null {
-  const [status, setStatus] = useState<CloudAccountStatus | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    getAccountStatus().then(
-      (next) => {
-        if (!cancelled) {
-          setStatus(next)
-        }
-      },
-      () => {
-        if (!cancelled) {
-          setStatus({ state: 'signed_out' })
-        }
-      }
-    )
-    const unsubscribe = subscribeAccountUpdates((next) => {
-      if (!cancelled) {
-        setStatus(next)
-      }
-    })
-    return () => {
-      cancelled = true
-      unsubscribe()
-    }
-  }, [])
-  return status
 }
 
 /**

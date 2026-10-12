@@ -20,7 +20,10 @@ import { AiOperationGuard } from '../ai/ai-operation-guard'
 import { AiProviderService } from '../ai/ai-provider-service'
 import { ElectronSafeStorageCredentialProtector, type CredentialProtector } from '../ai/credential-protector'
 import { OpenAiProviderAdapter, createOpenAiClient, type OpenAiClientFactory } from '../ai/openai-adapter'
-import { ProviderRegistry } from '../ai/provider-adapter'
+import { StarkHostedUnavailableError } from '../ai/errors'
+import { StarkHostedProviderAdapter } from '../hosted-inference/stark-hosted-adapter'
+import { createHostedSessionProvider, hostedFunctionUrl, type HostedSessionDeps } from '../hosted-inference/hosted-session'
+import { ProviderRegistry, type HostedSessionProvider } from '../ai/provider-adapter'
 import { CodingSessionService } from '../sessions/coding-session-service'
 import { HeartService } from '../heart/heart-service'
 import { LooplinkService } from '../looplink/looplink-service'
@@ -186,10 +189,15 @@ export interface ProviderConstruction {
   readonly credentialProtector?: CredentialProtector
   readonly openAiClientFactory?: OpenAiClientFactory
   /**
-   * Fully prebuilt registry (tests only). When supplied, the default
-   * OpenAI registration is skipped so suites can register fakes.
+   * Fully prebuilt registry (tests only). When supplied, both default
+   * registrations (OpenAI BYOK + STARK hosted) are skipped so suites
+   * can register fakes.
    */
   readonly registry?: ProviderRegistry
+  /** Prebuilt hosted session source (tests only). Defaults to the cloud session. */
+  readonly hostedSessionProvider?: HostedSessionProvider
+  /** Hosted inference fetch override (tests only). Defaults to global fetch. */
+  readonly hostedFetch?: typeof fetch
   /** Stage 29 cloud-auth seams (tests only). Defaults use Supabase + system browser. */
   readonly cloudAuthAdapter?: CloudAuthAdapter
   readonly cloudBrowserOpener?: BrowserOpener
@@ -200,14 +208,66 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
   // One shared writer: the Stage 8 mutation primitive used both directly
   // by IPC writes and indirectly by transaction accept/rollback.
   const fileWriteService = new WorkspaceFileWriteService(deps.workspaces)
-  // Provider foundation: explicit registry with exactly one adapter.
-  // No dynamic loading, no renderer-defined providers.
+  const protector = providers?.credentialProtector ?? new ElectronSafeStorageCredentialProtector()
+  // Stage 29 cloud account (built early: the hosted provider below
+  // needs the same session pieces). Supabase public config is
+  // application-owned; when absent the adapter reports unconfigured
+  // and local STARK stays fully usable. Auth material never touches
+  // AI/provider code — only the narrow hosted session seam below.
+  const cloudAccountStore = deps.cloudAccountStore
+  let cloudAccountService: CloudAccountService | undefined
+  let cloudAdapterForHosted: CloudAuthAdapter | undefined
+  let cloudProtectorForHosted: SessionProtector | undefined
+  if (cloudAccountStore !== undefined) {
+    const cloudProtector = new SessionProtector(protector)
+    const cloudAdapter: CloudAuthAdapter =
+      providers?.cloudAuthAdapter ?? new SupabaseAuthAdapter(loadSupabasePublicConfig())
+    const cloudOpener: BrowserOpener = providers?.cloudBrowserOpener ?? openSystemBrowserOnce
+    cloudAccountService = new CloudAccountService({
+      repository: cloudAccountStore,
+      sessionProtector: cloudProtector,
+      authAdapter: cloudAdapter,
+      attempts: new OAuthAttemptManager(providers?.cloudNow),
+      browserOpener: cloudOpener,
+      now: providers?.cloudNow
+    })
+    cloudAdapterForHosted = cloudAdapter
+    cloudProtectorForHosted = cloudProtector
+  }
+  // Provider foundation: explicit registry with the STARK hosted
+  // adapter plus the optional OpenAI BYOK adapter. No dynamic
+  // loading, no renderer-defined providers.
   const registry = providers?.registry ?? new ProviderRegistry()
+  let hostedSessionProvider: HostedSessionProvider | undefined
   if (providers?.registry === undefined) {
     registry.register(new OpenAiProviderAdapter(providers?.openAiClientFactory ?? createOpenAiClient))
+    hostedSessionProvider =
+      providers?.hostedSessionProvider ??
+      (cloudAccountStore !== undefined && cloudAdapterForHosted !== undefined && cloudProtectorForHosted !== undefined
+        ? createHostedSessionProvider({
+            repository: cloudAccountStore,
+            protector: cloudProtectorForHosted,
+            adapter: cloudAdapterForHosted,
+            now: providers?.cloudNow
+          } satisfies HostedSessionDeps)
+        : undefined)
+    registry.register(
+      new StarkHostedProviderAdapter({
+        session:
+          hostedSessionProvider ??
+          ({
+            getAccessToken: async (): Promise<string> => {
+              throw new StarkHostedUnavailableError()
+            }
+          } satisfies HostedSessionProvider),
+        functionUrl: () => hostedFunctionUrl(),
+        ...(providers?.hostedFetch === undefined ? {} : { fetchFn: providers.hostedFetch })
+      })
+    )
   }
-  const protector = providers?.credentialProtector ?? new ElectronSafeStorageCredentialProtector()
-  const aiProviderService = new AiProviderService(deps.aiProviders, protector, registry)
+  const aiProviderService = new AiProviderService(deps.aiProviders, protector, registry, {
+    ...(hostedSessionProvider === undefined ? {} : { hostedSessionProvider })
+  })
   const heartService =
     deps.heartStore === undefined
       ? undefined
@@ -516,26 +576,6 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
           },
           undefined
         )
-  // Stage 29 optional cloud account: built only when the cloud tables
-  // exist. Supabase public config is application-owned; when absent
-  // the adapter reports unconfigured and local STARK stays fully
-  // usable. Auth material never touches AI/provider code.
-  const cloudAccountStore = deps.cloudAccountStore
-  let cloudAccountService: CloudAccountService | undefined
-  if (cloudAccountStore !== undefined) {
-    const cloudProtector = new SessionProtector(protector)
-    const cloudAdapter: CloudAuthAdapter =
-      providers?.cloudAuthAdapter ?? new SupabaseAuthAdapter(loadSupabasePublicConfig())
-    const cloudOpener: BrowserOpener = providers?.cloudBrowserOpener ?? openSystemBrowserOnce
-    cloudAccountService = new CloudAccountService({
-      repository: cloudAccountStore,
-      sessionProtector: cloudProtector,
-      authAdapter: cloudAdapter,
-      attempts: new OAuthAttemptManager(providers?.cloudNow),
-      browserOpener: cloudOpener,
-      now: providers?.cloudNow
-    })
-  }
   return {
     settingsService: new SettingsService(deps.keyValue),
     profileService: new ProfileService(deps.keyValue),

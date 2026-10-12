@@ -4,14 +4,18 @@
  * ONE canonical contract for the renderer, preload, and main process.
  * Plain TypeScript only — no Node.js or DOM APIs.
  *
- * Stage 14 has exactly one network provider: OpenAI. The contracts
- * are provider-neutral so future adapters can register without
- * changing Session/UI/storage foundations. Credentials NEVER appear
- * in any contract below — not plaintext, not encrypted bytes.
+ * Stage 14 has exactly one network provider: OpenAI. The hosted
+ * STARK provider (`stark`) joined later for the Free catalog: it
+ * carries no user credential — authentication is the signed-in
+ * account session, owned main-side. The contracts are provider-neutral
+ * so future adapters can register without changing Session/UI/storage
+ * foundations. Credentials NEVER appear in any contract below — not
+ * plaintext, not encrypted bytes. Account access tokens never appear
+ * either: the hosted adapter receives its bearer main-side per call.
  */
 
-/** Known provider IDs. Only 'openai' exists in Stage 14. */
-export type ProviderId = 'openai'
+/** Known provider IDs: `stark` hosted Free inference plus optional `openai` BYOK. */
+export type ProviderId = 'openai' | 'stark'
 
 /** One discoverable model: ID only, no provider internals. */
 export interface ProviderModel {

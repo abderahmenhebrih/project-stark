@@ -51,6 +51,8 @@ import {
   setProviderModel,
   testProviderConnection
 } from '../../lib/providers-api'
+import { isAccountSignedIn } from '../account/account-state'
+import { useAccountStatus } from '../account/use-account-status'
 import { listRecentOrchestrationRuns } from '../../lib/orchestration-api'
 import {
   PROVIDER_GENERIC_MESSAGE,
@@ -100,6 +102,9 @@ import {
 import { getHeartConfig, saveHeartConfig } from '../../lib/heart-api'
 import { initialHeartPanelState, heartPanelReducer } from './heart-state'
 import { initialModelChainsPanelState, modelChainsPanelReducer } from '../settings/sections/models/model-chains-state'
+import { createDefaultFreeBrainChain, createDefaultFreeHeartChain, deriveModelLibrary, findLibraryModel } from '../settings/sections/models/model-library'
+import { chooseDefaultModel, discoverySettled, effectiveSelectedModel } from '../settings/sections/models/model-compatibility'
+import type { ProviderModel } from '../../../../shared/providers/types'
 import { dismissRecovery, getRecoveryConfig, getRecoveryForTarget, saveRecoveryConfig } from '../../lib/recovery-api'
 import { initialRecoveryPanelState, recoveryPanelReducer, recoverySourceCopy, recoveryTargetCopy } from './recovery-state'
 import {
@@ -387,6 +392,17 @@ export function SessionPanel({
   // renderer/session-local ordered stable model ids, workspace-scoped
   // like every other panel state. No persistence (schema stays v19),
   // no IPC, no secrets — configuration for the later AI pass only.
+  // STARK Free composer selection: intrinsic catalog state, always
+  // present with zero provider setup. Defaults to the first Free
+  // Brain default (GPT 5.6 Luna) per the existing default policy.
+  // Renderer/session-local like the chain configuration — no
+  // persistence, no IPC. An optional connected BYOK model takes
+  // precedence for actual execution (the only runnable route) while
+  // the Free selection remains the displayed product default.
+  const [starkModel, setStarkModel] = useState<string>(() => {
+    const defaults = createDefaultFreeBrainChain()
+    return defaults[0] ?? 'builtin:gpt-5.6-luna'
+  })
   const [modelChains, modelChainsDispatch] = useReducer(modelChainsPanelReducer, workspaceId, (id) => ({
     ...initialModelChainsPanelState(),
     workspaceId: id
@@ -552,10 +568,40 @@ export function SessionPanel({
   }, [targetMenuOpen, effortMenuOpen])
 
   // Canonical provider readiness: the session banner AND the Usage
-  // sidebar render from this one value, so "not connected" and
-  // "configured" can never contradict each other.
-  const readiness = providerReadiness(provider.configured, provider.selectedModel)
+  // sidebar render from this one value. The optional BYOK lane keeps
+  // the not-configured/needs-model/ready selector; globally a signed-in
+  // account without BYOK is Free (hosted inference), and only a
+  // signed-out session is not-configured — a sign-in prompt, never an
+  // OpenAI demand. Account truth is the single shared hook (same
+  // main-owned sanitized status Account Settings reads); the strict
+  // signed_in gate below never bypasses hosted authentication.
+  const accountStatus = useAccountStatus()
+  const accountSignedIn = isAccountSignedIn(accountStatus)
+  const byokModel = effectiveSelectedModel(
+    OPENAI_PROVIDER_ID,
+    provider.models,
+    provider.modelsError,
+    provider.selectedModel
+  )
+  const byokReadiness = providerReadiness(provider.configured, byokModel)
+  const readiness: ProviderReadiness =
+    byokReadiness === 'ready' ? 'ready' : accountSignedIn ? 'free' : 'not-configured'
   const aiReady = canSendWithProvider(readiness)
+  // Composer model: the runnable BYOK selection when present,
+  // otherwise the STARK Free selection (display name for Free ids).
+  const starkDisplayName =
+    findLibraryModel(deriveModelLibrary(provider), starkModel)?.displayName ?? 'STARK Free model'
+  const composerModelLabel = byokModel ?? starkDisplayName
+  // Routing stable id: BYOK travels as its `openai:*` label (main
+  // keeps persisted BYOK authority); Free travels as `builtin:*`.
+  const composerModelStableId = byokModel !== null ? `openai:${byokModel}` : starkModel
+  // LoopLink snapshots (P0): ordered ENABLED ids from Settings →
+  // Models → Brain/Heart LoopLink. Included in every AI request so
+  // the NEXT run uses the current UI order immediately.
+  // Session-local, no persistence (schema v19). Main validates
+  // authoritatively (known id, max 5, no duplicates).
+  const brainChainSnapshot = [...modelChains.brain]
+  const heartChainSnapshot = [...modelChains.heart]
 
   function scrollToBottom(): void {
     const element = messagesScrollRef.current
@@ -581,6 +627,13 @@ export function SessionPanel({
           return
         }
         providerDispatch({ type: 'state-loaded', workspaceId, requestId, state: providerState })
+        // Restart restore: credentials persist main-side, so a
+        // configured provider refreshes its sanitized model list in
+        // the background — exactly one bounded call, never blocking
+        // startup, failures settling as Retry-able models state.
+        if (providerState.configured) {
+          void refreshDiscoveredModels(providerState.selectedModel)
+        }
       },
       (error: unknown) => {
         if (providerStateRequestRef.current !== requestId) {
@@ -594,6 +647,36 @@ export function SessionPanel({
         })
       }
     )
+  }
+
+  /**
+   * Bounded background model discovery (mount/restart path): one
+   * list call, no retries, no polling. Failure keeps the saved
+   * credential and configuration — only the models row reports the
+   * error with Retry.
+   */
+  async function refreshDiscoveredModels(selected: string | null): Promise<void> {
+    const requestId = providerModelsRequestRef.current + 1
+    providerModelsRequestRef.current = requestId
+    providerDispatch({ type: 'models-loading', workspaceId, requestId })
+    try {
+      const models = await listProviderModels(OPENAI_PROVIDER_ID)
+      if (providerModelsRequestRef.current !== requestId) {
+        return
+      }
+      providerDispatch({ type: 'models-loaded', workspaceId, requestId, models })
+      await ensureDefaultModelSelection(models, selected)
+    } catch (error: unknown) {
+      if (providerModelsRequestRef.current !== requestId) {
+        return
+      }
+      providerDispatch({
+        type: 'models-failed',
+        workspaceId,
+        requestId,
+        message: toProviderErrorMessage(error, PROVIDER_GENERIC_MESSAGE)
+      })
+    }
   }
 
   async function refreshHeartConfig(targetWorkspaceId: number): Promise<void> {
@@ -1016,7 +1099,7 @@ export function SessionPanel({
     generationRequestRef.current = requestId
     dispatch({ type: 'generate-started', workspaceId, sessionId, requestId })
     try {
-      const outcome = await generateAssistantResponseRaw({ workspaceId, sessionId, effort })
+      const outcome = await generateAssistantResponseRaw({ workspaceId, sessionId, effort, model: composerModelStableId, brainModels: brainChainSnapshot })
       if (generationRequestRef.current !== requestId) {
         return
       }
@@ -1458,7 +1541,7 @@ export function SessionPanel({
     proposalDispatch({ type: 'proposal-started', workspaceId, sessionId, kind })
     if (kind === 'multi') {
       try {
-        const outcome = await proposeAiChangeSet({ workspaceId, sessionId, effort })
+        const outcome = await proposeAiChangeSet({ workspaceId, sessionId, effort, model: composerModelStableId, brainModels: brainChainSnapshot })
         proposalDispatch({
           type: 'change-set-succeeded',
           workspaceId,
@@ -1476,7 +1559,7 @@ export function SessionPanel({
       return
     }
     try {
-      const outcome = await proposeAiFileChange({ workspaceId, sessionId, effort })
+      const outcome = await proposeAiFileChange({ workspaceId, sessionId, effort, model: composerModelStableId, brainModels: brainChainSnapshot })
       proposalDispatch({
         type: 'proposal-succeeded',
         workspaceId,
@@ -1502,7 +1585,7 @@ export function SessionPanel({
     proposalDispatch({ type: 'proposal-retried', workspaceId, sessionId })
     if ((proposal.activeKind ?? 'single') === 'multi') {
       try {
-        const outcome = await proposeAiChangeSet({ workspaceId, sessionId, effort })
+        const outcome = await proposeAiChangeSet({ workspaceId, sessionId, effort, model: composerModelStableId, brainModels: brainChainSnapshot })
         proposalDispatch({
           type: 'change-set-succeeded',
           workspaceId,
@@ -1520,7 +1603,7 @@ export function SessionPanel({
       return
     }
     try {
-      const outcome = await proposeAiFileChange({ workspaceId, sessionId, effort })
+      const outcome = await proposeAiFileChange({ workspaceId, sessionId, effort, model: composerModelStableId, brainModels: brainChainSnapshot })
       proposalDispatch({
         type: 'proposal-succeeded',
         workspaceId,
@@ -1927,7 +2010,7 @@ export function SessionPanel({
     }
     workDispatch({ type: 'run-started', workspaceId, sessionId })
     try {
-      const outcome = await runBrainWorkRaw({ workspaceId, sessionId, effort })
+      const outcome = await runBrainWorkRaw({ workspaceId, sessionId, effort, model: composerModelStableId, brainModels: brainChainSnapshot, heartModels: heartChainSnapshot })
       if (!('kind' in outcome)) {
         const legacy = outcome as { run: never; session: never; message: never }
         stickToBottomRef.current = true
@@ -1986,7 +2069,7 @@ export function SessionPanel({
     const sessionId = state.selectedSessionId
     workDispatch({ type: 'run-retried', workspaceId, sessionId })
     try {
-      const outcome = await runBrainWorkRaw({ workspaceId, sessionId, effort })
+      const outcome = await runBrainWorkRaw({ workspaceId, sessionId, effort, model: composerModelStableId, brainModels: brainChainSnapshot, heartModels: heartChainSnapshot })
       if (!('kind' in outcome)) {
         const legacy = outcome as { run: never; session: never; message: never }
         stickToBottomRef.current = true
@@ -2179,6 +2262,9 @@ export function SessionPanel({
       // from storage. There is no "show saved key" path.
       setApiKeyInput('')
       setRevealKey(false)
+      // Automatic discovery: a saved key immediately verifies and
+      // populates the library — no manual model step follows.
+      await discoverModelsAfterConnect(providerState.selectedModel)
     } catch (error: unknown) {
       providerDispatch({
         type: 'state-failed',
@@ -2203,10 +2289,62 @@ export function SessionPanel({
     }
   }
 
-  async function handleTestConnection(): Promise<void> {
-    if (!provider.configured) {
+  /**
+   * Optional OpenAI BYOK disconnect: deletes the stored credential
+   * through the narrow main-owned path, then cleans renderer state —
+   * discovered models, the active BYOK selection/draft, the key input,
+   * and any disconnected openai:* LoopLink entries (builtins keep
+   * their order; each chain keeps at least one builtin model). The
+   * STARK Free selection is preserved when still a valid builtin,
+   * otherwise reset to the Free default. Account auth, hosted STARK
+   * inference, and other providers are never touched.
+   */
+  async function handleDisconnect(): Promise<void> {
+    try {
+      const providerState = await clearProviderCredential(OPENAI_PROVIDER_ID)
+      providerDispatch({ type: 'disconnected', workspaceId, requestId: provider.requestId, state: providerState })
+    } catch (error: unknown) {
+      providerDispatch({
+        type: 'state-failed',
+        workspaceId,
+        requestId: provider.requestId,
+        message: toProviderErrorMessage(error, PROVIDER_GENERIC_MESSAGE)
+      })
       return
     }
+    setModelDraft(null)
+    setApiKeyInput('')
+    setRevealKey(false)
+    for (const chain of ['brain', 'heart'] as const) {
+      const current = chain === 'brain' ? modelChains.brain : modelChains.heart
+      for (const stableId of current) {
+        if (stableId.startsWith('openai:')) {
+          modelChainsDispatch({ type: 'chain-remove', workspaceId, chain, stableId })
+        }
+      }
+      const remaining = current.filter((stableId) => !stableId.startsWith('openai:'))
+      if (remaining.length === 0) {
+        const fallback =
+          (chain === 'brain' ? createDefaultFreeBrainChain() : createDefaultFreeHeartChain())[0] ??
+          'builtin:gpt-5.6-luna'
+        modelChainsDispatch({ type: 'chain-add', workspaceId, chain, stableId: fallback })
+      }
+    }
+    const starkEntry = findLibraryModel(deriveModelLibrary(provider), starkModel)
+    if (starkEntry === undefined || starkEntry.origin !== 'built-in') {
+      setStarkModel(createDefaultFreeBrainChain()[0] ?? 'builtin:gpt-5.6-luna')
+    }
+  }
+
+  /**
+   * Automatic provider model discovery: one bounded connection test
+   * whose single response also supplies the model list (no second
+   * network call), then a deterministic default selection when none
+   * runnable is selected. A failed discovery never touches the saved
+   * credential or configuration — the provider stays Connected-ready
+   * and the Retry path re-runs this same flow.
+   */
+  async function discoverModelsAfterConnect(selected: string | null): Promise<void> {
     const requestId = providerConnectionRequestRef.current + 1
     providerConnectionRequestRef.current = requestId
     providerDispatch({ type: 'connection-started', workspaceId, requestId })
@@ -2222,6 +2360,9 @@ export function SessionPanel({
         status: result.status,
         models: result.models
       })
+      if (result.status === 'connected') {
+        await ensureDefaultModelSelection(result.models, selected)
+      }
     } catch (error: unknown) {
       if (providerConnectionRequestRef.current !== requestId) {
         return
@@ -2235,34 +2376,67 @@ export function SessionPanel({
     }
   }
 
-  async function handleRefreshModels(): Promise<void> {
-    if (!provider.configured || provider.loadingModels) {
+  /**
+   * Persists the deterministic default runnable model when the
+   * current selection is absent or no longer compatible. Keeping an
+   * existing compatible selection is preferred (no churn); failures
+   * surface through the standard provider error path so a failed
+   * auto-select never breaks the connection flow.
+   */
+  async function ensureDefaultModelSelection(
+    models: readonly ProviderModel[],
+    selected: string | null
+  ): Promise<void> {
+    const choice = chooseDefaultModel(
+      OPENAI_PROVIDER_ID,
+      models.map((entry) => entry.id),
+      selected
+    )
+    if (choice === null || choice === selected) {
       return
     }
-    const requestId = providerModelsRequestRef.current + 1
-    providerModelsRequestRef.current = requestId
-    providerDispatch({ type: 'models-loading', workspaceId, requestId })
     try {
-      const models = await listProviderModels(OPENAI_PROVIDER_ID)
-      if (providerModelsRequestRef.current !== requestId) {
-        return
-      }
-      providerDispatch({ type: 'models-loaded', workspaceId, requestId, models })
+      const providerState = await setProviderModel({ providerId: OPENAI_PROVIDER_ID, model: choice })
+      providerDispatch({ type: 'state-loaded', workspaceId, requestId: provider.requestId, state: providerState })
     } catch (error: unknown) {
-      if (providerModelsRequestRef.current !== requestId) {
-        return
-      }
       providerDispatch({
-        type: 'models-failed',
+        type: 'state-failed',
         workspaceId,
-        requestId,
+        requestId: provider.requestId,
         message: toProviderErrorMessage(error, PROVIDER_GENERIC_MESSAGE)
       })
     }
   }
 
-  async function handleUseModel(): Promise<void> {
-    if (modelDraft === null || modelDraft === provider.selectedModel) {
+  async function handleTestConnection(): Promise<void> {
+    if (!provider.configured) {
+      return
+    }
+    await discoverModelsAfterConnect(provider.selectedModel)
+  }
+
+  async function handleRefreshModels(): Promise<void> {
+    if (!provider.configured || provider.loadingModels) {
+      return
+    }
+    await refreshDiscoveredModels(provider.selectedModel)
+  }
+
+  /**
+   * Selects a STARK Free catalog model for the composer. Only genuine
+   * builtin catalog entries are accepted — anything else is ignored.
+   * Selection is renderer-local (no IPC, no persistence); an optional
+   * connected BYOK model still takes precedence for actual execution.
+   */
+  function handleSelectStarkModel(stableId: string): void {
+    const entry = findLibraryModel(deriveModelLibrary(provider), stableId)
+    if (entry === undefined || entry.origin !== 'built-in') {
+      return
+    }
+    setStarkModel(stableId)
+  }
+
+  async function handleUseModel(): Promise<void> {    if (modelDraft === null || modelDraft === provider.selectedModel) {
       return
     }
     try {
@@ -2339,8 +2513,13 @@ export function SessionPanel({
     !state.loadingMessages
   const modelValue = modelDraft ?? provider.selectedModel ?? ''
   const selectedModel = provider.selectedModel
+  // Missing only once discovery has settled: before the first
+  // background refresh the persisted selection is trusted (see
+  // effectiveSelectedModel), so restart never flashes Unavailable.
   const selectedModelMissing =
-    selectedModel !== null && !provider.models.some((entry) => entry.id === selectedModel)
+    selectedModel !== null &&
+    discoverySettled(provider.models, provider.modelsError) &&
+    byokModel === null
   // Empty-conversation watermark: the official wordmark shows only
   // while the ACTIVE session truly has no conversation content yet.
   // Draft text alone never hides it; any message, send, generation,
@@ -2388,7 +2567,7 @@ export function SessionPanel({
         effort,
         agentLabel: agentTargetLabel(agentTarget, providers),
         providerStatus: readiness,
-        providerModel: provider.selectedModel,
+        providerModel: composerModelLabel,
         selectedSessionCreatedAt: selectedSession?.createdAt ?? null,
         planLabel: sponsorProductEntitlements.planLabel,
         usageSummary: usage.summary,
@@ -2436,37 +2615,24 @@ export function SessionPanel({
       )}
       <p className="session__notice" role="status">
         {aiReady ? (
-          `OpenAI · ${provider.selectedModel ?? ''}`
-        ) : readiness === 'needs-model' ? (
-          <>
-            {'AI provider configured — select a model to connect.'}
-            {onOpenSettings !== undefined && (
-              <>
-                {' '}
-                <button
-                  className="explorer__secondary"
-                  type="button"
-                  onClick={() => onOpenSettings('models')}
-                  aria-label="Select AI model"
-                >
-                  Select model
-                </button>
-              </>
-            )}
-          </>
+          readiness === 'ready' ? (
+            `OpenAI · ${byokModel ?? ''}`
+          ) : (
+            `STARK Free · ${starkDisplayName}`
+          )
         ) : (
           <>
-            {'Local session — AI provider not connected yet.'}
+            {'Sign in to use STARK Free models.'}
             {onOpenSettings !== undefined && (
               <>
                 {' '}
                 <button
                   className="explorer__secondary"
                   type="button"
-                  onClick={() => onOpenSettings('models')}
-                  aria-label="Connect AI provider"
+                  onClick={() => onOpenSettings('account')}
+                  aria-label="Sign in"
                 >
-                  Connect AI
+                  Sign in
                 </button>
               </>
             )}
@@ -2512,6 +2678,7 @@ export function SessionPanel({
               onModelDraftChange: setModelDraft,
               onSaveKey: () => void handleSaveKey(),
               onRemoveKey: () => void handleRemoveKey(),
+              onDisconnect: () => void handleDisconnect(),
               onTestConnection: () => void handleTestConnection(),
               onRefreshModels: () => void handleRefreshModels(),
               onUseModel: () => void handleUseModel(),
@@ -2539,6 +2706,8 @@ export function SessionPanel({
                 modelChainsDispatch({ type: 'model-swapped', workspaceId, chain, outgoingId, incomingId }),
               onReorderModel: (chain, stableId, toIndex) =>
                 modelChainsDispatch({ type: 'model-reordered', workspaceId, chain, stableId, toIndex }),
+              starkModel,
+              onSelectStarkModel: (stableId) => handleSelectStarkModel(stableId),
               capabilities,
               capabilitiesDispatch,
               onSaveCapabilities: () => void handleSaveCapabilities(),
@@ -2593,16 +2762,16 @@ export function SessionPanel({
               />
             )}
             {conversationEmpty && !aiReady && state.selectedSessionId !== null && (
-              <div className="session__empty-ai" role="status" aria-label="Connect an AI provider">
-                <p className="session__empty-ai-text">Connect an AI provider to use Ask and Work.</p>
+              <div className="session__empty-ai" role="status" aria-label="Sign in to use STARK Free">
+                <p className="session__empty-ai-text">Sign in to use STARK Free models.</p>
                 {onOpenSettings !== undefined && (
                   <button
                     className="explorer__secondary"
                     type="button"
-                    onClick={() => onOpenSettings('models')}
-                    aria-label="Add OpenAI key"
+                    onClick={() => onOpenSettings('account')}
+                    aria-label="Sign in"
                   >
-                    Add OpenAI key
+                    Sign in
                   </button>
                 )}
               </div>

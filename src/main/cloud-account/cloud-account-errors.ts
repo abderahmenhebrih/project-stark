@@ -108,6 +108,15 @@ export class CloudAuthSignOutFailedError extends CloudAccountError {
   }
 }
 
+/** No usable signed-in session exists (signed out, expired beyond refresh, or corrupt). */
+export class CloudAuthSignInRequiredError extends CloudAccountError {
+  override readonly name = 'CloudAuthSignInRequiredError'
+
+  constructor() {
+    super('cloud-auth-sign-in-required')
+  }
+}
+
 export type CloudAccountOperation = 'status' | 'start' | 'cancel' | 'sign-out' | 'callback' | 'restore'
 
 const GENERIC_BY_OPERATION: Record<CloudAccountOperation, string> = {
@@ -134,7 +143,8 @@ export function toPublicAccountError(operation: CloudAccountOperation, error: un
     error instanceof CloudAuthExchangeFailedError ||
     error instanceof CloudAuthSecureStorageUnavailableError ||
     error instanceof CloudAuthSaveFailedError ||
-    error instanceof CloudAuthSignOutFailedError
+    error instanceof CloudAuthSignOutFailedError ||
+    error instanceof CloudAuthSignInRequiredError
   ) {
     return new Error(error.message)
   }
@@ -154,6 +164,7 @@ export function isPublicAccountErrorMessage(message: string): boolean {
     message === 'cloud-auth-exchange-failed' ||
     message === 'cloud-auth-secure-storage-unavailable' ||
     message === 'cloud-auth-save-failed' ||
-    message === 'cloud-auth-signout-failed'
+    message === 'cloud-auth-signout-failed' ||
+    message === 'cloud-auth-sign-in-required'
   )
 }

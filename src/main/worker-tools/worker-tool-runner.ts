@@ -17,7 +17,7 @@ import {
   SessionWorkspaceMismatchError,
   SessionWorkspaceUnavailableError
 } from '../sessions/errors'
-import { GenerationInFlightError, ProviderStructuredOutputUnsupportedError } from '../ai/errors'
+import { GenerationInFlightError, ProviderModelUnavailableError, ProviderStructuredOutputUnsupportedError } from '../ai/errors'
 import {
   BrainNothingToAnswerError,
   InvalidBrainPlanError,
@@ -39,7 +39,7 @@ import {
 } from '../ai/limits'
 import { BRAIN_PLAN_JSON_SCHEMA, BRAIN_PLAN_SCHEMA_NAME } from '../ai/ai-brain-service'
 import type { ChatAttachmentService } from '../chat-attachments/service'
-import { attachmentsNeedVision, workerAttachmentsRelevant } from '../ai/ai-attachment-context'
+import { attachmentsNeedVision, VisionUnsupportedForModelError, workerAttachmentsRelevant } from '../ai/ai-attachment-context'
 import { buildChatAttachmentSection, type ChatAttachmentSection } from '../ai/ai-attachment-resolver'
 import type { CapabilityGate } from '../capabilities/capability-gate'
 import type { WorkspaceFilesService } from '../workspace-files/workspace-files-service'
@@ -108,6 +108,7 @@ import {
   WorkerToolLimitError,
   WorkerToolsUnsupportedError
 } from './worker-tool-errors'
+import { LoopLinkHeartEmptyError, eligibleLoopLinkModels, readLoopLinkChain, runLoopLinkChain } from '../ai/looplink-chain'
 
 const encoder = new TextEncoder()
 
@@ -417,7 +418,7 @@ export class WorkerToolRunner {
   }
 
   async runToolWork(payload: unknown): Promise<WorkRecoveryResult> {
-    const { workspaceId, sessionId, effort } = this.parseScope(payload)
+    const { workspaceId, sessionId, effort, brainChain, heartChain } = this.parseScope(payload)
     this.requireOwnership(workspaceId, sessionId)
     if (this.deps.tools.hasPending(sessionId)) {
       throw new PendingApprovalBlockedError()
@@ -427,7 +428,7 @@ export class WorkerToolRunner {
     }
     this.deps.guard.acquire(sessionId)
     try {
-      return await this.runInner(workspaceId, sessionId, effort)
+      return await this.runInner(workspaceId, sessionId, effort, brainChain, heartChain)
     } finally {
       if (!this.deps.guard.isActive(sessionId)) {
         // Already released on the waiting path.
@@ -469,10 +470,11 @@ export class WorkerToolRunner {
     }
   }
 
-  private parseScope(payload: unknown): { workspaceId: number; sessionId: number; effort: StarkEffort } {
+  private parseScope(payload: unknown): { workspaceId: number; sessionId: number; effort: StarkEffort; brainChain: readonly string[] | null; heartChain: readonly string[] | null } {
     // 'effort' is optional (Regular baseline when absent); a
     // present-but-invalid value is rejected, never defaulted silently.
-    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort'])) {
+    // 'brainModels'/'heartModels' are optional LoopLink snapshots.
+    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort', 'brainModels', 'heartModels'])) {
       throw new InvalidBrainRequestError('brain request is invalid')
     }
     const record = payload as Record<string, unknown>
@@ -487,7 +489,18 @@ export class WorkerToolRunner {
       }
       effort = record['effort']
     }
-    return { workspaceId, sessionId, effort }
+    const brainChain = readLoopLinkChain(record, 'brainModels', 'brain')
+    const heartChain: readonly string[] | null = (() => {
+      try {
+        return readLoopLinkChain(record, 'heartModels', 'heart')
+      } catch (error) {
+        if (error instanceof LoopLinkHeartEmptyError) {
+          return []
+        }
+        throw error
+      }
+    })()
+    return { workspaceId, sessionId, effort, brainChain, heartChain }
   }
 
   private parseDecision(payload: unknown): { workspaceId: number; sessionId: number; approvalId: number } {
@@ -747,7 +760,7 @@ export class WorkerToolRunner {
     return [...base.slice(0, -1), { role: 'user' as const, content: block }, trailing]
   }
 
-  private async runInner(workspaceId: number, sessionId: number, effort: StarkEffort = 'regular'): Promise<WorkRecoveryResult> {
+  private async runInner(workspaceId: number, sessionId: number, effort: StarkEffort = 'regular', brainChain: readonly string[] | null = null, heartChain: readonly string[] | null = null): Promise<WorkRecoveryResult> {
     const latest = this.deps.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
     if (latest === undefined || latest.role !== 'user') {
       throw new BrainNothingToAnswerError()
@@ -784,9 +797,10 @@ export class WorkerToolRunner {
     const loop = this.deps.looplink?.service.getPendingBlock(workspaceId, sessionId) ?? null
     const runId = this.deps.runs.createRun({ workspaceId, sessionId, userMessageId: latest.id, now: this.now() })
     // Stage 28 Brain threshold route: selected once, used for BOTH
-    // plan and synthesis. The alternate is terminal.
-    const brainRouted = this.applyThreshold(usageSnap, 'brain.primary', routing.brain)
-    if (usageSnap !== null) {
+    // plan and synthesis. The alternate is terminal. LoopLink Brain
+    // chains bypass thresholds (explicit user order takes precedence).
+    let brainRouted = this.applyThreshold(usageSnap, 'brain.primary', routing.brain)
+    if (usageSnap !== null && brainChain === null) {
       this.recordRouteDecision({
         runId,
         role: 'brain',
@@ -810,22 +824,88 @@ export class WorkerToolRunner {
     }
     try {
       this.requireDeadline(deadline)
-      const brainResolved = await this.deps.providerService.resolveExplicitAssignment(brainRouted.assignment.providerId, brainRouted.assignment.model).catch((error: unknown) => {
+      // LoopLink Brain chain for plan (P0): ordered failover, first
+      // enabled is primary. Takes precedence over threshold routing.
+      // Synthesis below reuses the successful plan model (pinned) so
+      // tool runs never drift mid-run; usage/steps record the actual.
+      let brainResolved: Awaited<ReturnType<typeof this.deps.providerService.resolveExplicitAssignment>>
+      let brainModel: string
+      let plan: { action: 'answer' | 'delegate'; planSummary: string; finalAnswer: string | null; workerInstruction: string | null; workerProfile: string }
+      if (brainChain !== null) {
+        const eligiblePlan = eligibleLoopLinkModels(brainChain, { needsStructured: true, needsVision: false })
+        if (eligiblePlan.length === 0) {
+          throw new ProviderStructuredOutputUnsupportedError()
+        }
+        const planBase =
+          persisted.length === 0
+            ? context
+            : [...context.slice(0, -1), { role: 'user' as const, content: formatProviderContext(persisted) }, trailing]
+        const outcome = await runLoopLinkChain(
+          eligiblePlan,
+          async (_modelId, assignment) => {
+            const resolved = await this.deps.providerService.resolveExplicitAssignment(assignment.providerId, assignment.model).catch((error: unknown) => {
+              throw markInteractive(error)
+            })
+            try {
+              if (typeof resolved.adapter.generateStructured !== 'function') {
+                throw new ProviderStructuredOutputUnsupportedError()
+              }
+              const generateStructured = resolved.adapter.generateStructured.bind(resolved.adapter)
+              const policy = deriveStarkRunPolicy(effort, resolved.model)
+              const section = this.planChatSection(latest.id, resolved.adapter.id, resolved.model)
+              const baseWithChat = this.withChatAttachmentBlock(planBase, section.block)
+              const messages =
+                loop === null
+                  ? baseWithChat
+                  : [...baseWithChat.slice(0, -1), { role: 'user' as const, content: loop.block }, baseWithChat[baseWithChat.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }]
+              const planned = await this.trackCall(
+                { operation: 'brain_plan', workspaceId, sessionId, runId },
+                resolved.adapter.id,
+                resolved.model,
+                () => (generateStructured as (req: { apiKey: string; model: string; instructions: string; messages: readonly { readonly role: 'user' | 'assistant'; readonly content: string }[]; maxOutputTokens: number; reasoningEffort?: string; schemaName: string; schema: unknown; attachments?: readonly unknown[] }) => Promise<{ outputText: string }>)({
+                  apiKey: resolved.apiKey,
+                  model: resolved.model,
+                  instructions: STAGE_18_FIXED_BRAIN_PLANNING_INSTRUCTIONS,
+                  messages,
+                  maxOutputTokens: policy.maxOutputTokens,
+                  ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
+                  schemaName: BRAIN_PLAN_SCHEMA_NAME,
+                  schema: BRAIN_PLAN_JSON_SCHEMA,
+                  ...(section.payloads.length > 0 ? { attachments: section.payloads } : {})
+                })
+              )
+              const parsed = this.parsePlan(planned.outputText)
+              return { parsed, resolved, resolvedModel: resolved.model }
+            } catch (error) {
+              throw markInteractive(error)
+            } finally {
+              void resolved.apiKey
+            }
+          },
+          { isCancelled: () => this.now() > deadline }
+        )
+        plan = outcome.result.parsed
+        brainResolved = outcome.result.resolved
+        brainModel = outcome.result.resolvedModel
+        brainRouted = { ...brainRouted, assignment: { ...outcome.assignment } }
+      } else {
+      const legacyResolved = await this.deps.providerService.resolveExplicitAssignment(brainRouted.assignment.providerId, brainRouted.assignment.model).catch((error: unknown) => {
         throw markInteractive(error)
       })
+      brainResolved = legacyResolved
       const brainAdapter = brainResolved.adapter
-      const brainModel = brainResolved.model
+      brainModel = brainResolved.model
       if (typeof brainAdapter.generateStructured !== 'function') {
         throw new ProviderStructuredOutputUnsupportedError()
       }
       // Captured after the guard so tracking closures keep the
       // narrowed function type (narrowing is lost inside closures).
       // Bound to preserve adapter `this`.
-      const generateStructured = brainAdapter.generateStructured.bind(brainAdapter)
+      const generateStructured = (brainAdapter.generateStructured as (...args: never[]) => unknown as unknown as (req: { apiKey: string; model: string; instructions: string; messages: readonly { readonly role: 'user' | 'assistant'; readonly content: string }[]; maxOutputTokens: number; reasoningEffort?: string; schemaName: string; schema: unknown; attachments?: readonly unknown[] }) => Promise<{ outputText: string }>).bind(brainAdapter)
       // Effort policy for the plan call (Regular = baseline tokens,
       // no reasoning parameter).
       const planPolicy = deriveStarkRunPolicy(effort, brainModel)
-      const planSection = this.planChatSection(latest.id, brainResolved.adapter.id, brainModel)
+      const planSection = this.planChatSection(latest.id, (brainResolved.adapter as { id: string }).id, brainModel)
       const planBase =
         persisted.length === 0
           ? context
@@ -835,11 +915,10 @@ export class WorkerToolRunner {
         loop === null
           ? planBaseWithChat
           : [...planBaseWithChat.slice(0, -1), { role: 'user' as const, content: loop.block }, planBaseWithChat[planBaseWithChat.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }]
-      let plan: { action: 'answer' | 'delegate'; planSummary: string; finalAnswer: string | null; workerInstruction: string | null; workerProfile: string }
       try {
         const planned = await this.trackCall(
           { operation: 'brain_plan', workspaceId, sessionId, runId },
-          brainResolved.adapter.id,
+          (brainResolved.adapter as { id: string }).id,
           brainModel,
           () => generateStructured({
             apiKey: brainResolved.apiKey,
@@ -858,6 +937,7 @@ export class WorkerToolRunner {
         throw markInteractive(error)
       } finally {
         void brainResolved.apiKey
+      }
       }
       this.deps.runs.appendStepWithModel(
         { runId, ordinal: 0, kind: 'brain_plan', status: 'completed', instruction: null, output: plan.planSummary, now: this.now() },
@@ -885,7 +965,7 @@ export class WorkerToolRunner {
         `worker.${workerRoute.routeKey}` as UsageThresholdRouteKey,
         workerRoute.assignment
       )
-      if (usageSnap !== null) {
+      if (usageSnap !== null && heartChain === null) {
         this.recordRouteDecision({
           runId,
           role: 'worker',
@@ -900,7 +980,7 @@ export class WorkerToolRunner {
           snapshotAt: usageSnap.snapshotAt
         })
       }
-      const selectedWorkerRoute = { assignment: workerRouted.assignment, routeKey: workerRoute.routeKey }
+      let selectedWorkerRoute = { assignment: workerRouted.assignment, routeKey: workerRoute.routeKey }
       // Explicit bounded Worker tool loop: at most 5 turns, 4 tools.
       const advertised = this.advertisedTools(workspaceId, sessionId)
       const history: PersistedToolState['history'] = []
@@ -916,6 +996,40 @@ export class WorkerToolRunner {
       for (let turn = 0; turn < maxTurns; turn += 1) {
         this.requireDeadline(deadline)
         let turnResult: { kind: 'tool_request'; tool: string; args: unknown } | { kind: 'final_text'; text: string }
+        if (heartChain !== null) {
+          // LoopLink Heart chain per worker turn (P0): ordered failover,
+          // first enabled is primary. Deferred empty-chain safety: only
+          // fails here (Heart-required phase), answer-only plans never
+          // reach this point.
+          if (heartChain.length === 0) {
+            throw new LoopLinkHeartEmptyError()
+          }
+          const eligibleWorker = eligibleLoopLinkModels(heartChain, { needsStructured: false, needsVision: chatNeedsVision })
+          if (eligibleWorker.length === 0) {
+            if (chatNeedsVision) {
+              throw new VisionUnsupportedForModelError()
+            }
+            throw new ProviderModelUnavailableError()
+          }
+          const outcome = await runLoopLinkChain(
+            eligibleWorker,
+            async (_modelId, assignment) => {
+              try {
+                return await this.workerTurn({
+                  workspaceId, sessionId, runId,
+                  workerRoute: { assignment: { providerId: assignment.providerId, model: assignment.model }, routeKey: selectedWorkerRoute.routeKey },
+                  advertised, contextMessages, persisted, activeText,
+                  activeMessageId: latest.id, continuityBlock, workerInstruction, history, operation: turn === 0 ? 'worker' : 'worker_followup'
+                })
+              } catch (error) {
+                throw markInteractive(error)
+              }
+            },
+            { isCancelled: () => this.now() > deadline }
+          )
+          turnResult = outcome.result
+          selectedWorkerRoute = { assignment: { ...outcome.assignment }, routeKey: selectedWorkerRoute.routeKey }
+        } else {
         try {
           turnResult = await this.workerTurn({
             workspaceId, sessionId, runId, workerRoute: selectedWorkerRoute, advertised, contextMessages, persisted, activeText,
@@ -923,6 +1037,7 @@ export class WorkerToolRunner {
           })
         } catch (error) {
           throw markInteractive(error)
+        }
         }
         if (turnResult.kind === 'final_text') {
           workerOutput = this.validateWorkerText(turnResult.text)

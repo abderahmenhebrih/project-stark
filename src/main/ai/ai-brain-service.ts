@@ -20,6 +20,7 @@ import {
 } from '../sessions/errors'
 import {
   GenerationInFlightError,
+  ProviderModelUnavailableError,
   ProviderStructuredOutputUnsupportedError
 } from './errors'
 import {
@@ -58,8 +59,11 @@ import type { LooplinkRepository } from '../looplink/looplink-repository'
 import type { LooplinkService } from '../looplink/looplink-service'
 import { formatProviderContext } from '../session-context/session-context-service'
 import type { ChatAttachmentService } from '../chat-attachments/service'
-import { attachmentsNeedVision, workerAttachmentsRelevant } from './ai-attachment-context'
+import { attachmentsNeedVision, VisionUnsupportedForModelError, workerAttachmentsRelevant } from './ai-attachment-context'
 import { buildChatAttachmentSection, type ChatAttachmentSection } from './ai-attachment-resolver'
+import { isHostedBuiltinModel } from '../../shared/hosted-models/stark-model-map'
+import { readRequestedModel } from './model-request'
+import { LoopLinkHeartEmptyError, eligibleLoopLinkModels, readLoopLinkChain, runLoopLinkChain } from './looplink-chain'
 
 const encoder = new TextEncoder()
 
@@ -350,7 +354,7 @@ export class AiBrainService {
   }
 
   async runBrain(payload: unknown): Promise<AiRunBrainResult> {
-    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort'])) {
+    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort', 'model', 'brainModels', 'heartModels'])) {
       throw new InvalidBrainRequestError('brain request is invalid')
     }
     const record = payload as Record<string, unknown>
@@ -368,6 +372,21 @@ export class AiBrainService {
       }
       effort = record['effort']
     }
+    const requestedModel = readRequestedModel(record)
+    const brainChain = readLoopLinkChain(record, 'brainModels', 'brain')
+    // Heart-empty is deferred: an empty Heart chain only fails when a
+    // Heart-required (delegate) phase actually runs. An answer-only
+    // plan must not fail on an empty Heart chain.
+    const heartChain: readonly string[] | null = (() => {
+      try {
+        return readLoopLinkChain(record, 'heartModels', 'heart')
+      } catch (error) {
+        if (error instanceof LoopLinkHeartEmptyError) {
+          return []
+        }
+        throw error
+      }
+    })()
     if (this.workspaces.findById(workspaceId) === undefined) {
       throw new SessionWorkspaceUnavailableError()
     }
@@ -386,7 +405,7 @@ export class AiBrainService {
     }
     this.guard.acquire(sessionId)
     try {
-      return await this.runInner(workspaceId, sessionId, effort)
+      return await this.runInner(workspaceId, sessionId, effort, requestedModel, brainChain, heartChain)
     } finally {
       this.guard.release(sessionId)
     }
@@ -546,7 +565,15 @@ export class AiBrainService {
     return [...base.slice(0, -1), { role: 'user' as const, content: block }, trailing]
   }
 
-  private async runInner(workspaceId: number, sessionId: number, effort: StarkEffort = 'regular'): Promise<AiRunBrainResult> {    const latest = this.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
+  private async runInner(workspaceId: number, sessionId: number, effort: StarkEffort = 'regular', requestedModel: string | null = null, brainChain: readonly string[] | null = null, heartChain: readonly string[] | null = null): Promise<AiRunBrainResult> {
+    // LoopLink chains take precedence when present: Brain chain for
+    // Brain-owned phases (plan + synthesis), Heart chain for
+    // Worker phases. Legacy Heart snapshot + single-model behavior
+    // is preserved when no chain is present.
+    if (brainChain !== null || heartChain !== null) {
+      return await this.runInnerWithLoopLinks(workspaceId, sessionId, effort, requestedModel, brainChain, heartChain)
+    }
+    const latest = this.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
     if (latest === undefined || latest.role !== 'user') {
       throw new BrainNothingToAnswerError()
     }
@@ -566,11 +593,22 @@ export class AiBrainService {
     // re-read between Brain → Worker → Brain, so mid-run config
     // changes cannot cause model drift.
     const routing = this.heart.snapshot()
+    // Composer Free selection: an explicit allowlisted `builtin:*`
+    // overrides the Heart Brain base for this run (Worker routes stay
+    // Heart-governed; usage thresholds and route audit still apply to
+    // the override). Unknown builtin ids fail honestly here.
+    let brainBase: { providerId: string; model: string } = routing.brain
+    if (requestedModel !== null && requestedModel.startsWith('builtin:')) {
+      if (!isHostedBuiltinModel(requestedModel)) {
+        throw new ProviderModelUnavailableError()
+      }
+      brainBase = { providerId: 'stark', model: requestedModel }
+    }
     // Stage 28 frozen usage snapshot: captured once here over the
     // Brain assignment plus every configured Worker assignment. The
     // Brain-plan call itself must not move the synthesis route, and
     // later usage/config changes never affect this run.
-    const usageSnap = this.snapshotWorkUsage(routing.brain, [
+    const usageSnap = this.snapshotWorkUsage(brainBase, [
       ...(routing.workerFixed === null ? [] : [routing.workerFixed]),
       ...(routing.workerDefault === null ? [] : [routing.workerDefault]),
       ...Object.values(routing.workerRoutes).filter(
@@ -585,14 +623,14 @@ export class AiBrainService {
     // Stage 28 Brain threshold route: selected once, used for BOTH
     // plan and synthesis. The alternate is terminal — never
     // re-evaluated for this run.
-    const brainRouted = this.applyThreshold(usageSnap, 'brain.primary', routing.brain)
+    const brainRouted = this.applyThreshold(usageSnap, 'brain.primary', brainBase)
     if (usageSnap !== null) {
       this.recordRouteDecision({
         runId,
         role: 'brain',
         routeKey: 'brain.primary',
-        baseProviderId: routing.brain.providerId,
-        baseModel: routing.brain.model,
+        baseProviderId: brainBase.providerId,
+        baseModel: brainBase.model,
         selectedProviderId: brainRouted.assignment.providerId,
         selectedModel: brainRouted.assignment.model,
         decision: brainRouted.decision,
@@ -845,6 +883,419 @@ export class AiBrainService {
           role: 'brain',
           providerId: brainRouted.assignment.providerId,
           model: brainModel,
+          routeKey: 'primary',
+          requestedProfile: null
+        }
+      )
+      const { messageId } = this.runs.completeRunWithAssistantMessage(
+        {
+          runId,
+          sessionId,
+          content: finalText,
+          action: 'delegate',
+          planSummary: plan.planSummary,
+          now: this.now()
+        },
+        loop === null ? undefined : { consumeLooplinkId: loop.looplinkId }
+      )
+      return this.toResult(runId, messageId)
+    } catch (error) {
+      this.runs.failRun(runId, toPublicBrainError('run', error).message, this.now())
+      throw error
+    }
+  }
+
+  /**
+   * LoopLink-driven Work (P0): Brain chain controls Brain-owned
+   * phases (plan + synthesis), Heart chain controls Worker phases.
+   * Each phase walks its chain in UI order — first enabled model is
+   * primary, failover tries the remaining enabled models in order.
+   * Sequential only, each model attempted at most once per phase,
+   * capped at 5. Usage thresholds are bypassed in this mode (chains
+   * are explicit user order and take precedence); the hardcoded
+   * Heart default (`builtin:gpt-5.6-luna`) is never consulted when
+   * a valid Heart chain exists, and the Heart Brain base is never
+   * consulted when a valid Brain chain exists. Usage events and run
+   * steps record the ACTUAL successful model per phase.
+   */
+  private async runInnerWithLoopLinks(
+    workspaceId: number,
+    sessionId: number,
+    effort: StarkEffort,
+    requestedModel: string | null,
+    brainChain: readonly string[] | null,
+    heartChain: readonly string[] | null
+  ): Promise<AiRunBrainResult> {
+    const latest = this.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
+    if (latest === undefined || latest.role !== 'user') {
+      throw new BrainNothingToAnswerError()
+    }
+    const persisted = this.sessions.listContextForMessage(latest.id)
+    const context = this.loadContext(sessionId)
+    const trailing = context[context.length - 1]
+    if (trailing === undefined) {
+      throw new BrainNothingToAnswerError()
+    }
+    const chatVision = this.chatAttachmentVision(latest.id)
+    const deadlinePolicy = deriveStarkRunPolicy(effort, '')
+    const deadline = this.now() + deadlinePolicy.orchestrationTimeoutMs
+    const routing = this.heart.snapshot()
+    let brainBase: { providerId: string; model: string } = routing.brain
+    if (brainChain === null && requestedModel !== null && requestedModel.startsWith('builtin:')) {
+      if (!isHostedBuiltinModel(requestedModel)) {
+        throw new ProviderModelUnavailableError()
+      }
+      brainBase = { providerId: 'stark', model: requestedModel }
+    }
+    const loop = this.looplink?.service.getPendingBlock(workspaceId, sessionId) ?? null
+    const runId = this.runs.createRun({ workspaceId, sessionId, userMessageId: latest.id, now: this.now() })
+    const isCancelled = (): boolean => this.now() > deadline
+    try {
+      this.requireDeadline(deadline)
+      const planBase =
+        persisted.length === 0
+          ? context
+          : [...context.slice(0, -1), { role: 'user' as const, content: formatProviderContext(persisted) }, trailing]
+      let plan: ValidatedBrainPlan
+      let planProviderId: string
+      let planBrainModel: string
+      if (brainChain !== null) {
+        if (brainChain.length === 0) {
+          throw new ProviderModelUnavailableError()
+        }
+        const eligiblePlan = eligibleLoopLinkModels(brainChain, { needsStructured: true, needsVision: false })
+        if (eligiblePlan.length === 0) {
+          throw new ProviderStructuredOutputUnsupportedError()
+        }
+        const outcome = await runLoopLinkChain(
+          eligiblePlan,
+          async (_modelId, assignment) => {
+            const resolved = await this.providerService.resolveExplicitAssignment(assignment.providerId, assignment.model)
+            try {
+              if (typeof resolved.adapter.generateStructured !== 'function') {
+                throw new ProviderStructuredOutputUnsupportedError()
+              }
+              const generateStructured = resolved.adapter.generateStructured.bind(resolved.adapter)
+              const policy = deriveStarkRunPolicy(effort, resolved.model)
+              const section = this.planAttachmentSection(latest.id, resolved.adapter.id, resolved.model)
+              const baseWithChat = this.withChatAttachmentBlock(planBase, section.block)
+              const messages =
+                loop === null
+                  ? baseWithChat
+                  : [
+                      ...baseWithChat.slice(0, -1),
+                      { role: 'user' as const, content: loop.block },
+                      baseWithChat[baseWithChat.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
+                    ]
+              const planned = await this.trackCall(
+                { operation: 'brain_plan', workspaceId, sessionId, runId },
+                resolved.adapter.id,
+                resolved.model,
+                () => generateStructured({
+                  apiKey: resolved.apiKey,
+                  model: resolved.model,
+                  instructions: STAGE_18_FIXED_BRAIN_PLANNING_INSTRUCTIONS,
+                  messages,
+                  maxOutputTokens: policy.maxOutputTokens,
+                  ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
+                  schemaName: BRAIN_PLAN_SCHEMA_NAME,
+                  schema: BRAIN_PLAN_JSON_SCHEMA,
+                  ...(section.payloads.length > 0 ? { attachments: section.payloads } : {})
+                })
+              )
+              const parsed = this.parseAndValidatePlan(planned.outputText)
+              return { parsed, resolvedModel: resolved.model }
+            } finally {
+              void resolved.apiKey
+            }
+          },
+          { isCancelled }
+        )
+        plan = outcome.result.parsed
+        planProviderId = outcome.assignment.providerId
+        planBrainModel = outcome.result.resolvedModel
+      } else {
+        const resolved = await this.providerService.resolveExplicitAssignment(brainBase.providerId, brainBase.model)
+        try {
+          if (typeof resolved.adapter.generateStructured !== 'function') {
+            throw new ProviderStructuredOutputUnsupportedError()
+          }
+          const generateStructured = resolved.adapter.generateStructured.bind(resolved.adapter)
+          const policy = deriveStarkRunPolicy(effort, resolved.model)
+          const section = this.planAttachmentSection(latest.id, resolved.adapter.id, resolved.model)
+          const baseWithChat = this.withChatAttachmentBlock(planBase, section.block)
+          const messages =
+            loop === null
+              ? baseWithChat
+              : [
+                  ...baseWithChat.slice(0, -1),
+                  { role: 'user' as const, content: loop.block },
+                  baseWithChat[baseWithChat.length - 1] as { readonly role: 'user' | 'assistant'; readonly content: string }
+                ]
+          let attempts = 0
+          for (;;) {
+            try {
+              const planned = await this.trackCall(
+                { operation: 'brain_plan', workspaceId, sessionId, runId },
+                resolved.adapter.id,
+                resolved.model,
+                () => generateStructured({
+                  apiKey: resolved.apiKey,
+                  model: resolved.model,
+                  instructions: STAGE_18_FIXED_BRAIN_PLANNING_INSTRUCTIONS,
+                  messages,
+                  maxOutputTokens: policy.maxOutputTokens,
+                  ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
+                  schemaName: BRAIN_PLAN_SCHEMA_NAME,
+                  schema: BRAIN_PLAN_JSON_SCHEMA,
+                  ...(section.payloads.length > 0 ? { attachments: section.payloads } : {})
+                })
+              )
+              plan = this.parseAndValidatePlan(planned.outputText)
+              break
+            } catch (error) {
+              if (!(error instanceof InvalidBrainPlanError) || attempts >= policy.structuredOutputRepeatBudget) {
+                throw error
+              }
+              attempts += 1
+              this.requireDeadline(deadline)
+            }
+          }
+          planProviderId = brainBase.providerId
+          planBrainModel = resolved.model
+        } finally {
+          void resolved.apiKey
+        }
+      }
+      this.runs.appendStepWithModel(
+        {
+          runId,
+          ordinal: 0,
+          kind: 'brain_plan',
+          status: 'completed',
+          instruction: null,
+          output: plan.planSummary,
+          now: this.now()
+        },
+        {
+          role: 'brain',
+          providerId: planProviderId,
+          model: planBrainModel,
+          routeKey: 'primary',
+          requestedProfile: null
+        }
+      )
+      if (plan.action === 'answer') {
+        const finalAnswer = plan.finalAnswer ?? ''
+        const { messageId } = this.runs.completeRunWithAssistantMessage(
+          {
+            runId,
+            sessionId,
+            content: finalAnswer,
+            action: 'answer',
+            planSummary: plan.planSummary,
+            now: this.now()
+          },
+          loop === null ? undefined : { consumeLooplinkId: loop.looplinkId }
+        )
+        return this.toResult(runId, messageId)
+      }
+      const workerInstruction = plan.workerInstruction ?? ''
+      const workerProfile = plan.workerProfile ?? 'general'
+      let workerOutput: string
+      let workerProviderId: string
+      let workerResolvedModel: string
+      if (heartChain !== null) {
+        if (heartChain.length === 0) {
+          throw new LoopLinkHeartEmptyError()
+        }
+        const eligibleWorker = eligibleLoopLinkModels(heartChain, {
+          needsStructured: false,
+          needsVision: chatVision.needsVision
+        })
+        if (eligibleWorker.length === 0) {
+          if (chatVision.needsVision) {
+            throw new VisionUnsupportedForModelError()
+          }
+          throw new ProviderModelUnavailableError()
+        }
+        const outcome = await runLoopLinkChain(
+          eligibleWorker,
+          async (_modelId, assignment) => {
+            const resolved = await this.providerService.resolveExplicitAssignment(assignment.providerId, assignment.model)
+            try {
+              const generateWorkerText = resolved.adapter.generateText.bind(resolved.adapter)
+              const section = this.workerAttachmentSection(
+                latest.id,
+                resolved.adapter.id,
+                resolved.model,
+                workerInstruction,
+                trailing.content,
+                chatVision.rows
+              )
+              const workerMessages = this.buildWorkerMessages(context, persisted, workerInstruction, loop?.block ?? null, section.block)
+              const policy = deriveStarkRunPolicy(effort, resolved.model)
+              const produced = await this.trackCall(
+                { operation: 'worker', workspaceId, sessionId, runId },
+                resolved.adapter.id,
+                resolved.model,
+                () => generateWorkerText({
+                  apiKey: resolved.apiKey,
+                  model: resolved.model,
+                  instructions: STAGE_18_FIXED_WORKER_INSTRUCTIONS,
+                  messages: workerMessages,
+                  maxOutputTokens: policy.maxOutputTokens,
+                  ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
+                  ...(section.payloads.length > 0 ? { attachments: section.payloads } : {})
+                })
+              )
+              const output = this.validateWorkerOutput(produced.text)
+              return { output, resolvedModel: resolved.model }
+            } finally {
+              void resolved.apiKey
+            }
+          },
+          { isCancelled }
+        )
+        workerOutput = outcome.result.output
+        workerProviderId = outcome.assignment.providerId
+        workerResolvedModel = outcome.result.resolvedModel
+      } else {
+        const workerRoute = this.heart.resolveWorkerForAttachments(routing, workerProfile, chatVision.needsVision)
+        const resolved = await this.providerService.resolveExplicitAssignment(
+          workerRoute.assignment.providerId,
+          workerRoute.assignment.model
+        )
+        try {
+          const generateWorkerText = resolved.adapter.generateText.bind(resolved.adapter)
+          const section = this.workerAttachmentSection(
+            latest.id,
+            resolved.adapter.id,
+            resolved.model,
+            workerInstruction,
+            trailing.content,
+            chatVision.rows
+          )
+          const workerMessages = this.buildWorkerMessages(context, persisted, workerInstruction, loop?.block ?? null, section.block)
+          const policy = deriveStarkRunPolicy(effort, resolved.model)
+          const produced = await this.trackCall(
+            { operation: 'worker', workspaceId, sessionId, runId },
+            resolved.adapter.id,
+            resolved.model,
+            () => generateWorkerText({
+              apiKey: resolved.apiKey,
+              model: resolved.model,
+              instructions: STAGE_18_FIXED_WORKER_INSTRUCTIONS,
+              messages: workerMessages,
+              maxOutputTokens: policy.maxOutputTokens,
+              ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
+              ...(section.payloads.length > 0 ? { attachments: section.payloads } : {})
+            })
+          )
+          workerOutput = this.validateWorkerOutput(produced.text)
+          workerProviderId = workerRoute.assignment.providerId
+          workerResolvedModel = resolved.model
+        } finally {
+          void resolved.apiKey
+        }
+      }
+      this.runs.appendStepWithModel(
+        {
+          runId,
+          ordinal: 1,
+          kind: 'worker',
+          status: 'completed',
+          instruction: workerInstruction,
+          output: workerOutput,
+          now: this.now()
+        },
+        {
+          role: 'worker',
+          providerId: workerProviderId,
+          model: workerResolvedModel,
+          routeKey: 'fixed',
+          requestedProfile: workerProfile
+        }
+      )
+      const synthesisMessages = this.buildSynthesisMessages(context, plan.planSummary, workerInstruction, workerOutput)
+      let finalText: string
+      let synthProviderId: string
+      let synthModel: string
+      if (brainChain !== null) {
+        const eligibleSynth = eligibleLoopLinkModels(brainChain, { needsStructured: false, needsVision: false })
+        if (eligibleSynth.length === 0) {
+          throw new ProviderModelUnavailableError()
+        }
+        const outcome = await runLoopLinkChain(
+          eligibleSynth,
+          async (_modelId, assignment) => {
+            const resolved = await this.providerService.resolveExplicitAssignment(assignment.providerId, assignment.model)
+            try {
+              const generateText = resolved.adapter.generateText.bind(resolved.adapter)
+              const policy = deriveStarkRunPolicy(effort, resolved.model)
+              const synthesized = await this.trackCall(
+                { operation: 'brain_synthesis', workspaceId, sessionId, runId },
+                resolved.adapter.id,
+                resolved.model,
+                () => generateText({
+                  apiKey: resolved.apiKey,
+                  model: resolved.model,
+                  instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
+                  messages: synthesisMessages,
+                  maxOutputTokens: policy.maxOutputTokens,
+                  ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {})
+                })
+              )
+              const final = this.validateFinalText(synthesized.text)
+              return { final, resolvedModel: resolved.model }
+            } finally {
+              void resolved.apiKey
+            }
+          },
+          { isCancelled }
+        )
+        finalText = outcome.result.final
+        synthProviderId = outcome.assignment.providerId
+        synthModel = outcome.result.resolvedModel
+      } else {
+        const resolved = await this.providerService.resolveExplicitAssignment(brainBase.providerId, brainBase.model)
+        try {
+          const generateText = resolved.adapter.generateText.bind(resolved.adapter)
+          const policy = deriveStarkRunPolicy(effort, resolved.model)
+          const synthesized = await this.trackCall(
+            { operation: 'brain_synthesis', workspaceId, sessionId, runId },
+            resolved.adapter.id,
+            resolved.model,
+            () => generateText({
+              apiKey: resolved.apiKey,
+              model: resolved.model,
+              instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
+              messages: synthesisMessages,
+              maxOutputTokens: policy.maxOutputTokens,
+              ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {})
+            })
+          )
+          finalText = this.validateFinalText(synthesized.text)
+          synthProviderId = brainBase.providerId
+          synthModel = resolved.model
+        } finally {
+          void resolved.apiKey
+        }
+      }
+      this.runs.appendStepWithModel(
+        {
+          runId,
+          ordinal: 2,
+          kind: 'brain_synthesis',
+          status: 'completed',
+          instruction: null,
+          output: null,
+          now: this.now()
+        },
+        {
+          role: 'brain',
+          providerId: synthProviderId,
+          model: synthModel,
           routeKey: 'primary',
           requestedProfile: null
         }

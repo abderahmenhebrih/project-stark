@@ -8,8 +8,7 @@ import {
   deriveModelLibrary,
   findLibraryModel,
   isPlanEntitled,
-  stableModelId,
-  tokenSessionLabel
+  stableModelId
 } from './model-library'
 
 function configuredProvider(models: readonly string[], selectedModel: string | null) {
@@ -27,11 +26,11 @@ function unconfiguredProvider() {
 }
 
 describe('model library identity', () => {
-  it('shows the 15 STARK Free built-ins as preview cards without API setup (no paid catalog yet)', () => {
+  it('shows the 15 STARK Free built-ins automatically without API setup (no paid catalog yet)', () => {
     const library = deriveModelLibrary(unconfiguredProvider())
     assert.equal(library.length, 15)
     assert.ok(library.every((entry) => entry.origin === 'built-in'))
-    assert.ok(library.every((entry) => !entry.available && !entry.locked))
+    assert.ok(library.every((entry) => entry.available && !entry.locked))
     assert.ok(library.every((entry) => entry.badge === 'FREE'))
     assert.ok(!library.some((entry) => entry.origin === 'plan'), 'no paid catalog before Billing')
   })
@@ -76,10 +75,6 @@ describe('model library identity', () => {
       library.filter((entry) => entry.origin === 'api').map((entry) => entry.model),
       ['a-model', 'b-model']
     )
-  })
-
-  it('reports honest token metadata instead of fabricating limits', () => {
-    assert.equal(tokenSessionLabel(), 'Token limit unavailable')
   })
 
   it('finds entries by stable id', () => {

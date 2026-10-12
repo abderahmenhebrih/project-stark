@@ -59,6 +59,14 @@ export type ProviderPanelAction =
   | { readonly type: 'state-loading'; readonly workspaceId: number; readonly requestId: number }
   | { readonly type: 'state-loaded'; readonly workspaceId: number; readonly requestId: number; readonly state: AiProviderState }
   | { readonly type: 'state-failed'; readonly workspaceId: number; readonly requestId: number; readonly message: string }
+  /**
+   * Optional-provider disconnect: the stored credential was deleted
+   * main-side. Discovered models, the active BYOK selection, and any
+   * connection status are dropped renderer-side; the main-persisted
+   * BYOK selection (kept by clearCredential) is forced to null so a
+   * stale selection can never route a later run without a key.
+   */
+  | { readonly type: 'disconnected'; readonly workspaceId: number; readonly requestId: number; readonly state: AiProviderState }
   | { readonly type: 'models-loading'; readonly workspaceId: number; readonly requestId: number }
   | {
       readonly type: 'models-loaded'
@@ -110,6 +118,26 @@ export function providerPanelReducer(state: ProviderPanelState, action: Provider
         return state
       }
       return { ...state, loading: false, error: action.message }
+    }
+    case 'disconnected': {
+      if (!isCurrent(state, action.workspaceId, action.requestId, state.requestId)) {
+        return state
+      }
+      return {
+        ...state,
+        loading: false,
+        error: null,
+        configured: action.state.configured,
+        secureStorageAvailable: action.state.secureStorageAvailable,
+        selectedModel: null,
+        displayName: action.state.displayName,
+        models: [],
+        loadingModels: false,
+        modelsError: null,
+        connectionPhase: 'idle',
+        connectionStatus: null,
+        connectionError: null
+      }
     }
     case 'models-loading': {
       if (state.workspaceId !== action.workspaceId) {

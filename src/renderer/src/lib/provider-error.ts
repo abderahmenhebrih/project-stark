@@ -22,6 +22,8 @@ export type ProviderErrorKind =
   | 'model-missing'
   | 'in-flight'
   | 'nothing-to-answer'
+  | 'sign-in-required'
+  | 'hosted-unavailable'
   | 'generic'
 
 export interface NormalizedProviderError {
@@ -42,6 +44,8 @@ const MAIN_MODEL_UNAVAILABLE = 'The selected model is not available. Choose anot
 const MAIN_MODEL_MISSING = 'No AI model is selected yet.'
 const MAIN_IN_FLIGHT = 'STARK is already generating a response for this session.'
 const MAIN_NOTHING_TO_ANSWER = 'There is no new message for STARK to answer.'
+const MAIN_SIGN_IN_REQUIRED = 'Sign in to use STARK Free models.'
+const MAIN_HOSTED_UNAVAILABLE = 'STARK hosted inference is temporarily unavailable.'
 const MAIN_GENERIC = 'We couldn’t get a response from the AI provider.'
 
 export const PROVIDER_STORAGE_UNAVAILABLE_MESSAGE = MAIN_STORAGE_UNAVAILABLE
@@ -56,6 +60,8 @@ export const PROVIDER_MODEL_UNAVAILABLE_MESSAGE = MAIN_MODEL_UNAVAILABLE
 export const PROVIDER_MODEL_MISSING_MESSAGE = MAIN_MODEL_MISSING
 export const PROVIDER_IN_FLIGHT_MESSAGE = MAIN_IN_FLIGHT
 export const PROVIDER_NOTHING_TO_ANSWER_MESSAGE = MAIN_NOTHING_TO_ANSWER
+export const PROVIDER_SIGN_IN_REQUIRED_MESSAGE = MAIN_SIGN_IN_REQUIRED
+export const PROVIDER_HOSTED_UNAVAILABLE_MESSAGE = MAIN_HOSTED_UNAVAILABLE
 export const PROVIDER_GENERIC_MESSAGE = MAIN_GENERIC
 
 const KNOWN_OUTCOMES: readonly { readonly kind: ProviderErrorKind; readonly mainMessage: string }[] = [
@@ -71,6 +77,8 @@ const KNOWN_OUTCOMES: readonly { readonly kind: ProviderErrorKind; readonly main
   { kind: 'model-missing', mainMessage: MAIN_MODEL_MISSING },
   { kind: 'in-flight', mainMessage: MAIN_IN_FLIGHT },
   { kind: 'nothing-to-answer', mainMessage: MAIN_NOTHING_TO_ANSWER },
+  { kind: 'sign-in-required', mainMessage: MAIN_SIGN_IN_REQUIRED },
+  { kind: 'hosted-unavailable', mainMessage: MAIN_HOSTED_UNAVAILABLE },
   { kind: 'generic', mainMessage: MAIN_GENERIC }
 ]
 

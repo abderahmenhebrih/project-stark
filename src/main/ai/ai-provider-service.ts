@@ -7,15 +7,18 @@ import {
   ProviderCredentialMissingError,
   ProviderForbiddenError,
   ProviderInvalidCredentialError,
+  ProviderModelUnavailableError,
   ProviderRateLimitedError,
   ProviderStorageVerificationError,
   ProviderTimeoutError,
   SecureStorageUnavailableError,
+  StarkHostedUnavailableError,
   UnknownProviderError
 } from './errors'
 import { MAX_API_KEY_BYTES, MAX_MODEL_ID_CHARACTERS } from './limits'
 import { zeroBuffer, type CredentialProtector } from './credential-protector'
-import { ProviderRegistry, type AiProviderAdapter } from './provider-adapter'
+import { ProviderRegistry, type AiProviderAdapter, type HostedSessionProvider } from './provider-adapter'
+import { resolveHostedModelRoute } from '../../shared/hosted-models/stark-model-map'
 
 const encoder = new TextEncoder()
 
@@ -81,6 +84,12 @@ function keysEqual(first: string, second: string): boolean {
 export interface AiProviderServiceOptions {
   /** Clock override for deterministic tests. Defaults to Date.now. */
   readonly now?: () => number
+  /**
+   * Main-owned hosted session source for the `stark` provider. Absent
+   * in older harnesses — hosted assignments then fail closed with
+   * hosted-unavailable instead of reaching the network.
+   */
+  readonly hostedSessionProvider?: HostedSessionProvider
 }
 
 /**
@@ -107,6 +116,7 @@ export function isStarkAiDiagEnabled(): boolean {
  */
 export class AiProviderService {
   private readonly now: () => number
+  private readonly hostedSessionProvider: HostedSessionProvider | undefined
 
   constructor(
     private readonly providers: AiProviderRepository,
@@ -115,6 +125,7 @@ export class AiProviderService {
     options?: AiProviderServiceOptions
   ) {
     this.now = options?.now ?? Date.now
+    this.hostedSessionProvider = options?.hostedSessionProvider
   }
 
   requireProvider(providerId: unknown): ProviderId {
@@ -325,12 +336,20 @@ export class AiProviderService {
    * immediate use. Never reads or mutates the globally selected
    * model — routing stays per-request with no global side effects.
    * No renderer access; callers drop the key reference after use.
+   *
+   * The `stark` hosted provider resolves instead through the signed-in
+   * account session (no user key exists on that path): the model must
+   * be an allowlisted `builtin:*` id and the returned `apiKey` slot
+   * carries the main-owned access token for exactly one call.
    */
   async resolveExplicitAssignment(
     providerId: unknown,
     model: unknown
   ): Promise<{ adapter: AiProviderAdapter; apiKey: string; model: string }> {
     const resolvedId = this.requireProvider(providerId)
+    if (resolvedId === 'stark') {
+      return this.resolveHostedAssignment(model)
+    }
     if (typeof model !== 'string' || model === '' || model.includes('\0')) {
       throw new InvalidProviderRequestError('model reference is invalid')
     }
@@ -342,6 +361,29 @@ export class AiProviderService {
       throw new UnknownProviderError()
     }
     const apiKey = await this.decryptCredentialForUse(resolvedId)
+    return { adapter, apiKey, model }
+  }
+
+  private async resolveHostedAssignment(
+    model: unknown
+  ): Promise<{ adapter: AiProviderAdapter; apiKey: string; model: string }> {
+    if (typeof model !== 'string' || model === '' || model.includes('\0')) {
+      throw new InvalidProviderRequestError('model reference is invalid')
+    }
+    if (model.length > MAX_MODEL_ID_CHARACTERS) {
+      throw new InvalidProviderRequestError('model reference is invalid')
+    }
+    if (resolveHostedModelRoute(model) === null) {
+      throw new ProviderModelUnavailableError()
+    }
+    const adapter = this.registry.get('stark')
+    if (adapter === undefined) {
+      throw new UnknownProviderError()
+    }
+    if (this.hostedSessionProvider === undefined) {
+      throw new StarkHostedUnavailableError()
+    }
+    const apiKey = await this.hostedSessionProvider.getAccessToken()
     return { adapter, apiKey, model }
   }
 }

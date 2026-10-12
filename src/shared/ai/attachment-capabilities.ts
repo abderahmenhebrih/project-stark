@@ -12,6 +12,8 @@
  * authoritatively before every provider call.
  */
 
+import { hostedModelSupportsVision } from '../hosted-models/stark-model-map'
+
 /** AI ingestion bound for one textual attachment (1 MiB of UTF-8). */
 export const MAX_AI_TEXT_ATTACHMENT_BYTES = 1024 * 1024
 
@@ -88,13 +90,17 @@ export function hasTextAttachmentExtension(filename: string): boolean {
 }
 
 /**
- * Conservative vision heuristic for known providers. Only the
- * `openai` provider exists in STARK v1; every other provider id is
- * not vision-capable. Unknown model ids are not vision-capable —
- * callers surface an explicit capability error instead of sending
- * (or silently dropping) image bytes.
+ * Conservative vision heuristic for known providers. The `openai`
+ * BYOK provider matches its chat/vision families; the `stark` hosted
+ * provider consults the evidence-based hosted model map. Every other
+ * provider id is not vision-capable. Unknown model ids are not
+ * vision-capable — callers surface an explicit capability error
+ * instead of sending (or silently dropping) image bytes.
  */
 export function modelSupportsVision(providerId: string, model: string): boolean {
+  if (providerId === 'stark') {
+    return hostedModelSupportsVision(model)
+  }
   if (providerId !== 'openai') {
     return false
   }

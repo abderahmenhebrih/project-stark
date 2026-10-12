@@ -5,6 +5,24 @@
  * resolves provider, credential, model, history, and the fixed
  * developer instruction from trusted local state. No system prompt,
  * tools, messages, or URLs cross from the renderer.
+ *
+ * The optional `model` field carries ONLY a stable catalog id the
+ * user selected in Settings → Models (`builtin:*` for STARK Free,
+ * `openai:*` for connected BYOK labels). Main honors `builtin:*` by
+ * routing through the authenticated hosted provider (validated
+ * against the allowlist); any other value keeps the legacy behavior
+ * (persisted BYOK selection). No prompts, tools, or credentials ever
+ * cross this boundary.
+ *
+ * The optional `brainModels` / `heartModels` fields carry the
+ * session-local LoopLink snapshots: ordered ENABLED stable model
+ * ids (at most 5 each) from Settings → Models → Brain/Heart
+ * LoopLink. When present and valid, LoopLinks control orchestration
+ * (Brain chain for Brain-owned phases, Heart chain for
+ * Heart/Worker-owned phases) and take precedence over the single
+ * `model` selector for STARK execution. Main validates every entry
+ * (known id, no duplicates, bounded length) and rejects malformed
+ * chains — the renderer can never inject arbitrary upstream ids.
  */
 
 import type { CodingMessage, CodingSession } from '../sessions/types'
@@ -24,6 +42,13 @@ export interface AiGenerateRequest {
    * effort for non-STARK runs.
    */
   readonly effort?: StarkEffort
+  /** Stable selected model id (optional, see module header). */
+  readonly model?: string
+  /**
+   * Brain LoopLink snapshot (optional, see module header). Ask
+   * reasoning runs on the Brain chain when present and valid.
+   */
+  readonly brainModels?: readonly string[]
 }
 
 /** Generation result: the persisted assistant message plus session. */
@@ -42,6 +67,10 @@ export interface AiProposeFileChangeRequest {
   readonly sessionId: number
   /** STARK effort selector (optional, Regular baseline when absent). */
   readonly effort?: StarkEffort
+  /** Stable selected model id (optional, see module header). */
+  readonly model?: string
+  /** Brain LoopLink snapshot (optional, see module header). */
+  readonly brainModels?: readonly string[]
 }
 
 /**
@@ -63,6 +92,10 @@ export interface AiProposeChangeSetRequest {
   readonly sessionId: number
   /** STARK effort selector (optional, Regular baseline when absent). */
   readonly effort?: StarkEffort
+  /** Stable selected model id (optional, see module header). */
+  readonly model?: string
+  /** Brain LoopLink snapshot (optional, see module header). */
+  readonly brainModels?: readonly string[]
 }
 
 /**
@@ -83,6 +116,12 @@ export interface AiRunBrainRequest {
   readonly sessionId: number
   /** STARK effort selector (optional, Regular baseline when absent). */
   readonly effort?: StarkEffort
+  /** Stable selected model id (optional, see module header). */
+  readonly model?: string
+  /** Brain LoopLink snapshot (optional, see module header). */
+  readonly brainModels?: readonly string[]
+  /** Heart LoopLink snapshot (optional, see module header). */
+  readonly heartModels?: readonly string[]
 }
 
 /**

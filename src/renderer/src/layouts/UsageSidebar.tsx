@@ -166,7 +166,13 @@ export function UsageSidebar({
           </div>
           <div className="usage-sidebar__row">
             <dt>Provider</dt>
-            <dd>{providerStatus === 'ready' ? 'OpenAI · Ready' : `OpenAI · ${providerReadinessLabel(providerStatus)}`}</dd>
+            <dd>
+              {providerStatus === 'ready'
+                ? 'OpenAI · Ready'
+                : providerStatus === 'free'
+                  ? 'STARK · Free'
+                  : `STARK · ${providerReadinessLabel(providerStatus)}`}
+            </dd>
           </div>
           <div className="usage-sidebar__row">
             <dt>Model</dt>

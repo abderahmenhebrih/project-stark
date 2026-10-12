@@ -1,6 +1,7 @@
 import { useState, type ReactElement } from 'react'
 import type { ProviderConnectionStatus } from '../../../../../../shared/providers/types'
 import type { ProviderPanelState } from '../../../sessions/provider-state'
+import { compatibleModelIds } from './model-compatibility'
 
 export type AddModelChoice = 'api-key' | 'local' | 'upgrade'
 
@@ -45,16 +46,22 @@ function connectionStatusLabel(status: ProviderConnectionStatus): string {
  * key, Link a local model, Upgrade your plan — then one sub-surface
  * at a time. The API-key path re-houses the reviewed OpenAI
  * provider/key/model functionality without behavior or security
- * changes (masked write-only input, explicit save/remove/test/
- * refresh/use, main-side storage). Local linking and hosted plans
- * are honest placeholders: no fake detection, no fake backends, no
- * pricing, no network calls. No IPC or network calls live here; every
- * action arrives via SessionPanel-owned callbacks.
+ * changes (masked write-only input, explicit save/remove, main-side
+ * storage). Saving a key automatically verifies and discovers
+ * models: the picker lists compatible discovered models only (no
+ * manual model-id entry), and a deterministic default is selected
+ * when none is. Local linking and hosted plans are honest
+ * placeholders: no fake detection, no fake backends, no pricing, no
+ * network calls. No IPC or network calls live here; every action
+ * arrives via SessionPanel-owned callbacks.
  */
 export function AddModelFlow(props: AddModelFlowProps): ReactElement {
   const [choice, setChoice] = useState<AddModelChoice | null>(null)
   const { provider } = props
   const selectedModel = provider.selectedModel
+  // The picker offers only compatible discovered models — raw
+  // incompatible ids (audio, image, embeddings, …) never appear.
+  const compatibleIds = compatibleModelIds('openai', provider.models)
 
   return (
     <div className="models-addflow" aria-label="Add model">
@@ -193,13 +200,16 @@ export function AddModelFlow(props: AddModelFlowProps): ReactElement {
                 </p>
               )}
               <p className="session__eyebrow">Available models</p>
+              <p className="session__hint" role="note">
+                Models load automatically after you save a key.
+              </p>
               <div className="session__settings-row">
                 <select
                   id="settings-model-select"
                   className="session__select"
                   value={props.modelValue}
                   onChange={(event) => props.onModelDraftChange(event.target.value)}
-                  disabled={!provider.configured || (provider.models.length === 0 && provider.selectedModel === null)}
+                  disabled={!provider.configured || (compatibleIds.length === 0 && provider.selectedModel === null)}
                   aria-label="Available models"
                 >
                   {props.modelValue === '' && <option value="">Select a model…</option>}
@@ -208,9 +218,9 @@ export function AddModelFlow(props: AddModelFlowProps): ReactElement {
                       {selectedModel}
                     </option>
                   ) : null}
-                  {provider.models.map((entry) => (
-                    <option key={entry.id} value={entry.id}>
-                      {entry.id}
+                  {compatibleIds.map((id) => (
+                    <option key={id} value={id}>
+                      {id}
                     </option>
                   ))}
                 </select>

@@ -169,6 +169,24 @@ export class ProviderStructuredOutputUnsupportedError extends AiProviderError {
   }
 }
 
+/** STARK hosted inference requires a signed-in account (no anonymous use). */
+export class StarkHostedSignInRequiredError extends AiProviderError {
+  override readonly name = 'StarkHostedSignInRequiredError'
+
+  constructor() {
+    super('Sign in to use STARK Free models.')
+  }
+}
+
+/** STARK hosted inference failed operationally (service, capacity, or malformed response). */
+export class StarkHostedUnavailableError extends AiProviderError {
+  override readonly name = 'StarkHostedUnavailableError'
+
+  constructor(options?: { cause?: unknown }) {
+    super('STARK hosted inference is temporarily unavailable.', options)
+  }
+}
+
 export type ProviderOperation = 'state' | 'save' | 'clear' | 'test' | 'models' | 'set-model' | 'generate'
 
 function genericFor(operation: ProviderOperation): string {
@@ -201,6 +219,15 @@ import { isAttachmentCapabilityError } from './ai-attachment-context'
  * displayable copy only.
  */
 export function toPublicProviderError(operation: ProviderOperation, error: unknown): Error {
+  if (
+    error instanceof Error &&
+    (error.name === 'LoopLinkBrainEmptyError' ||
+      error.name === 'LoopLinkHeartEmptyError' ||
+      error.message === 'looplink_brain_empty' ||
+      error.message === 'looplink_heart_empty')
+  ) {
+    return new Error(error.message)
+  }
   if (isAttachmentCapabilityError(error)) {
     return new Error(error.message)
   }  if (
@@ -219,6 +246,8 @@ export function toPublicProviderError(operation: ProviderOperation, error: unkno
     error instanceof NothingToAnswerError ||
     error instanceof ProviderModelMissingError ||
     error instanceof ProviderStructuredOutputUnsupportedError ||
+    error instanceof StarkHostedSignInRequiredError ||
+    error instanceof StarkHostedUnavailableError ||
     error instanceof UnknownProviderError
   ) {
     return new Error(error.message)

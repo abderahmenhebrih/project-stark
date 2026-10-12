@@ -30,6 +30,25 @@
   margin-top: 0;
 }
 
+/* Provider discovery status row: spans the grid, calm notice styling. */
+.models-grid__discovery {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--stark-elevated);
+  border: 1px solid var(--stark-border);
+  border-radius: var(--stark-radius-md);
+}
+
+.models-grid__discovery-copy {
+  margin: 0;
+  font-size: 13px;
+  color: var(--stark-text-dim);
+}
+
 .models-card {
   display: flex;
   flex-direction: column;
@@ -49,6 +68,22 @@
 
 article.models-card:hover {
   border-color: var(--stark-text-dim);
+}
+
+.models-card--selected {
+  border-color: var(--stark-lime);
+}
+
+button.models-card {
+  cursor: pointer;
+}
+
+button.models-card:hover {
+  border-color: var(--stark-text-dim);
+}
+
+button.models-card--selected:hover {
+  border-color: var(--stark-lime);
 }
 
 .models-card--add {

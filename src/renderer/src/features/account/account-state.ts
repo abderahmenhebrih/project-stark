@@ -16,6 +16,17 @@ export interface AccountPanelState {
   readonly notice: string | null
 }
 
+/**
+ * Canonical execution gate: exactly one definition of "authenticated
+ * for hosted inference" shared by every renderer surface. Strictly
+ * `signed_in` — attention/unavailable/signing_out states never run
+ * hosted models. Display surfaces may be more lenient, but execution
+ * is not.
+ */
+export function isAccountSignedIn(status: CloudAccountStatus | null): boolean {
+  return status !== null && status.state === 'signed_in'
+}
+
 export function initialAccountPanelState(): AccountPanelState {
   return {
     loading: false,

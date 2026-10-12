@@ -37,6 +37,19 @@ class FakeAdapter implements AiProviderAdapter {
   }
 }
 
+class StarkFakeAdapter implements AiProviderAdapter {
+  readonly id = 'stark' as const
+  readonly displayName = 'STARK'
+
+  async listModels(): Promise<readonly ProviderModel[]> {
+    return [{ id: 'builtin:gpt-5.6-luna' }]
+  }
+
+  async generateText(): Promise<{ text: string }> {
+    return { text: 'unused' }
+  }
+}
+
 function openService(): {
   db: DatabaseSync
   heart: HeartService
@@ -95,10 +108,28 @@ describe('heart service', () => {
     }
   })
 
-  it('returns safe unconfigured when no legacy model exists', () => {
+  it('returns safe unconfigured when no legacy model exists and stark is unregistered', () => {
     const { db, heart } = openService()
     try {
       assert.throws(() => heart.ensureReady(), HeartUnconfiguredError)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('initializes to the STARK Free default when stark is registered and no legacy exists', () => {
+    const db = new DatabaseSync(':memory:')
+    runMigrations(db, migrations)
+    const providerRows = new AiProviderRepository(db)
+    const registry = new ProviderRegistry()
+    registry.register(new FakeAdapter())
+    registry.register(new StarkFakeAdapter())
+    const heart = new HeartService(new HeartRepository(db), providerRows, registry)
+    try {
+      const config = heart.ensureReady()
+      assert.deepEqual(config.brain, { providerId: 'stark', model: 'builtin:gpt-5.6-luna' })
+      assert.deepEqual(config.workerFixed, { providerId: 'stark', model: 'builtin:gpt-5.6-luna' })
+      assert.deepEqual(heart.ensureReady(), config)
     } finally {
       db.close()
     }

@@ -8,22 +8,11 @@ import { initialModelChainsPanelState, modelChainsPanelReducer, type ModelChains
 
 /**
  * LoopLink roster semantics: one ordered-enabled-ids truth source,
- * derived rosters (preview catalog entries are never offered — only
- * routed provider models appear as available), toggle/swap/reorder
- * purity, entitlement caps, and cross-chain independence. Behavior
- * runs directly here.
+ * derived 15-row rosters, toggle/swap/reorder purity, entitlement
+ * caps, and cross-chain independence. Behavior runs directly here.
  */
 function freeLibrary(): ReturnType<typeof deriveModelLibrary> {
   return deriveModelLibrary(initialProviderPanelState())
-}
-
-function configuredLibrary(): ReturnType<typeof deriveModelLibrary> {
-  return deriveModelLibrary({
-    ...initialProviderPanelState(),
-    configured: true,
-    selectedModel: 'gpt-4o',
-    models: [{ id: 'gpt-4o' }, { id: 'o3-mini' }]
-  })
 }
 
 function bound(): ModelChainsPanelState {
@@ -31,36 +20,31 @@ function bound(): ModelChainsPanelState {
 }
 
 describe('roster derivation', () => {
-  it('Brain keeps its 5 default positions; preview catalog is never offered as available', () => {
+  it('Brain shows 15 rows: 5 enabled in active order, then 10 available in catalog order', () => {
     const roster = deriveModelRoster(freeLibrary(), createDefaultFreeBrainChain())
+    assert.equal(roster.rows.length, 15)
     assert.equal(roster.enabledCount, 5)
+    assert.equal(roster.totalCount, 15)
     assert.deepEqual(
       roster.rows.filter((row) => row.enabled).map((row) => row.stableId),
       createDefaultFreeBrainChain()
     )
-    // Unrouted preview entries cannot be newly enabled: no disabled rows.
-    assert.ok(roster.rows.every((row) => row.enabled))
-    assert.equal(roster.totalCount, 5)
+    assert.deepEqual(
+      roster.rows.filter((row) => !row.enabled).map((row) => row.stableId),
+      freeLibrary()
+        .map((entry) => entry.stableId)
+        .filter((id) => !createDefaultFreeBrainChain().includes(id))
+    )
   })
 
-  it('Heart keeps its own 5 default positions with no available preview rows', () => {
+  it('Heart shows 15 rows with its own 5 enabled order', () => {
     const roster = deriveModelRoster(freeLibrary(), createDefaultFreeHeartChain())
-    assert.equal(roster.rows.length, 5)
+    assert.equal(roster.rows.length, 15)
     assert.equal(roster.enabledCount, 5)
     assert.deepEqual(
       roster.rows.filter((row) => row.enabled).map((row) => row.stableId),
       createDefaultFreeHeartChain()
     )
-  })
-
-  it('configured provider models appear as the only available rows', () => {
-    const roster = deriveModelRoster(configuredLibrary(), [])
-    assert.equal(roster.enabledCount, 0)
-    assert.deepEqual(
-      roster.rows.map((row) => row.stableId),
-      ['openai:gpt-4o', 'openai:o3-mini']
-    )
-    assert.ok(roster.rows.every((row) => !row.enabled && row.entry !== undefined))
   })
 
   it('retained active ids missing from the catalog stay enabled (never phantom, never crash)', () => {
@@ -70,10 +54,11 @@ describe('roster derivation', () => {
     assert.equal(roster.rows[0]?.entry, undefined)
   })
 
-  it('empty active chain with no provider offers no available rows (preview is not selectable)', () => {
+  it('empty active chain renders the full catalog as available', () => {
     const roster = deriveModelRoster(freeLibrary(), [])
     assert.equal(roster.enabledCount, 0)
-    assert.equal(roster.rows.length, 0)
+    assert.equal(roster.rows.length, 15)
+    assert.ok(roster.rows.every((row) => !row.enabled))
   })
 })
 

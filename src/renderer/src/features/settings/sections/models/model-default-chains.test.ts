@@ -143,9 +143,10 @@ describe('default free chains', () => {
     assert.equal(fundedVoid.maxBrainModels, 25)
   })
 
-  it('Models V2 remains configuration-only with the non-routing copy intact', () => {
+  it('Models V2 drives real runtime with the routing-active copy', () => {
     const page = readSource('src', 'renderer', 'src', 'features', 'settings', 'sections', 'ModelsSettings.tsx')
-    assert.ok(page.includes('does not route'), 'honesty copy must survive the defaults pass')
+    assert.ok(page.includes('Routing active'), 'routing-active copy must survive the defaults pass')
+    assert.ok(!page.includes('does not route'), 'old non-routing copy must be gone')
     const brain = readSource('src', 'renderer', 'src', 'features', 'settings', 'sections', 'models', 'BrainChain.tsx')
     const heart = readSource('src', 'renderer', 'src', 'features', 'settings', 'sections', 'models', 'HeartChain.tsx')
     for (const [name, source] of [['BrainChain', brain], ['HeartChain', heart]] as const) {
@@ -154,9 +155,11 @@ describe('default free chains', () => {
     }
   })
 
-  it('no provider runtime change occurred for this configuration pass', () => {
+  it('provider registry holds exactly the two known adapters (OpenAI BYOK + STARK hosted)', () => {
     const services = readSource('src', 'main', 'application', 'create-services.ts')
     const registrations = services.match(/registry\.register\(/g) ?? []
-    assert.equal(registrations.length, 1, 'exactly one provider adapter stays registered (OpenAI)')
+    assert.equal(registrations.length, 2, 'exactly two provider adapters stay registered')
+    assert.ok(services.includes('OpenAiProviderAdapter'), 'OpenAI BYOK adapter must remain')
+    assert.ok(services.includes('StarkHostedProviderAdapter'), 'STARK hosted adapter must be registered')
   })
 })

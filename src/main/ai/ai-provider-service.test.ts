@@ -180,6 +180,23 @@ describe('AI provider service', () => {
     }
   })
 
+  it('disconnect deletes the credential bytes and returns no secrets', async () => {
+    const { db, service } = openService()
+    try {
+      await service.saveCredential({ providerId: 'openai', apiKey: 'sk-disconnect-me' })
+      const cleared = await service.clearCredential({ providerId: 'openai' })
+      assert.equal(cleared.configured, false)
+      // The cleared state carries no key material in any field.
+      assert.ok(!JSON.stringify(cleared).includes('sk-disconnect-me'))
+      assert.ok(!Object.keys(cleared).some((key) => /key|secret|token|credential/i.test(key)))
+      // The bytes are actually gone: immediate use fails closed.
+      await assert.rejects(service.decryptCredentialForUse('openai'), ProviderCredentialMissingError)
+      assert.equal((await service.getState({ providerId: 'openai' })).configured, false)
+    } finally {
+      db.close()
+    }
+  })
+
   it('persists and replaces the selected model', async () => {
     const { db, service } = openService()
     try {

@@ -37,9 +37,8 @@ describe('models V2 library', () => {
     const card = codeOnly(readModels('models/ModelCard.tsx'))
     assert.ok(card.includes('modelIconFor'), 'card must carry the mapped model icon')
     assert.ok(card.includes('displayName'), 'card must show the model name')
-    assert.ok(card.includes('tokenSessionLabel'), 'card must show honest token metadata')
     const library = codeOnly(readModels('models/model-library.ts'))
-    assert.ok(library.includes('Token limit unavailable'), 'token metadata must be honestly unavailable')
+    assert.ok(library.includes('BUILT_IN_DEFINITIONS'), 'catalog must define the Free entries')
     const add = codeOnly(readModels('models/AddModelCard.tsx'))
     assert.ok(add.includes('Add model'), 'add card must be labelled Add model')
     assert.ok(add.includes('models-card'), 'add card must share card dimensions')
@@ -86,12 +85,15 @@ describe('models V2 library', () => {
     }
   })
 
-  it('unrouted catalog cards render honestly as preview, never runnable', () => {
+  it('Free cards carry no Preview warning and no token-limit placeholder', () => {
+    for (const file of ['models/ModelCard.tsx', 'models/model-library.ts']) {
+      const source = codeOnly(readModels(file))
+      assert.ok(!source.includes('Preview — unavailable in this build'), `${file} must not mark Free models Preview`)
+      assert.ok(!source.includes('Token limit unavailable'), `${file} must not render the token placeholder`)
+    }
     const card = codeOnly(readModels('models/ModelCard.tsx'))
-    assert.ok(card.includes('Preview — unavailable in this build'), 'preview cards must say so plainly')
-    const library = codeOnly(readModels('models/model-library.ts'))
-    assert.ok(library.includes('hasRuntimeRoute'), 'a proven-route helper must exist')
-    assert.ok(library.includes("entry.origin === 'api'"), 'only user-added api entries may hold a route')
+    assert.ok(card.includes('aria-pressed'), 'selectable cards must expose pressed state')
+    assert.ok(card.includes('select model'), 'selectable cards must name the select action')
   })
 
   it('local linking is an honest placeholder with no fake backend', () => {
@@ -138,16 +140,24 @@ describe('models V2 brain and heart chains', () => {
     assert.ok(chain.includes('aria-label'), 'chain controls must be labelled')
   })
 
-  it('never routes inference through the chains yet', () => {
+  it('routes inference through the chains in order', () => {
     const page = readModels('ModelsSettings.tsx')
     assert.ok(
-      page.includes('STARK does not route inference through them yet.'),
-      'page must not pretend routing exists'
+      page.includes('Routing active'),
+      'page must state routing is active'
+    )
+    assert.ok(
+      !page.includes('STARK does not route inference through them yet.'),
+      'old non-routing copy must be gone'
     )
     const chain = codeOnly(readModels('models/ModelChain.tsx'))
     assert.ok(
-      chain.includes('LoopLink routing is not enabled in this build.'),
-      'each LoopLink must carry the restrained non-routing line'
+      chain.includes('Routing active'),
+      'each LoopLink must carry the active routing line'
+    )
+    assert.ok(
+      !chain.includes('LoopLink routing is not enabled in this build.'),
+      'old fake note must be gone'
     )
     for (const file of ['models/ModelChain.tsx', 'models/model-chain.ts', 'models/model-chains-state.ts']) {
       const source = codeOnly(readModels(file))

@@ -5,9 +5,11 @@ import { describe, it } from 'node:test'
 
 /**
  * Provider-status single-source invariant: the session banner and the
- * Usage sidebar must render from ONE canonical readiness value, so the
- * reported contradiction ("AI provider not connected yet" beside
- * "OpenAI · configured") is impossible.
+ * Usage sidebar must render from ONE global readiness value. The
+ * optional BYOK lane keeps the not-configured/needs-model/ready
+ * selector; globally a signed-in account without BYOK is Free
+ * (hosted inference), and only a signed-out session is
+ * not-configured — a sign-in prompt, never an OpenAI demand.
  */
 function readRenderer(relative: string): string {
   const file = join(process.cwd(), 'src', 'renderer', 'src', ...relative.split('/'))
@@ -16,13 +18,29 @@ function readRenderer(relative: string): string {
 }
 
 describe('provider status single source', () => {
-  it('session banner derives from the canonical selector', () => {
+  it('session banner derives from the BYOK lane with Free and sign-in states', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
-    assert.ok(panel.includes("providerReadiness(provider.configured, provider.selectedModel)"), 'banner readiness must come from providerReadiness')
+    assert.ok(panel.includes('providerReadiness(provider.configured, byokModel)'), 'banner readiness must come from providerReadiness over the BYOK model')
+    assert.ok(panel.includes('accountSignedIn'), 'global state must know the account sign-in state')
+    assert.ok(panel.includes("accountSignedIn ? 'free' : 'not-configured'"), 'signed-in Free must never read as not-configured')
+    assert.ok(panel.includes('effectiveSelectedModel('), 'BYOK model must gate disappeared selections')
     assert.ok(panel.includes('canSendWithProvider(readiness)'), 'send gating must use the canonical value')
     // The banner can no longer key one branch on `configured` while
     // Usage keys on something else: both read `readiness`.
     assert.ok(!panel.includes('provider.configured && provider.selectedModel !== null'), 'split inline readiness must be gone')
+  })
+
+  it('signed-out sessions get a sign-in prompt, never an OpenAI demand', () => {
+    const panel = readRenderer('features/sessions/SessionPanel.tsx')
+    assert.ok(panel.includes('Sign in to use STARK Free models.'), 'signed-out copy must prompt sign-in')
+    assert.ok(!panel.includes('Connect an AI provider to use Ask and Work.'), 'banner must not demand OpenAI')
+    assert.ok(!panel.includes('Add OpenAI key'), 'empty session must not demand a key')
+  })
+
+  it('composer sends carry the routing stable id', () => {
+    const panel = readRenderer('features/sessions/SessionPanel.tsx')
+    assert.ok(panel.includes('composerModelStableId'), 'sends must carry the selected stable id')
+    assert.ok(panel.includes('model: composerModelStableId'), 'all run paths must route explicitly')
   })
 
   it('chrome snapshot carries readiness and session timestamp', () => {

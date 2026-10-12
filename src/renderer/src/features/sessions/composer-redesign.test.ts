@@ -78,8 +78,9 @@ describe('agent target selector (data-driven)', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     assert.ok(panel.includes('resolveComposerSend(agentTarget, content, providers)'), 'sends must resolve through the data-driven resolver')
     assert.ok(panel.includes("await handleWorkSend(sessionId, sendContent)"), 'default send must use the unified Work path')
-    assert.ok(panel.includes('runBrainWorkRaw({ workspaceId, sessionId, effort })'), 'Work runs must carry the effort selector')
-    assert.ok(panel.includes('generateAssistantResponseRaw({ workspaceId, sessionId, effort })'), 'Ask override must carry the effort selector')
+    assert.ok(panel.includes('runBrainWorkRaw({ workspaceId, sessionId, effort, model: composerModelStableId, brainModels:'), 'Work runs must carry effort, the routing model, and LoopLink snapshots')
+    assert.ok(panel.includes('heartModels:'), 'Work runs must carry the Heart LoopLink snapshot')
+    assert.ok(panel.includes('generateAssistantResponseRaw({ workspaceId, sessionId, effort, model: composerModelStableId, brainModels:'), 'Ask override must carry effort, the routing model, and the Brain LoopLink snapshot')
     assert.ok(panel.includes("proposalDispatch({ type: 'mode-changed'"), 'slash overrides must reuse the preserved mode state')
   })
 
@@ -263,7 +264,7 @@ describe('copy, status, and responsive discipline', () => {
   it('removes the permanent stored-locally footer', () => {
     const panel = readRenderer('features/sessions/SessionPanel.tsx')
     assert.ok(!panel.includes('Stored locally'), 'stored-locally footer must be gone from the composer')
-    assert.ok(panel.includes('Local session — AI provider not connected yet.'), 'provider state must live only in the session status area')
+    assert.ok(panel.includes('Sign in to use STARK Free models.'), 'provider state must live only in the session status area')
   })
 
   it('renders transient status only while active', () => {

@@ -351,6 +351,13 @@ export class HeartService {
         return { providerId, model }
       }
     }
+    // STARK Free default: with no legacy BYOK selection, Heart
+    // initializes to the first Free default (GPT 5.6 Luna) on the
+    // hosted provider — zero user setup, Brain/Worker runnable once
+    // signed in. Requires the stark adapter to be registered.
+    if (this.registry.isKnown('stark')) {
+      return { providerId: 'stark', model: 'builtin:gpt-5.6-luna' }
+    }
     return null
   }
 

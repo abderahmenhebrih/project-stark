@@ -28,6 +28,8 @@ export interface SettingsPageBinding {
   readonly onModelDraftChange: (value: string) => void
   readonly onSaveKey: () => void
   readonly onRemoveKey: () => void
+  /** Disconnects the optional OpenAI BYOK provider (credential delete + state cleanup). */
+  readonly onDisconnect: () => void
   readonly onTestConnection: () => void
   readonly onRefreshModels: () => void
   readonly onUseModel: () => void
@@ -46,6 +48,10 @@ export interface SettingsPageBinding {
   readonly onToggleModel: (chain: 'brain' | 'heart', stableId: string, enable: boolean) => void
   readonly onSwapModel: (chain: 'brain' | 'heart', outgoingId: string, incomingId: string) => void
   readonly onReorderModel: (chain: 'brain' | 'heart', stableId: string, toIndex: number) => void
+  /** Current STARK Free composer selection (stable builtin id). */
+  readonly starkModel: string
+  /** Selects a STARK Free model for the composer. */
+  readonly onSelectStarkModel: (stableId: string) => void
   readonly capabilities: CapabilityPanelState
   readonly capabilitiesDispatch: Dispatch<CapabilityPanelAction>
   readonly onSaveCapabilities: () => void
@@ -135,6 +141,7 @@ export function SettingsPage({ section, onSectionChange, onBack, binding }: Sett
               onModelDraftChange={binding.onModelDraftChange}
               onSaveKey={binding.onSaveKey}
               onRemoveKey={binding.onRemoveKey}
+              onDisconnect={binding.onDisconnect}
               onTestConnection={binding.onTestConnection}
               onRefreshModels={binding.onRefreshModels}
               onUseModel={binding.onUseModel}
@@ -147,6 +154,8 @@ export function SettingsPage({ section, onSectionChange, onBack, binding }: Sett
               onSwapModel={binding.onSwapModel}
               onReorderModel={binding.onReorderModel}
               onNavigateBilling={() => onSectionChange('billing')}
+              starkModel={binding.starkModel}
+              onSelectStarkModel={binding.onSelectStarkModel}
             />
           )}
           {section === 'permissions' && (

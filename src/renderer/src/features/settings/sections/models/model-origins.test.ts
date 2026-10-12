@@ -31,7 +31,7 @@ describe('model origin classes', () => {
   it('built-in models appear automatically without API setup', () => {
     const page = codeOnly(readModels('ModelsSettings.tsx'))
     assert.ok(page.includes('deriveModelLibrary'), 'library must derive from the catalog')
-    assert.ok(page.includes('Included'), 'built-in group must be labelled')
+    assert.ok(page.includes('STARK Free'), 'built-in group must be labelled')
     const library = codeOnly(readModels('models/model-library.ts'))
     assert.ok(library.includes('BUILT_IN_DEFINITIONS'), 'a built-in catalog must exist')
     assert.ok(library.includes("origin: 'built-in'"), 'built-in entries must carry their origin')
@@ -49,7 +49,7 @@ describe('model origin classes', () => {
     const library = codeOnly(readModels('models/model-library.ts'))
     assert.ok(library.includes("origin: 'api'"), 'key-added models must carry the api origin')
     const page = codeOnly(readModels('ModelsSettings.tsx'))
-    assert.ok(page.includes('Your models'), 'page source must label the user group')
+    assert.ok(page.includes('Connected providers'), 'page source must label the discovered group')
   })
 
   it('plan models are visible while locked with an upgrade route', () => {
@@ -76,12 +76,12 @@ describe('model origin classes', () => {
     assert.ok(page.indexOf('<AddModelCard') > page.lastIndexOf('<ModelCard'), 'Add model must follow all groups')
   })
 
-  it('chains start with the Free defaults (presence still never implies routing)', () => {
+  it('chains start with the Free defaults (presence drives routing)', () => {
     const state = codeOnly(readModels('models/model-chains-state.ts'))
     assert.ok(state.includes('createDefaultFreeBrainChain()'), 'brain must start with the Free defaults')
     assert.ok(state.includes('createDefaultFreeHeartChain()'), 'heart must start with the Free defaults')
     const page = codeOnly(readModels('ModelsSettings.tsx'))
-    assert.ok(page.includes('does not route'), 'defaults must keep the non-routing honesty copy')
+    assert.ok(page.includes('Routing active'), 'defaults must keep the routing-active copy')
   })
 
   it('origin surfaces carry no pricing, backends, or secrets', () => {

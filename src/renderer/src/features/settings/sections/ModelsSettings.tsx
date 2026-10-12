@@ -20,6 +20,8 @@ interface ModelsSettingsProps {
   readonly onModelDraftChange: (value: string) => void
   readonly onSaveKey: () => void
   readonly onRemoveKey: () => void
+  /** Disconnects the optional OpenAI BYOK provider (with confirmation). */
+  readonly onDisconnect: () => void
   readonly onTestConnection: () => void
   readonly onRefreshModels: () => void
   readonly onUseModel: () => void
@@ -34,6 +36,10 @@ interface ModelsSettingsProps {
   readonly onSwapModel: (chain: 'brain' | 'heart', outgoingId: string, incomingId: string) => void
   readonly onReorderModel: (chain: 'brain' | 'heart', stableId: string, toIndex: number) => void
   readonly onNavigateBilling: () => void
+  /** Current STARK Free composer selection (stable builtin id). */
+  readonly starkModel: string
+  /** Selects a STARK Free model for the composer. */
+  readonly onSelectStarkModel: (stableId: string) => void
 }
 
 /**
@@ -51,18 +57,24 @@ interface ModelsSettingsProps {
  * entitlement cap.
  *
  * The library derives from the model catalog plus provider source
- * truth — never fake models. Locked plan entries stay out of the
- * roster (with their Billing upgrade route on the library cards);
- * retained active ids missing from the library render as Unavailable
- * and are kept, so removing a key never strands a dangling reference.
- * Roster order is configuration for the upcoming AI integration
- * pass — STARK does not route inference through these LoopLinks yet.
- * No IPC, no network, no storage calls live here; chain state is
+ * truth — never fake models. Discovered provider models populate the
+ * Connected provider group automatically after a key is saved (no
+ * manual model entry); only compatible models become runnable, and a
+ * disappeared selection renders Unavailable instead of routing
+ * silently. Locked plan entries stay out of the roster (with their
+ * Billing upgrade route on the library cards); retained active ids
+ * missing from the library render as Unavailable and are kept, so
+ * removing a key never strands a dangling reference.
+ * Roster order drives real runtime execution — STARK routes
+ * inference through these LoopLinks in order (Brain chain for
+ * Brain-owned phases, Heart chain for Worker phases) with bounded
+ * failover. Chain snapshots travel with each AI request;
  * renderer/session-local and resets on workspace switch (schema
  * stays v19).
  */
 export function ModelsSettings(props: ModelsSettingsProps): ReactElement {
   const [addOpen, setAddOpen] = useState(false)
+  const [confirmDisconnectOpen, setConfirmDisconnectOpen] = useState(false)
   const library = deriveModelLibrary(props.provider)
   const builtIn = library.filter((entry) => entry.origin === 'built-in')
   const userModels = library.filter((entry) => entry.origin === 'api' || entry.origin === 'local')
@@ -93,20 +105,108 @@ export function ModelsSettings(props: ModelsSettingsProps): ReactElement {
         ) : null}
       </div>
       <div className="models-grid" aria-label="Model library">
-        {builtIn.length > 0 ? <p className="models-grid__label">Included with STARK Free</p> : null}
+        {builtIn.length > 0 ? <p className="models-grid__label">STARK Free</p> : null}
         {builtIn.map((entry) => (
-          <ModelCard key={entry.stableId} model={entry} />
+          <ModelCard
+            key={entry.stableId}
+            model={entry}
+            selected={entry.stableId === props.starkModel}
+            onSelect={() => props.onSelectStarkModel(entry.stableId)}
+          />
         ))}
-        {userModels.length > 0 ? <p className="models-grid__label">Your models</p> : null}
+        {userModels.length > 0 || props.provider.configured ? (
+          <p className="models-grid__label">Connected providers · {props.provider.displayName}</p>
+        ) : null}
         {userModels.map((entry) => (
           <ModelCard key={entry.stableId} model={entry} />
         ))}
+        {props.provider.configured && userModels.length === 0 ? (
+          <div className="models-grid__discovery" role="status" aria-label="Provider model discovery">
+            <p className="models-grid__discovery-copy">
+              {props.provider.modelsError !== null
+                ? 'Could not load models. Your saved key is kept.'
+                : props.provider.loadingModels
+                  ? 'Loading models…'
+                  : 'No compatible models found for this provider.'}
+            </p>
+            <button
+              className="explorer__secondary"
+              type="button"
+              onClick={props.onRefreshModels}
+              disabled={props.provider.loadingModels}
+            >
+              {props.provider.loadingModels ? 'Loading…' : 'Retry'}
+            </button>
+          </div>
+        ) : null}
         {planModels.length > 0 ? <p className="models-grid__label">Available with STARK plans</p> : null}
         {planModels.map((entry) => (
           <ModelCard key={entry.stableId} model={entry} onUpgrade={props.onNavigateBilling} />
         ))}
         <AddModelCard onOpen={() => setAddOpen(true)} />
       </div>
+      {props.provider.configured ? (
+        <div className="session__settings-row" role="status" aria-label="OpenAI connection">
+          <span className="session__hint" role="note">
+            OpenAI · Connected
+          </span>
+          <button
+            className="explorer__secondary"
+            type="button"
+            onClick={props.onRefreshModels}
+            disabled={props.provider.loadingModels}
+            aria-label="Refresh OpenAI models"
+          >
+            {props.provider.loadingModels ? 'Loading…' : 'Refresh models'}
+          </button>
+          <button
+            className="explorer__secondary"
+            type="button"
+            onClick={() => setConfirmDisconnectOpen(true)}
+            aria-label="Disconnect OpenAI"
+          >
+            Disconnect
+          </button>
+        </div>
+      ) : null}
+      {confirmDisconnectOpen ? (
+        <div
+          className="session__confirm"
+          role="alertdialog"
+          aria-label="Disconnect OpenAI?"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              setConfirmDisconnectOpen(false)
+            }
+          }}
+        >
+          <p className="session__confirm-title">Disconnect OpenAI?</p>
+          <p className="session__confirm-copy">
+            Your saved OpenAI API key and discovered OpenAI models will be removed from this device. STARK Free
+            models will remain available.
+          </p>
+          <div className="session__confirm-actions">
+            <button
+              className="explorer__secondary"
+              type="button"
+              onClick={() => setConfirmDisconnectOpen(false)}
+            >
+              Cancel
+            </button>
+            <button
+              className="explorer__primary"
+              type="button"
+              onClick={() => {
+                setConfirmDisconnectOpen(false)
+                props.onDisconnect()
+              }}
+              aria-label="Confirm disconnect OpenAI"
+            >
+              Disconnect
+            </button>
+          </div>
+        </div>
+      ) : null}
       {addOpen ? (
         <AddModelFlow
           provider={props.provider}
@@ -150,7 +250,7 @@ export function ModelsSettings(props: ModelsSettingsProps): ReactElement {
         />
       </div>
       <p className="session__hint" role="note">
-        LoopLinks configure order for the upcoming AI integration. STARK does not route inference through them yet.
+        Routing active · models are tried in order.
       </p>
     </section>
   )

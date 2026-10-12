@@ -42,26 +42,27 @@ describe('brain no-authority architecture', () => {
     assert.ok(!brain.includes('from "node:fs'), 'brain must not use the filesystem API')
   })
 
-  it('at most three provider calls per run by construction', () => {
+  it('bounded provider calls per run by construction (LoopLink failover)', () => {
     const brain = readSource('src', 'main', 'ai', 'ai-brain-service.ts')
-    // Stage 21 adds two bounded recovery paths (recovery-fixed run +
-    // recovery text-only final) alongside the primary run: 3 structured
-    // plan sites and 6 text sites total, each path using at most 1 plan
-    // + 1 worker + 1 synthesis. No path loops or retries. Stage 28
-    // wraps every site in a bound tracking closure (bound captures
-    // preserve adapter `this`), so text sites read as
-    // generateWorkerText/generateSynthesisText.
+    // Primary run + two bounded recovery paths + LoopLink chain run:
+    // 5 structured plan sites (primary, chain-plan, chain-legacy,
+    // recovery, recovery-text-only) and 5 worker sites, each path
+    // using at most 1 plan + 1 worker + 1 synthesis per phase attempt.
+    // LoopLink phases fail over sequentially over at most 5 enabled
+    // models (ordered, each tried once) — bounded, no parallel calls,
+    // no infinite loops, no recursive unlimited fallback.
     const structuredSites = brain.match(/generateStructured\(\{/g) ?? []
-    assert.equal(structuredSites.length, 3, 'primary + recovery + recovery-text-only plan sites')
+    assert.equal(structuredSites.length, 5, 'primary + chain + chain-legacy + recovery + recovery-text-only plan sites')
     const workerSites = brain.match(/generateWorkerText\(\{/g) ?? []
-    assert.equal(workerSites.length, 3, 'primary + recovery + recovery-text-only worker sites')
+    assert.equal(workerSites.length, 5, 'primary + chain + chain-legacy + recovery + recovery-text-only worker sites')
     const synthesisSites = brain.match(/generateSynthesisText\(\{/g) ?? []
     assert.equal(synthesisSites.length, 3, 'primary + recovery + recovery-text-only synthesis sites')
     const trackedSites = brain.match(/this\.trackCall\(/g) ?? []
-    assert.equal(trackedSites.length, 9, 'all 9 call sites pass through the central tracker')
-    // The only loops in the file budget local context bytes; no loop
-    // encloses a provider call (single call sites above prove it).
-    for (const forbidden of ['retry', 'repair', 'fallback', 'recursi']) {
+    assert.equal(trackedSites.length, 15, 'all 15 call sites pass through the central tracker')
+    // Only bounded LoopLink failover loops enclose provider calls
+    // (sequential, max 5 attempts per phase, each tried once). No
+    // unbounded retry/repair/recursion patterns.
+    for (const forbidden of ['repair', 'recursi']) {
       assert.ok(!brain.toLowerCase().includes(forbidden), `brain service must not contain ${forbidden}`)
     }
     assert.ok(!brain.includes('this.runBrain('), 'no recursive Brain calls')

@@ -94,6 +94,15 @@ export type ProposalOperation = 'propose'
 export function toPublicProposalError(operation: ProposalOperation, error: unknown): Error {
   void operation
   if (
+    error instanceof Error &&
+    (error.name === 'LoopLinkBrainEmptyError' ||
+      error.name === 'LoopLinkHeartEmptyError' ||
+      error.message === 'looplink_brain_empty' ||
+      error.message === 'looplink_heart_empty')
+  ) {
+    return new Error(error.message)
+  }
+  if (
     error instanceof ProposalContextMissingError ||
     error instanceof ProposalNothingToProposeError ||
     error instanceof ProposalStaleBeforeProviderError ||

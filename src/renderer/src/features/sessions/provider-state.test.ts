@@ -184,4 +184,97 @@ describe('provider panel state', () => {
     })
     assert.equal(stale, state)
   })
+
+  it('disconnect drops models, selection, and connection status', () => {
+    let state: ProviderPanelState = {
+      ...activeWorkspace(3),
+      configured: true,
+      selectedModel: 'gpt-4o',
+      models: [{ id: 'gpt-4o' }, { id: 'o3-mini' }],
+      connectionPhase: 'done',
+      connectionStatus: 'connected'
+    }
+    state = providerPanelReducer(state, {
+      type: 'disconnected',
+      workspaceId: 3,
+      requestId: 0,
+      state: {
+        providerId: 'openai',
+        displayName: 'OpenAI',
+        secureStorageAvailable: true,
+        configured: false,
+        selectedModel: null
+      }
+    })
+    assert.equal(state.configured, false)
+    assert.equal(state.selectedModel, null)
+    assert.deepEqual(state.models, [])
+    assert.equal(state.modelsError, null)
+    assert.equal(state.connectionPhase, 'idle')
+    assert.equal(state.connectionStatus, null)
+    assert.equal(state.connectionError, null)
+  })
+
+  it('disconnect forces the selection to null even when main keeps a stale persisted selection', () => {
+    // clearCredential drops only the credential bytes; the persisted
+    // BYOK selection survives main-side, so the renderer must null it
+    // or later runs would target a keyless model.
+    let state: ProviderPanelState = {
+      ...activeWorkspace(3),
+      configured: true,
+      selectedModel: 'gpt-4o',
+      models: [{ id: 'gpt-4o' }]
+    }
+    state = providerPanelReducer(state, {
+      type: 'disconnected',
+      workspaceId: 3,
+      requestId: 0,
+      state: {
+        providerId: 'openai',
+        displayName: 'OpenAI',
+        secureStorageAvailable: true,
+        configured: false,
+        selectedModel: 'gpt-4o'
+      }
+    })
+    assert.equal(state.configured, false)
+    assert.equal(state.selectedModel, null)
+    assert.deepEqual(state.models, [])
+  })
+
+  it('disconnect ignores stale workspaces and request ids', () => {
+    const state: ProviderPanelState = {
+      ...activeWorkspace(3),
+      configured: true,
+      selectedModel: 'gpt-4o',
+      models: [{ id: 'gpt-4o' }],
+      requestId: 2
+    }
+    const foreign = providerPanelReducer(state, {
+      type: 'disconnected',
+      workspaceId: 9,
+      requestId: 2,
+      state: {
+        providerId: 'openai',
+        displayName: 'OpenAI',
+        secureStorageAvailable: true,
+        configured: false,
+        selectedModel: null
+      }
+    })
+    assert.equal(foreign, state)
+    const stale = providerPanelReducer(state, {
+      type: 'disconnected',
+      workspaceId: 3,
+      requestId: 1,
+      state: {
+        providerId: 'openai',
+        displayName: 'OpenAI',
+        secureStorageAvailable: true,
+        configured: false,
+        selectedModel: null
+      }
+    })
+    assert.equal(stale, state)
+  })
 })

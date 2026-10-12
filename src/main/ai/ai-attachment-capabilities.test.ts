@@ -53,6 +53,16 @@ describe('AI attachment capability model', () => {
     assert.equal(modelSupportsVision('', ''), false)
   })
 
+  it('resolves stark hosted vision from the evidence-based map', () => {
+    assert.equal(modelSupportsVision('stark', 'builtin:gpt-5.6-luna'), true)
+    assert.equal(modelSupportsVision('stark', 'builtin:gemini-2.5-flash'), true)
+    assert.equal(modelSupportsVision('stark', 'builtin:nemotron-3.5-lightning'), false)
+    assert.equal(modelSupportsVision('stark', 'builtin:deepseek-v4-flash'), false)
+    assert.equal(modelSupportsVision('stark', 'builtin:longcat-2.0'), false)
+    assert.equal(modelSupportsVision('stark', 'builtin:evil'), false)
+    assert.equal(modelSupportsVision('stark', 'gpt-4o'), false)
+  })
+
   it('derives per-model capabilities without assuming vision', () => {
     const vision = capabilitiesForModel('openai', 'gpt-4o')
     assert.equal(vision.supportsImages, true)

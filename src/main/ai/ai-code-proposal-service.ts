@@ -18,6 +18,7 @@ import {
 import {
   GenerationInFlightError,
   ProviderModelMissingError,
+  ProviderModelUnavailableError,
   ProviderStructuredOutputUnsupportedError,
   UnknownProviderError
 } from './errors'
@@ -46,6 +47,9 @@ import { PendingApprovalBlockedError } from '../worker-tools/worker-tool-errors'
 import type { ProviderRegistry } from './provider-adapter'
 import type { AiUsageDeps } from '../usage/ai-usage-tracker'
 import { formatProviderContext } from '../session-context/session-context-service'
+import { isHostedBuiltinModel } from '../../shared/hosted-models/stark-model-map'
+import { readRequestedModel } from './model-request'
+import { eligibleLoopLinkModels, readLoopLinkChain, runLoopLinkChain } from './looplink-chain'
 
 const encoder = new TextEncoder()
 
@@ -171,7 +175,7 @@ export class AiCodeProposalService {
   }
 
   async proposeFileChange(payload: unknown): Promise<AiFileChangeProposalResult> {
-    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort'])) {
+    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort', 'model', 'brainModels'])) {
       throw new InvalidProposalRequestError('proposal request is invalid')
     }
     const record = payload as Record<string, unknown>
@@ -186,6 +190,8 @@ export class AiCodeProposalService {
       }
       effort = record['effort']
     }
+    const requestedModel = readRequestedModel(record)
+    const brainChain = readLoopLinkChain(record, 'brainModels', 'brain')
     if (this.workspaces.findById(workspaceId) === undefined) {
       throw new SessionWorkspaceUnavailableError()
     }
@@ -204,13 +210,13 @@ export class AiCodeProposalService {
     }
     this.guard.acquire(sessionId)
     try {
-      return await this.proposeInner(workspaceId, sessionId, effort)
+      return await this.proposeInner(workspaceId, sessionId, effort, requestedModel, brainChain)
     } finally {
       this.guard.release(sessionId)
     }
   }
 
-  private async proposeInner(workspaceId: number, sessionId: number, effort: StarkEffort = 'regular'): Promise<AiFileChangeProposalResult> {
+  private async proposeInner(workspaceId: number, sessionId: number, effort: StarkEffort = 'regular', requestedModel: string | null = null, brainChain: readonly string[] | null = null): Promise<AiFileChangeProposalResult> {
     const latest = this.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
     if (latest === undefined || latest.role !== 'user') {
       throw new ProposalNothingToProposeError()
@@ -244,15 +250,108 @@ export class AiCodeProposalService {
       throw new ProposalStaleBeforeProviderError()
     }
 
-    const providerId = this.providerService.requireProvider('openai')
-    const config = this.providerConfigs.findConfig(providerId)
-    const model = config?.selectedModel ?? null
-    if (model === null || model === '') {
-      throw new ProviderModelMissingError()
+    // LoopLink Brain chain: ordered failover over enabled models.
+    // Takes precedence over the single `model` selector when present.
+    if (brainChain !== null) {
+      const eligible = eligibleLoopLinkModels(brainChain, { needsStructured: true, needsVision: false })
+      if (eligible.length === 0) {
+        throw new ProviderStructuredOutputUnsupportedError()
+      }
+      const context = this.loadContext(sessionId)
+      const trailing = context[context.length - 1]
+      if (trailing === undefined) {
+        throw new ProposalNothingToProposeError()
+      }
+      const providerMessages =
+        persisted.length === 0
+          ? context
+          : [...context.slice(0, -1), { role: 'user' as const, content: formatProviderContext(persisted) }, trailing]
+      const outcome = await runLoopLinkChain(eligible, async (_modelId, assignment) => {
+        const resolved = await this.providerService.resolveExplicitAssignment(assignment.providerId, assignment.model)
+        try {
+          if (typeof resolved.adapter.generateStructured !== 'function') {
+            throw new ProviderStructuredOutputUnsupportedError()
+          }
+          const generateStructured = resolved.adapter.generateStructured.bind(resolved.adapter)
+          const policy = deriveStarkRunPolicy(effort, resolved.model)
+          const result = await this.trackCall(
+            { workspaceId, sessionId },
+            resolved.adapter.id,
+            resolved.model,
+            () => generateStructured({
+              apiKey: resolved.apiKey,
+              model: resolved.model,
+              instructions: STAGE_16_FIXED_PROPOSAL_INSTRUCTIONS,
+              messages: providerMessages,
+              maxOutputTokens: policy.maxOutputTokens,
+              ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
+              schemaName: PROPOSAL_SCHEMA_NAME,
+              schema: PROPOSAL_JSON_SCHEMA
+            })
+          )
+          return this.parseAndValidateOutput(result.outputText)
+        } finally {
+          void resolved.apiKey
+        }
+      })
+      const { summary, proposedContent } = outcome.result
+      if (proposedContent === currentContent) {
+        throw new ProposalNoChangesError()
+      }
+      let transaction: ChangeTransaction
+      try {
+        transaction = await this.transactions.createFileChange({
+          workspaceId,
+          relativePath,
+          expectedRevision: capturedRevision,
+          proposedContent
+        })
+      } catch (error) {
+        if (error instanceof ChangeTransactionConflictError) {
+          throw new ProposalStaleDuringProviderError({ cause: error })
+        }
+        if (error instanceof ChangeTransactionNoChangesError) {
+          throw new ProposalNoChangesError()
+        }
+        throw error
+      }
+      if (transaction.status !== 'pending') {
+        throw new InvalidProposalOutputError()
+      }
+      void this.now
+      return { transaction, summary }
     }
-    const adapter = this.registry.get(providerId)
-    if (adapter === undefined) {
-      throw new UnknownProviderError()
+
+    const requestedBuiltin = requestedModel !== null && requestedModel.startsWith('builtin:') ? requestedModel : null
+    if (requestedBuiltin !== null && !isHostedBuiltinModel(requestedBuiltin)) {
+      throw new ProviderModelUnavailableError()
+    }
+    let model: string
+    let adapter: NonNullable<ReturnType<ProviderRegistry['get']>>
+    let apiKey: string
+    if (requestedBuiltin !== null) {
+      // STARK Free routing: an explicit allowlisted `builtin:*`
+      // selection runs through the authenticated hosted provider.
+      // This branch never touches the BYOK credential or registry
+      // entry.
+      const resolved = await this.providerService.resolveExplicitAssignment('stark', requestedBuiltin)
+      adapter = resolved.adapter
+      model = resolved.model
+      apiKey = resolved.apiKey
+    } else {
+      const providerId = this.providerService.requireProvider('openai')
+      const config = this.providerConfigs.findConfig(providerId)
+      const legacyModel = config?.selectedModel ?? null
+      if (legacyModel === null || legacyModel === '') {
+        throw new ProviderModelMissingError()
+      }
+      const legacy = this.registry.get(providerId)
+      if (legacy === undefined) {
+        throw new UnknownProviderError()
+      }
+      adapter = legacy
+      model = legacyModel
+      apiKey = await this.providerService.decryptCredentialForUse(providerId)
     }
     if (typeof adapter.generateStructured !== 'function') {
       throw new ProviderStructuredOutputUnsupportedError()
@@ -272,7 +371,8 @@ export class AiCodeProposalService {
         ? context
         : [...context.slice(0, -1), { role: 'user' as const, content: formatProviderContext(persisted) }, trailing]
 
-    const apiKey = await this.providerService.decryptCredentialForUse(providerId)
+    // The credential (BYOK key or hosted access token) was resolved
+    // with the route above — never re-decrypted here.
     let outputText: string
     // Effort policy: output budget + model-gated reasoning travel
     // with the proposal call (Regular keeps the exact baseline).

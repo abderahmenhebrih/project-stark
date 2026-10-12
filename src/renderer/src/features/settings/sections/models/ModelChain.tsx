@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { UiIcon } from '../../../../components/icons/UiIcon'
 import type { StarkModelIdentity } from './model-library'
-import { canEnterChain, canUseModel, findLibraryModel } from './model-library'
+import { canEnterChain, findLibraryModel } from './model-library'
 import { MAX_CHAIN_MODELS, deriveModelRoster, enableModel } from './model-chain'
 import { MODEL_FALLBACK_ICON, modelIconFor } from './model-icons'
 
@@ -129,7 +129,7 @@ export function ModelChain(props: ModelChainProps): ReactElement {
       </div>
       <p className="settings-section__copy">{props.copy}</p>
       <p className="session__hint" role="note">
-        LoopLink routing is not enabled in this build.
+        Routing active · models are tried in order.
       </p>
       <table className="models-chain__table" aria-label={`${label} models in order`}>
         <thead className="models-chain__thead">
@@ -164,7 +164,6 @@ export function ModelChain(props: ModelChainProps): ReactElement {
             const name = displayNameFor(row.stableId, library)
             const position = row.position ?? 0
             const available = row.entry !== undefined
-            const runnable = row.entry !== undefined && canUseModel(row.entry)
             return (
               <tr
                 key={row.stableId}
@@ -227,13 +226,7 @@ export function ModelChain(props: ModelChainProps): ReactElement {
                     />
                   </span>
                   <span className="models-chain__name">{name}</span>
-                  {available ? (
-                    runnable ? null : (
-                      <span className="models-chain__status" role="status">
-                        Preview
-                      </span>
-                    )
-                  ) : (
+                  {available ? null : (
                     <span className="models-chain__status" role="status">
                       Unavailable
                     </span>

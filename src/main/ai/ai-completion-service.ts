@@ -11,6 +11,7 @@ import {
   NothingToAnswerError,
   ProviderEmptyResponseError,
   ProviderModelMissingError,
+  ProviderModelUnavailableError,
   UnknownProviderError
 } from './errors'
 import { MAX_AI_CONTEXT_BYTES, MAX_AI_CONTEXT_MESSAGES, MAX_ASSISTANT_OUTPUT_TOKENS, STAGE_14_FIXED_INSTRUCTIONS } from './limits'
@@ -19,6 +20,10 @@ import { isStarkEffort, type StarkEffort } from '../../shared/agent-target/types
 import type { ProviderRegistry } from './provider-adapter'
 import { formatProviderContext } from '../session-context/session-context-service'
 import { AiOperationGuard } from './ai-operation-guard'
+import { isHostedBuiltinModel } from '../../shared/hosted-models/stark-model-map'
+import { readRequestedModel } from './model-request'
+import { eligibleLoopLinkModels, readLoopLinkChain, runLoopLinkChain } from './looplink-chain'
+import { attachmentsNeedVision, VisionUnsupportedForModelError } from './ai-attachment-context'
 import type { LooplinkRepository } from '../looplink/looplink-repository'
 import type { LooplinkService } from '../looplink/looplink-service'
 import type { ChatAttachmentService } from '../chat-attachments/service'
@@ -212,7 +217,7 @@ export class AiCompletionService {
     return [...base.slice(0, -1), { role: 'user' as const, content: block }, trailing]
   }
 
-  async generateResponse(payload: unknown): Promise<AiGenerateResult> {    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort'])) {
+  async generateResponse(payload: unknown): Promise<AiGenerateResult> {    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort', 'model', 'brainModels'])) {
       throw new InvalidProviderRequestError('generation request is invalid')
     }
     const record = payload as Record<string, unknown>
@@ -221,6 +226,8 @@ export class AiCompletionService {
       throw new InvalidProviderRequestError('session reference is invalid')
     }
     const effort = readRequestEffort(record)
+    const requestedModel = readRequestedModel(record)
+    const brainChain = readLoopLinkChain(record, 'brainModels', 'brain')
     if (this.workspaces.findById(workspaceId) === undefined) {
       throw new SessionWorkspaceUnavailableError()
     }
@@ -240,6 +247,76 @@ export class AiCompletionService {
     const latest = this.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
     if (latest === undefined || latest.role !== 'user') {
       throw new NothingToAnswerError()
+    }
+    // LoopLink Brain chain (P0): when a valid snapshot is present it
+    // controls Ask execution — first enabled model is primary,
+    // failover walks the remaining enabled models in UI order.
+    // Takes precedence over the single `model` selector for STARK
+    // execution. Legacy single-model behavior below is preserved
+    // when no chain is present.
+    if (brainChain !== null) {
+      const links = this.sessions.listAttachmentsForMessage(latest.id)
+      const needsVision = attachmentsNeedVision(links.map((link) => ({ kind: link.kind, size: link.sizeBytes })))
+      const eligible = eligibleLoopLinkModels(brainChain, { needsStructured: false, needsVision })
+      if (eligible.length === 0) {
+        if (needsVision) {
+          throw new VisionUnsupportedForModelError()
+        }
+        throw new ProviderModelUnavailableError()
+      }
+      this.guard.acquire(sessionId)
+      try {
+        const outcome = await runLoopLinkChain(eligible, async (_modelId, assignment) => {
+          const resolved = await this.providerService.resolveExplicitAssignment(assignment.providerId, assignment.model)
+          try {
+            return await this.generateWithAdapter(
+              workspaceId,
+              sessionId,
+              latest.id,
+              assignment.providerId,
+              resolved.adapter,
+              resolved.model,
+              null,
+              'ask',
+              resolved.apiKey,
+              effort
+            )
+          } finally {
+            void resolved.apiKey
+          }
+        })
+        return outcome.result
+      } finally {
+        this.guard.release(sessionId)
+      }
+    }
+    // STARK Free routing: an explicit `builtin:*` selection runs
+    // through the authenticated hosted provider (no user key). An
+    // allowlisted id is required — unknown builtin ids fail honestly
+    // instead of falling through to the BYOK path. Any other
+    // selection keeps the legacy persisted BYOK path below.
+    if (requestedModel !== null && requestedModel.startsWith('builtin:')) {
+      if (!isHostedBuiltinModel(requestedModel)) {
+        throw new ProviderModelUnavailableError()
+      }      const resolved = await this.providerService.resolveExplicitAssignment('stark', requestedModel)
+      this.guard.acquire(sessionId)
+      try {
+        return await this.generateWithAdapter(
+          workspaceId,
+          sessionId,
+          latest.id,
+          'stark',
+          resolved.adapter,
+          resolved.model,
+          null,
+          'ask',
+          resolved.apiKey,
+          effort
+        )
+      } finally {
+        void resolved.apiKey
+        this.guard.release(sessionId)
+      }
     }
     const providerId = this.providerService.requireProvider('openai')
     const config = this.providerConfigs.findConfig(providerId)
