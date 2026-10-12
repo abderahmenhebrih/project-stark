@@ -86,6 +86,14 @@ describe('models V2 library', () => {
     }
   })
 
+  it('unrouted catalog cards render honestly as preview, never runnable', () => {
+    const card = codeOnly(readModels('models/ModelCard.tsx'))
+    assert.ok(card.includes('Preview — unavailable in this build'), 'preview cards must say so plainly')
+    const library = codeOnly(readModels('models/model-library.ts'))
+    assert.ok(library.includes('hasRuntimeRoute'), 'a proven-route helper must exist')
+    assert.ok(library.includes("entry.origin === 'api'"), 'only user-added api entries may hold a route')
+  })
+
   it('local linking is an honest placeholder with no fake backend', () => {
     const flow = codeOnly(readModels('models/AddModelFlow.tsx'))
     assert.ok(flow.includes('Local model linking is not available yet.'), 'local path must be honest')
@@ -135,6 +143,11 @@ describe('models V2 brain and heart chains', () => {
     assert.ok(
       page.includes('STARK does not route inference through them yet.'),
       'page must not pretend routing exists'
+    )
+    const chain = codeOnly(readModels('models/ModelChain.tsx'))
+    assert.ok(
+      chain.includes('LoopLink routing is not enabled in this build.'),
+      'each LoopLink must carry the restrained non-routing line'
     )
     for (const file of ['models/ModelChain.tsx', 'models/model-chain.ts', 'models/model-chains-state.ts']) {
       const source = codeOnly(readModels(file))

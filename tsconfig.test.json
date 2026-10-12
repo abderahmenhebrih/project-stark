@@ -76,6 +76,7 @@
     "src/renderer/src/features/settings/sections/models/model-chains-state.test.ts",
     "src/renderer/src/features/settings/sections/models/models-v2.test.ts",
     "src/renderer/src/features/settings/sections/models/model-default-chains.test.ts",
+    "src/renderer/src/features/settings/sections/models/model-runtime-honesty.test.ts",
     "src/renderer/src/features/plugins/plugins-panel.test.ts",
     "src/renderer/src/features/git/git-state.ts",
     "src/renderer/src/features/git/git-state.test.ts",

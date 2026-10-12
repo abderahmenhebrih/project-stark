@@ -160,10 +160,14 @@ describe('settings V2 full-page surface', () => {
     }
   })
 
-  it('Account absorbs profile presentation', () => {
-    const account = readRenderer('features/settings/sections/AccountSettings.tsx')
+  it('Account is one clean surface (nickname lives on welcome, not here)', () => {
+    const account = codeOnly(readRenderer('features/settings/sections/AccountSettings.tsx'))
     assert.ok(account.includes('<AccountSection'), 'account must mount the real sign-in state')
-    assert.ok(account.includes('<ProfileSection'), 'account must absorb the display-name preference')
+    assert.ok(!account.includes('<ProfileSection'), 'account must not mount the nickname editor')
+    assert.ok(!account.includes('Local Profile'), 'account must not show a second identity')
+    assert.ok(account.includes('View Billing'), 'account must keep the Billing route')
+    const home = codeOnly(readRenderer('pages/HomePage.tsx'))
+    assert.ok(home.includes('<ProfileSection'), 'welcome surface must keep the nickname preference')
     const nav = codeOnly(readRenderer('features/settings/SettingsNav.tsx'))
     assert.ok(!nav.includes('Profile'), 'profile must not remain a top-level page')
   })

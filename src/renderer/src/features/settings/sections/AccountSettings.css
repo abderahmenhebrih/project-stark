@@ -1,21 +1,13 @@
-/* Settings → Account: two-card layout using the full content canvas. */
+/* Settings → Account: single account surface using the full content canvas. */
 
 .settings-page__content > section.account-page {
   max-width: 1040px;
 }
 
-.account-grid {
-  display: grid;
-  grid-template-columns: 1.1fr 0.9fr;
-  gap: 22px;
-  align-items: start;
+.account-single {
+  display: flex;
+  flex-direction: column;
   margin-top: var(--stark-space-lg);
-}
-
-@media (max-width: 900px) {
-  .account-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 .account-card {
@@ -27,6 +19,10 @@
   background: var(--stark-surface);
   border: 1px solid var(--stark-border);
   border-radius: 16px;
+}
+
+.account-card--single {
+  max-width: none;
 }
 
 .account-card h2 {
@@ -104,54 +100,11 @@
   font-size: 12px;
 }
 
-/* Local profile identity header. */
-.profile-identity {
+/* Billing / account actions row inside the single surface. */
+.account-actions {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
-}
-
-.profile-avatar {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--stark-text);
-  background: var(--stark-elevated);
-  border: 1px solid var(--stark-border);
-  border-radius: 50%;
-}
-
-.profile-name {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--stark-text);
-}
-
-/* Plan summary row, separated from profile content. */
-.plan-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-top: 14px;
-  border-top: 1px solid var(--stark-border);
-}
-
-.plan-row__label {
-  font-size: 12px;
-  color: var(--stark-text-dim);
-}
-
-.plan-row__value {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--stark-lime);
 }
 
 .account-card .explorer__secondary {

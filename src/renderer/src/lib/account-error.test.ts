@@ -13,6 +13,12 @@ describe('account error boundary', () => {
     assert.equal(normalizeAccountError(new Error('cloud-auth-secure-storage-unavailable')).message, ACCOUNT_SECURE_STORAGE_MESSAGE)
   })
 
+  it('maps implicit-flow callbacks to the unsupported copy', () => {
+    const normalized = normalizeAccountError(new Error('cloud-auth-callback-unsupported'))
+    assert.equal(normalized.kind, 'callback-unsupported')
+    assert.equal(normalized.message, 'Unsupported OAuth callback. Please start sign-in again.')
+  })
+
   it('collapses unknown failures and transport wording to the fallback', () => {
     assert.equal(normalizeAccountError(new Error('boom'), 'fallback').message, 'fallback')
     assert.equal(normalizeAccountError(new Error('Error invoking remote method'), ACCOUNT_GENERIC_MESSAGE).message, ACCOUNT_GENERIC_MESSAGE)

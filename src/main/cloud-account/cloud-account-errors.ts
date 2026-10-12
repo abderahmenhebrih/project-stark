@@ -50,6 +50,19 @@ export class CloudAuthCallbackInvalidError extends CloudAccountError {
   }
 }
 
+/**
+ * A callback carrying an implicit-flow fragment (`#access_token=…`).
+ * STARK desktop auth is PKCE-only: fragment tokens are never imported,
+ * never parsed, never logged — the user simply starts sign-in again.
+ */
+export class CloudAuthCallbackUnsupportedError extends CloudAccountError {
+  override readonly name = 'CloudAuthCallbackUnsupportedError'
+
+  constructor() {
+    super('cloud-auth-callback-unsupported')
+  }
+}
+
 /** Callback arrived after the 5-minute attempt deadline. */
 export class CloudAuthCallbackExpiredError extends CloudAccountError {
   override readonly name = 'CloudAuthCallbackExpiredError'
@@ -116,6 +129,7 @@ export function toPublicAccountError(operation: CloudAccountOperation, error: un
     error instanceof CloudAuthInProgressError ||
     error instanceof CloudAuthInvalidProviderError ||
     error instanceof CloudAuthCallbackInvalidError ||
+    error instanceof CloudAuthCallbackUnsupportedError ||
     error instanceof CloudAuthCallbackExpiredError ||
     error instanceof CloudAuthExchangeFailedError ||
     error instanceof CloudAuthSecureStorageUnavailableError ||
@@ -135,6 +149,7 @@ export function isPublicAccountErrorMessage(message: string): boolean {
     message === 'cloud-auth-in-progress' ||
     message === 'cloud-auth-invalid-provider' ||
     message === 'cloud-auth-callback-invalid' ||
+    message === 'cloud-auth-callback-unsupported' ||
     message === 'cloud-auth-callback-expired' ||
     message === 'cloud-auth-exchange-failed' ||
     message === 'cloud-auth-secure-storage-unavailable' ||

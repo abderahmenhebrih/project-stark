@@ -12,8 +12,9 @@ import { MAX_CHAIN_MODELS, addToChain } from './model-chain'
 
 /**
  * STARK Free catalog proof (product-locked): exactly the 15 Free
- * models in exact order, all origin built-in, chain-ready for Brain
- * and Heart at max 5, never deletable, with no generic placeholders
+ * models in exact order, all origin built-in, rendered honestly as
+ * catalog preview (no inference route — never runnable, never
+ * chain-enterable), never deletable, with no generic placeholders
  * and no paid (Magma/Frost/Void) cards before Billing.
  */
 
@@ -127,11 +128,11 @@ describe('STARK Free catalog (locked)', () => {
     )
   })
 
-  it('marks every entry built-in, remote, available, unlocked, FREE', () => {
+  it('marks every entry built-in, remote, preview (not runnable), unlocked, FREE', () => {
     for (const entry of freeCatalog()) {
       assert.equal(entry.origin, 'built-in')
       assert.equal(entry.sourceType, 'remote')
-      assert.equal(entry.available, true)
+      assert.equal(entry.available, false)
       assert.equal(entry.locked, false)
       assert.equal(entry.badge, 'FREE')
       assert.equal(entry.planRequirement, null)
@@ -150,34 +151,37 @@ describe('STARK Free catalog (locked)', () => {
     }
   })
 
-  it('every Free model may enter Brain and Heart chains at max 5', () => {
+  it('no Free preview model may enter Brain or Heart chains (chain caps still hold at max 5)', () => {
     const builtIn = freeCatalog()
     for (const entry of builtIn) {
-      assert.equal(canEnterChain(entry), true, `${entry.displayName} must be chain-ready`)
+      assert.equal(canEnterChain(entry), false, `${entry.displayName} must not be chain-enterable without a route`)
     }
     assert.equal(MAX_CHAIN_MODELS, 5)
+    // Chain mechanics (cap, duplicates, cross-chain sharing) are
+    // proven with synthetic routed ids — the pure order logic is
+    // unchanged, only catalog preview entries are refused.
     let brain: readonly string[] = []
-    for (const entry of builtIn.slice(0, 5)) {
-      const outcome = addToChain(brain, entry.stableId)
+    for (const id of ['openai:alpha', 'openai:beta', 'openai:gamma', 'openai:delta', 'openai:epsilon']) {
+      const outcome = addToChain(brain, id)
       assert.equal(outcome.applied, true)
       brain = outcome.chain
     }
     assert.equal(brain.length, 5)
-    const sixth = addToChain(brain, builtIn[5]?.stableId ?? '')
+    const sixth = addToChain(brain, 'openai:zeta')
     assert.equal(sixth.applied, false)
     assert.equal(sixth.reason, 'chain-full')
     let heart: readonly string[] = []
-    for (const entry of builtIn.slice(10, 15)) {
-      const outcome = addToChain(heart, entry.stableId)
+    for (const id of ['openai:one', 'openai:two', 'openai:three', 'openai:four', 'openai:five']) {
+      const outcome = addToChain(heart, id)
       assert.equal(outcome.applied, true)
       heart = outcome.chain
     }
     assert.equal(heart.length, 5)
-    assert.equal(addToChain(heart, builtIn[0]?.stableId ?? '').applied, false)
+    assert.equal(addToChain(heart, 'openai:alpha').applied, false)
   })
 
   it('rejects same-chain duplicates but allows cross-chain sharing', () => {
-    const first = freeCatalog()[0]?.stableId ?? ''
+    const first = 'openai:alpha'
     const brain = addToChain([], first).chain
     assert.equal(addToChain(brain, first).reason, 'duplicate-in-chain')
     // Brain and Heart lists are independent: the same model may serve both.

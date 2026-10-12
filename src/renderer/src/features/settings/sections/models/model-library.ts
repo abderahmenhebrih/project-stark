@@ -11,9 +11,10 @@ import type { ProviderPanelState } from '../../../sessions/provider-state'
  * THREE origins (locked product model):
  * - built-in: the STARK Free catalog (exactly 15 locked entries, see
  *   FREE_MODEL_DEFINITIONS). Appears automatically, needs no API
- *   setup, is never deletable, and may enter either chain. Here
- *   "built-in" means built into the catalog/configuration — no
- *   weight files are bundled by this pass.
+ *   setup, is never deletable, and renders as Preview — no inference
+ *   route exists, so entries can never be selected for an AI run nor
+ *   enter either chain. Here "built-in" means built into the
+ *   catalog/configuration — no weight files are bundled by this pass.
  * - api / local: user-added through Add API key / Link a local model.
  *   Only api exists today (single configured provider); local is the
  *   reserved shape for the future linking runtime.
@@ -23,10 +24,13 @@ import type { ProviderPanelState } from '../../../sessions/provider-state'
  *   yet, so nothing with this origin is rendered.
  *
  * CATALOG AVAILABILITY vs INFERENCE RUNTIME: `available` below means
- * "selectable in Brain/Heart configuration". It does NOT mean a
- * proven remote inference endpoint exists — execution runtime for
- * these entries is a later AI-integration dependency, and the page
- * states plainly that chains do not route yet.
+ * "selectable for an AI run now" — a proven registered runtime route
+ * exists. In this build exactly one route exists: the configured
+ * `openai` provider (user-added `api` entries via Settings → Models →
+ * Add API key). The 15 Free built-ins have NO inference route and are
+ * catalog preview cards: visible, never deletable, never runnable,
+ * never chain-enterable. The page states this plainly next to the
+ * cards and the LoopLink rosters.
  */
 
 export type ModelOrigin = 'built-in' | 'api' | 'local' | 'plan'
@@ -41,7 +45,7 @@ export interface StarkModelIdentity {
   readonly displayName: string
   readonly sourceType: ModelSourceType
   readonly origin: ModelOrigin
-  /** Chain-selectable now. False renders as Unavailable, never destroyed. */
+  /** Selectable for an AI run now (proven runtime route). False renders as Preview/Unavailable, never destroyed. */
   readonly available: boolean
   /** Plan entry without entitlement. Never insertable while locked. */
   readonly locked: boolean
@@ -94,7 +98,8 @@ interface CatalogDefinition {
  * Present after installation, no setup. Stable ids live under the
  * `builtin:` namespace via stableModelId; providerId carries the
  * family identity for presentation only (catalog identity, NOT
- * inference routing — no backends are implemented by this pass).
+ * inference routing — no backends are implemented by this pass, so
+ * every entry below derives with `available: false`).
  */
 const BUILT_IN_DEFINITIONS: readonly CatalogDefinition[] = [
   { providerId: 'meta', providerLabel: 'Meta', model: 'muse-spark-1.3', displayName: 'Muse Spark 1.3', sourceType: 'remote' },
@@ -209,8 +214,22 @@ export function isPlanEntitled(stableId: string, entitlements: ModelEntitlements
 }
 
 /**
- * Whether an entry may be used now: plan entries need entitlement,
- * everything else needs availability.
+ * True only for entries with a proven inference route in this build:
+ * user-added `api` entries on the single registered `openai` provider
+ * (the runtime `requireProvider('openai')` path). Built-in preview
+ * cards, local placeholders, and locked plan entries have no route.
+ * No routes are invented here — this mirrors the main-side registry,
+ * which registers exactly one OpenAI adapter.
+ */
+export function hasRuntimeRoute(entry: StarkModelIdentity): boolean {
+  return entry.origin === 'api' && entry.providerId === 'openai' && entry.available
+}
+
+/**
+ * Whether an entry may be used for an AI run now: plan entries need
+ * entitlement, everything else needs a proven runtime route
+ * (`available`). Built-in preview cards are never usable; entries
+ * already in a chain keep their position as Preview/Unavailable.
  */
 export function canUseModel(entry: StarkModelIdentity, entitlements: ModelEntitlements = NO_ENTITLEMENTS): boolean {
   if (entry.origin === 'plan' && !isPlanEntitled(entry.stableId, entitlements)) {
@@ -222,8 +241,8 @@ export function canUseModel(entry: StarkModelIdentity, entitlements: ModelEntitl
 /**
  * Configuration-time guard for Brain/Heart insertion. Locked plan
  * entries are refused here — never inserted hoping runtime rejects
- * them later. Unavailable entries are refused for new insertions;
- * entries already in a chain keep their position as Unavailable.
+ * them later. Unrouted (preview) entries are refused for new
+ * insertions; entries already in a chain keep their position.
  */
 export function canEnterChain(entry: StarkModelIdentity, entitlements: ModelEntitlements = NO_ENTITLEMENTS): boolean {
   return canUseModel(entry, entitlements)
@@ -231,12 +250,13 @@ export function canEnterChain(entry: StarkModelIdentity, entitlements: ModelEnti
 
 /**
  * Derives the usable Model Library in predictable order: the 15
- * STARK Free built-ins (fixed product order, never sorted), then
- * user-added (sorted), then plan-exclusive (empty until Billing
- * defines the paid catalog). The Add model card renders last at the
- * call site.
+ * STARK Free built-ins (fixed product order, never sorted — preview
+ * cards with no inference route), then user-added (sorted, runnable
+ * once their provider is configured), then plan-exclusive (empty
+ * until Billing defines the paid catalog). The Add model card renders
+ * last at the call site.
  *
- * - Built-in entries appear without any setup.
+ * - Built-in entries appear without any setup as Preview cards.
  * - User entries appear only while their provider is configured
  *   (discovery plus the persisted selected model, deduped).
  * - Lock derives from entitlements so a future unlock keeps identity.
@@ -255,7 +275,9 @@ export function deriveModelLibrary(
       displayName: definition.displayName,
       sourceType: definition.sourceType,
       origin: 'built-in',
-      available: true,
+      // No inference route exists for catalog preview cards — they
+      // render as Preview and can never be selected for an AI run.
+      available: false,
       locked: false,
       badge: 'FREE',
       planRequirement: null

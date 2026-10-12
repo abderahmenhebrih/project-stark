@@ -27,11 +27,11 @@ function unconfiguredProvider() {
 }
 
 describe('model library identity', () => {
-  it('shows the 15 STARK Free built-ins without API setup (no paid catalog yet)', () => {
+  it('shows the 15 STARK Free built-ins as preview cards without API setup (no paid catalog yet)', () => {
     const library = deriveModelLibrary(unconfiguredProvider())
     assert.equal(library.length, 15)
     assert.ok(library.every((entry) => entry.origin === 'built-in'))
-    assert.ok(library.every((entry) => entry.available && !entry.locked))
+    assert.ok(library.every((entry) => !entry.available && !entry.locked))
     assert.ok(library.every((entry) => entry.badge === 'FREE'))
     assert.ok(!library.some((entry) => entry.origin === 'plan'), 'no paid catalog before Billing')
   })

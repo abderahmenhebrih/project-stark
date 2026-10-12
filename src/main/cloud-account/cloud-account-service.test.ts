@@ -296,11 +296,16 @@ describe('cloud account service (Stage 29)', () => {
         'stark://auth/other?code=abc',
         'https://example.com/callback?code=abc',
         'stark://auth/callback',
-        'stark://auth/callback?code=abc&evil=1',
-        'stark://auth/callback?code=abc#frag'
+        'stark://auth/callback?code=abc&evil=1'
       ]) {
         await assert.rejects(() => h.service.handleAuthCallback(bad), /cloud-auth-callback-invalid/)
       }
+      // Fragment-bearing callbacks are implicit-flow residue: they get
+      // the distinct unsupported category (never imported as tokens).
+      await assert.rejects(
+        () => h.service.handleAuthCallback('stark://auth/callback?code=abc#frag'),
+        /cloud-auth-callback-unsupported/
+      )
       assert.equal(h.adapter.exchangeCount, 0)
     } finally {
       h.db.close()

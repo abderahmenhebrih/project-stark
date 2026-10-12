@@ -96,10 +96,11 @@ describe('stage 31 D05 shell proof', () => {
     assert.ok(panel.includes('<SettingsPage'), 'settings must render in the dedicated surface')
   })
 
-  it('11. AccountSection is mounted in settings', () => {
+  it('11. AccountSection is mounted in settings (single surface)', () => {
     const account = readRenderer('features/settings/sections/AccountSettings.tsx')
     assert.ok(account.includes('<AccountSection'), 'existing AccountSection must be reachable under Settings')
-    assert.ok(account.includes('<ProfileSection'), 'profile presentation must be absorbed into Account')
+    assert.ok(!account.includes('<ProfileSection'), 'nickname editor must live on welcome, not Account')
+    assert.ok(!account.includes('Local Profile'), 'no second identity may split Account')
   })
 
   it('12. composer contains the agent target, effort, and Send', () => {

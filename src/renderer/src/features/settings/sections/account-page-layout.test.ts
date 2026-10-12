@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
 /**
- * Account page layout proof (visual-only pass): two structural cards
- * over the wide content canvas, neutral OAuth controls, organized
- * profile + plan summary — with auth behavior byte-identical.
+ * Account page single-surface proof: ONE STARK Account card, no
+ * Local Profile concept on this page, no duplicate plan display —
+ * with auth behavior byte-identical and the nickname system alive
+ * elsewhere (welcome greeting + ProfileSection).
  * Runs against repository source.
  */
 
@@ -30,85 +31,95 @@ function buttonWith(source: string, label: string): string {
   return source.slice(open, close)
 }
 
-describe('account page layout', () => {
-  it('uses two structural cards over the wide canvas', () => {
+describe('account page single surface', () => {
+  it('has no Local Profile heading, avatar, or nickname editor on the Account page', () => {
     const page = codeOnly(readRenderer('features/settings/sections/AccountSettings.tsx'))
-    assert.ok(page.includes('account-grid'), 'page must use the two-column grid')
-    const cards = page.match(/className="account-card"/g) ?? []
-    assert.equal(cards.length, 2, 'page must render exactly two cards')
-    assert.ok(page.includes('<AccountSection'), 'left card must mount the auth card')
-    assert.ok(page.includes('Local Profile'), 'right card must be headed Local Profile')
-    assert.ok(page.includes('<ProfileSection'), 'right card must absorb the display-name preference')
-    const css = readRenderer('features/settings/sections/AccountSettings.css')
-    assert.ok(css.includes('max-width: 1040px'), 'account canvas must use ~1000-1100px')
-    assert.ok(css.includes('1.1fr 0.9fr'), 'desktop grid must weight account over profile')
-    assert.ok(css.includes('gap: 22px'), 'card gap must be 20-24px')
-    assert.ok(css.includes('padding: 26px'), 'card padding must be 24-28px')
+    assert.ok(!page.includes('Local Profile'), 'page must not render a Local Profile heading')
+    assert.ok(!page.includes('STARK calls you'), 'page must not render the nickname block')
+    assert.ok(!page.includes('<ProfileSection'), 'page must not mount the nickname editor')
+    assert.ok(!page.includes('profile-avatar'), 'page must not render a duplicate avatar')
+    assert.ok(!page.includes('profile-identity'), 'page must not render a duplicate identity row')
+    assert.ok(!page.includes('accountInitials'), 'page must not compute duplicate initials')
+    assert.ok(!page.includes('useApp'), 'page needs no profile store wiring')
   })
 
-  it('collapses to a single column on narrow widths', () => {
+  it('renders exactly one account card over the wide canvas', () => {
+    const page = codeOnly(readRenderer('features/settings/sections/AccountSettings.tsx'))
+    assert.ok(!page.includes('account-grid'), 'two-column grid must be gone')
+    assert.ok(page.includes('account-single'), 'page must use the single-surface wrapper')
+    const cards = page.match(/className="account-card/g) ?? []
+    assert.equal(cards.length, 1, 'page must render exactly one card')
+    assert.ok(page.includes('<AccountSection'), 'single card must mount the auth card')
     const css = readRenderer('features/settings/sections/AccountSettings.css')
-    assert.ok(css.includes('@media (max-width: 900px)'), 'grid must stack on narrow widths')
-    assert.ok(css.includes('grid-template-columns: 1fr'), 'stacked grid must be single-column')
-    assert.ok(css.includes('repeat(auto-fit, minmax(180px, 1fr))'), 'provider buttons must wrap gracefully')
+    assert.ok(css.includes('max-width: 1040px'), 'account canvas must keep the wide surface')
+    assert.ok(css.includes('.account-single'), 'single wrapper must be styled')
+    assert.ok(css.includes('padding: 26px'), 'card padding must stay 24-28px')
+    assert.ok(!css.includes('.profile-avatar'), 'dead profile avatar CSS must be gone')
+    assert.ok(!css.includes('.plan-row'), 'dead duplicate plan-row CSS must be gone')
   })
 
-  it('renders provider controls as neutral full-width buttons', () => {
+  it('has no duplicate Current plan block on the Account page', () => {
+    const page = codeOnly(readRenderer('features/settings/sections/AccountSettings.tsx'))
+    assert.ok(!page.includes('Current plan'), 'layout must not duplicate the plan line (AccountSection owns it)')
+    assert.ok(!page.includes('plan-row'), 'layout must not duplicate the plan row')
+    const panel = codeOnly(readRenderer('features/account/AccountSection.tsx'))
+    const planHits = panel.match(/Current plan: STARK Free/g) ?? []
+    assert.equal(planHits.length, 1, 'signed-in identity must render the plan exactly once')
+  })
+
+  it('signed-in identity still renders real OAuth name/email/provider', () => {
+    const panel = codeOnly(readRenderer('features/account/AccountSection.tsx'))
+    assert.ok(panel.includes('Signed in with'), 'identity must name the provider')
+    assert.ok(panel.includes('accountProviderLabel(status.account.provider)'), 'provider label must stay dynamic')
+    assert.ok(panel.includes('status.account.displayName'), 'real OAuth display name must render')
+    assert.ok(panel.includes('status.account.email'), 'real OAuth email must render')
+    assert.ok(panel.includes('Current plan: STARK Free'), 'identity must keep the plan line')
+    assert.ok(panel.includes('Your Workspace files and coding history remain local'), 'local-first copy must remain')
+    assert.ok(panel.includes('STARK does not sync project data to the cloud'), 'cloud boundary copy must name STARK')
+    assert.ok(!panel.includes('Stage 29 does not sync'), 'stale stage copy must be gone')
+  })
+
+  it('View Billing remains inside the main surface with safe routing', () => {
+    const page = codeOnly(readRenderer('features/settings/sections/AccountSettings.tsx'))
+    assert.ok(page.includes('View Billing'), 'single surface must offer View Billing')
+    assert.ok(page.includes('onNavigateBilling'), 'Billing link must use safe routing')
+    assert.ok(page.includes('account-actions'), 'billing action must sit inside the single surface')
+    const billingButton = buttonWith(page, 'View Billing')
+    assert.ok(billingButton.includes('explorer__secondary'), 'billing must keep the secondary style')
+  })
+
+  it('Sign out remains owned by the untouched auth card', () => {
+    const panel = codeOnly(readRenderer('features/account/AccountSection.tsx'))
+    assert.ok(panel.includes('Sign out'), 'auth card must keep Sign out')
+    assert.ok(panel.includes('handleSignOut'), 'sign-out behavior must be untouched')
+    const page = codeOnly(readRenderer('features/settings/sections/AccountSettings.tsx'))
+    assert.ok(!page.includes('handleSignOut'), 'layout must not duplicate sign-out logic')
+  })
+
+  it('signed-out Google/GitHub buttons remain neutral and full-width', () => {
     const panel = codeOnly(readRenderer('features/account/AccountSection.tsx'))
     assert.ok(panel.includes('account-providers'), 'providers must share a layout row')
     for (const label of ['Continue with Google', 'Continue with GitHub']) {
       const button = buttonWith(panel, label)
       assert.ok(button.includes('account-provider'), `${label} must use the neutral provider class`)
       assert.ok(!button.includes('stark-btn--primary'), `${label} must not use the lime primary class`)
-      assert.ok(!button.includes('stark-btn--secondary'), `${label} must not use action button classes`)
     }
     const css = readRenderer('features/settings/sections/AccountSettings.css')
-    assert.ok(css.includes('min-height: 50px'), 'provider buttons must be 48-52px high')
-    assert.ok(css.includes('.account-provider:disabled'), 'disabled state must be styled')
+    assert.ok(css.includes('min-height: 50px'), 'provider buttons must stay 48-52px high')
+    assert.ok(css.includes('repeat(auto-fit, minmax(180px, 1fr))'), 'providers must use the full width gracefully')
   })
 
-  it('disabled providers are muted without lime', () => {
-    const css = codeOnly(readRenderer('features/settings/sections/AccountSettings.css'))
-    const at = css.indexOf('.account-provider:disabled')
-    assert.ok(at >= 0, 'disabled rule must exist')
-    const rule = css.slice(at, at + 300)
-    assert.ok(rule.includes('opacity: 0.45'), 'disabled providers must be muted')
-    assert.ok(rule.includes('not-allowed'), 'disabled providers must show a blocked cursor')
-    assert.ok(!rule.includes('lime'), 'disabled providers must never use lime')
+  it('nickname/onboarding system elsewhere is untouched', () => {
+    assert.ok(existsSync(join(process.cwd(), 'src', 'renderer', 'src', 'features', 'profile', 'ProfileSection.tsx')), 'ProfileSection must still exist')
+    const home = codeOnly(readRenderer('pages/HomePage.tsx'))
+    assert.ok(home.includes('<ProfileSection'), 'welcome surface must keep the nickname editor')
+    assert.ok(home.includes('What are we building today?'), 'session greeting must keep the nickname')
+    const profile = codeOnly(readRenderer('features/profile/ProfileSection.tsx'))
+    assert.ok(profile.includes('STARK calls you'), 'nickname component copy must be untouched')
+    assert.ok(profile.includes('updateLocalDisplayName'), 'nickname save path must be untouched')
   })
 
-  it('keeps the not-configured notice calm and the local-data footer', () => {
-    const panel = codeOnly(readRenderer('features/account/AccountSection.tsx'))
-    assert.ok(panel.includes('account-notice'), 'notice must use the calm status block')
-    assert.ok(panel.includes('Account sign-in is not configured for this build.'), 'notice copy must remain')
-    assert.ok(panel.includes('account-note'), 'local-data line must live in the card footer')
-    const css = codeOnly(readRenderer('features/settings/sections/AccountSettings.css'))
-    const at = css.indexOf('.account-notice')
-    const rule = css.slice(at, at + 300)
-    assert.ok(!rule.includes('red') && !rule.includes('danger'), 'notice must not be error-red')
-  })
-
-  it('Local Profile card shows avatar, name, edit, and plan', () => {
-    const page = codeOnly(readRenderer('features/settings/sections/AccountSettings.tsx'))
-    assert.ok(page.includes('profile-avatar'), 'profile card must show the initial avatar')
-    assert.ok(page.includes('profile-identity'), 'avatar and name must share an identity row')
-    assert.ok(page.includes('plan-row'), 'plan summary must be a separated row')
-    assert.ok(page.includes('Current plan'), 'plan row must be labeled')
-    assert.ok(page.includes('STARK Free'), 'plan must stay honestly Free')
-    assert.ok(page.includes('View Billing'), 'plan row may link to Billing')
-    assert.ok(page.includes("onSectionChange('billing')") || page.includes('onNavigateBilling'), 'Billing link must use safe routing')
-  })
-
-  it('signed-in state still hides provider buttons with profile separate', () => {
-    const panel = codeOnly(readRenderer('features/account/AccountSection.tsx'))
-    const tail = panel.slice(panel.indexOf("if (status.state === 'session_attention'"))
-    assert.ok(!tail.includes('Continue with'), 'signed-in states must hide sign-in buttons')
-    assert.ok(tail.includes('Current plan: STARK Free'), 'identity card must keep the plan line')
-    const page = codeOnly(readRenderer('features/settings/sections/AccountSettings.tsx'))
-    assert.ok(page.includes('<ProfileSection'), 'local profile stays independent from OAuth identity')
-  })
-
-  it('loading and error states render inside the Account card', () => {
+  it('loading and error states render inside the single Account card', () => {
     const panel = codeOnly(readRenderer('features/account/AccountSection.tsx'))
     assert.ok(panel.includes('Checking account…'), 'loading copy must remain')
     assert.ok(panel.includes('sign-in could not be completed.'), 'sanitized error must remain')

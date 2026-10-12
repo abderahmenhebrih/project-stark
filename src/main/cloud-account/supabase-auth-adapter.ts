@@ -87,6 +87,16 @@ export function normalizeSupabaseIdentity(input: {
 }
 
 /**
+ * True when a configured value is obviously service-role-shaped.
+ * Fail-closed signal for diagnostics only — the value itself is never
+ * logged. The literal lives here (an allowed defensive-guard file)
+ * so no other surface needs to name it.
+ */
+export function isUnsafeSupabaseValue(value: unknown): boolean {
+  return typeof value === 'string' && value.toLowerCase().includes('service_role')
+}
+
+/**
  * Loads Supabase public configuration from application-owned runtime
  * config. Public client values only — never service_role, database
  * passwords, or management tokens.
@@ -98,10 +108,7 @@ export function loadSupabasePublicConfig(env: NodeJS.ProcessEnv = process.env): 
     return null
   }
   const trimmedUrl = url.trim()
-  if (
-    trimmedUrl.toLowerCase().includes('service_role') ||
-    anonKey.toLowerCase().includes('service_role')
-  ) {
+  if (isUnsafeSupabaseValue(trimmedUrl) || isUnsafeSupabaseValue(anonKey)) {
     return null
   }
   if (!trimmedUrl.toLowerCase().startsWith('https://')) {
@@ -111,7 +118,13 @@ export function loadSupabasePublicConfig(env: NodeJS.ProcessEnv = process.env): 
 }
 
 /** Minimal in-memory PKCE key-value storage (main-process only). */
-function createMemoryStorage(): { getItem: (k: string) => string | null; setItem: (k: string, v: string) => void; removeItem: (k: string) => void } {
+export interface MemoryPkceStorage {
+  getItem: (key: string) => string | null
+  setItem: (key: string, value: string) => void
+  removeItem: (key: string) => void
+}
+
+function createMemoryStorage(): MemoryPkceStorage {
   const backing = new Map<string, string>()
   return {
     getItem: (key: string) => backing.get(key) ?? null,
@@ -124,36 +137,56 @@ function createMemoryStorage(): { getItem: (k: string) => string | null; setItem
   }
 }
 
+/** Auth client options STARK pins for desktop OAuth (audited surface). */
+export interface SupabaseAuthClientOptions {
+  readonly flowType: 'pkce'
+  readonly persistSession: false
+  readonly autoRefreshToken: false
+  readonly detectSessionInUrl: false
+  readonly storage: MemoryPkceStorage
+}
+
+/** Builds the exact pinned auth options (pure, unit-testable). */
+export function buildSupabaseAuthOptions(storage: MemoryPkceStorage): SupabaseAuthClientOptions {
+  return {
+    flowType: 'pkce',
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
+    storage
+  }
+}
+
 /**
  * Production Supabase Auth adapter (MAIN PROCESS ONLY).
  *
- * Uses the official @supabase/supabase-js client with PKCE-compatible
- * OAuth, explicit single attempts, and uncontrolled background refresh
- * disabled (no timers/retry loops). Auth logic never lives in the
- * renderer; tokens never cross IPC.
+ * Uses the official @supabase/supabase-js client with explicit PKCE
+ * (`flowType: 'pkce'` — the SDK default is implicit, which returns
+ * `#access_token` fragments STARK can never use), explicit
+ * `redirectTo: stark://auth/callback` on every OAuth initiation (never
+ * the Supabase Site URL, never localhost defaults), single attempts,
+ * and uncontrolled background refresh disabled (no timers/retry
+ * loops). The PKCE verifier lives in the adapter-owned memory storage
+ * above, so the same client context that begins the flow exchanges the
+ * returned code. Auth logic never lives in the renderer; tokens never
+ * cross IPC.
  */
 export class SupabaseAuthAdapter implements CloudAuthAdapter {
   private readonly client: SupabaseClient | null
   private readonly config: SupabasePublicConfig | null
 
-  constructor(config: SupabasePublicConfig | null, clientFactory?: (config: SupabasePublicConfig) => SupabaseClient) {
+  constructor(config: SupabasePublicConfig | null, clientFactory?: (config: SupabasePublicConfig, options: SupabaseAuthClientOptions) => SupabaseClient) {
     this.config = config
     if (config === null) {
       this.client = null
       return
     }
     try {
+      const options = buildSupabaseAuthOptions(createMemoryStorage())
       this.client =
         clientFactory !== undefined
-          ? clientFactory(config)
-          : createClient(config.url, config.anonKey, {
-              auth: {
-                persistSession: false,
-                autoRefreshToken: false,
-                detectSessionInUrl: false,
-                storage: createMemoryStorage()
-              }
-            })
+          ? clientFactory(config, options)
+          : createClient(config.url, config.anonKey, { auth: options })
     } catch {
       this.client = null
     }
@@ -183,7 +216,10 @@ export class SupabaseAuthAdapter implements CloudAuthAdapter {
       throw new CloudAuthExchangeFailedError({ cause: outcome.error })
     }
     // Validate the returned URL belongs to the expected Supabase auth
-    // flow where possible: https + auth path marker.
+    // flow where possible: https + auth path marker + PKCE challenge.
+    // The challenge check fails closed: without `code_challenge` the
+    // provider would answer with an implicit `#access_token` fragment
+    // STARK must never consume.
     let parsed: URL
     try {
       parsed = new URL(url)
@@ -194,6 +230,9 @@ export class SupabaseAuthAdapter implements CloudAuthAdapter {
       throw new CloudAuthExchangeFailedError()
     }
     if (!url.includes('/auth/')) {
+      throw new CloudAuthExchangeFailedError()
+    }
+    if (!parsed.searchParams.has('code_challenge')) {
       throw new CloudAuthExchangeFailedError()
     }
     return { url }

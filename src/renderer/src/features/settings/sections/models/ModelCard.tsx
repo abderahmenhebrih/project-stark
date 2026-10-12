@@ -18,7 +18,9 @@ interface ModelCardProps {
  *
  * Selectable entries are display-only (article) — actions live on the
  * Add flow and chains, and built-in entries never carry a destructive
- * remove control. Locked plan entries render as one button: the card
+ * remove control. Entries without a proven inference route render as
+ * catalog preview ("Preview — unavailable in this build") and offer
+ * no run action. Locked plan entries render as one button: the card
  * explains the lock and routes to the Upgrade surface (local Billing
  * navigation, no checkout, no pricing).
  */
@@ -75,7 +77,7 @@ export function ModelCard({ model, onUpgrade }: ModelCardProps): ReactElement {
       <p className="models-card__tokens">{tokenSessionLabel()}</p>
       {model.available ? null : (
         <p className="models-card__status" role="status">
-          Unavailable
+          {model.origin === 'built-in' ? 'Preview — unavailable in this build' : 'Unavailable'}
         </p>
       )}
     </article>

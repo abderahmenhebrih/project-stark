@@ -214,7 +214,7 @@ export function AccountSection(): ReactElement {
           Signed in with {accountProviderLabel(status.account.provider)}
           {status.account.email !== null ? ` · ${status.account.email}` : ''}
         </p>
-        <p>Your Workspace files and coding history remain local. Stage 29 does not sync project data to the cloud.</p>
+        <p>Your Workspace files and coding history remain local. STARK does not sync project data to the cloud.</p>
         {state.actionError !== null ? <p role="alert">{state.actionError}</p> : null}
         <button className="stark-btn stark-btn--secondary" type="button" disabled={state.acting} onClick={() => void handleSignOut()}>
           Sign out
@@ -232,7 +232,7 @@ export function AccountSection(): ReactElement {
       {status.account.displayName !== null ? <p>{status.account.displayName}</p> : null}
       {status.account.email !== null ? <p>{status.account.email}</p> : null}
       <p>Current plan: STARK Free</p>
-      <p>Your Workspace files and coding history remain local. Stage 29 does not sync project data to the cloud.</p>
+      <p>Your Workspace files and coding history remain local. STARK does not sync project data to the cloud.</p>
       {state.notice !== null ? <p role="status">{state.notice}</p> : null}
       {state.actionError !== null ? <p role="alert">{state.actionError}</p> : null}
       <button className="stark-btn stark-btn--secondary" type="button" disabled={state.acting} onClick={() => void handleSignOut()}>

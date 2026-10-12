@@ -13,6 +13,7 @@ export type AccountErrorKind =
   | 'in-progress'
   | 'invalid-provider'
   | 'callback-invalid'
+  | 'callback-unsupported'
   | 'callback-expired'
   | 'exchange-failed'
   | 'secure-storage-unavailable'
@@ -29,6 +30,7 @@ export const ACCOUNT_UNAVAILABLE_MESSAGE = 'Cloud account features are unavailab
 export const ACCOUNT_IN_PROGRESS_MESSAGE = 'An account sign-in is already in progress.'
 export const ACCOUNT_INVALID_PROVIDER_MESSAGE = 'That sign-in provider is not available.'
 export const ACCOUNT_CALLBACK_INVALID_MESSAGE = 'That sign-in link is invalid. Start again.'
+export const ACCOUNT_CALLBACK_UNSUPPORTED_MESSAGE = 'Unsupported OAuth callback. Please start sign-in again.'
 export const ACCOUNT_CALLBACK_EXPIRED_MESSAGE = 'That sign-in attempt expired. Start again.'
 export const ACCOUNT_EXCHANGE_FAILED_MESSAGE = 'We couldn’t finish signing in. Try again.'
 export const ACCOUNT_SECURE_STORAGE_MESSAGE = 'STARK could not securely store this account session on this device.'
@@ -41,6 +43,7 @@ const KNOWN_OUTCOMES: readonly { readonly kind: AccountErrorKind; readonly code:
   { kind: 'in-progress', code: 'cloud-auth-in-progress', message: ACCOUNT_IN_PROGRESS_MESSAGE },
   { kind: 'invalid-provider', code: 'cloud-auth-invalid-provider', message: ACCOUNT_INVALID_PROVIDER_MESSAGE },
   { kind: 'callback-invalid', code: 'cloud-auth-callback-invalid', message: ACCOUNT_CALLBACK_INVALID_MESSAGE },
+  { kind: 'callback-unsupported', code: 'cloud-auth-callback-unsupported', message: ACCOUNT_CALLBACK_UNSUPPORTED_MESSAGE },
   { kind: 'callback-expired', code: 'cloud-auth-callback-expired', message: ACCOUNT_CALLBACK_EXPIRED_MESSAGE },
   { kind: 'exchange-failed', code: 'cloud-auth-exchange-failed', message: ACCOUNT_EXCHANGE_FAILED_MESSAGE },
   { kind: 'secure-storage-unavailable', code: 'cloud-auth-secure-storage-unavailable', message: ACCOUNT_SECURE_STORAGE_MESSAGE },

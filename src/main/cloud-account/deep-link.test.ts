@@ -42,6 +42,16 @@ describe('auth deep-link callback security', () => {
     assert.throws(() => parseAuthCallbackUrl('stark://auth/callback?code=abc#fragment'), /cloud-auth-callback-invalid/)
   })
 
+  it('rejects implicit-flow token fragments without importing them', () => {
+    for (const url of [
+      'stark://auth/callback#access_token=IMPLICIT',
+      'stark://auth/callback#refresh_token=IMPLICIT',
+      'stark://auth/callback?code=abc#access_token=IMPLICIT'
+    ]) {
+      assert.throws(() => parseAuthCallbackUrl(url), /cloud-auth-callback-invalid/)
+    }
+  })
+
   it('rejects missing code, empty code, and unexpected parameters', () => {
     assert.throws(() => parseAuthCallbackUrl('stark://auth/callback'), /cloud-auth-callback-invalid/)
     assert.throws(() => parseAuthCallbackUrl('stark://auth/callback?code='), /cloud-auth-callback-invalid/)

@@ -8,6 +8,7 @@ import { CloudAccountRepository, type StoredCloudAccount } from './cloud-account
 import {
   CloudAuthCallbackExpiredError,
   CloudAuthCallbackInvalidError,
+  CloudAuthCallbackUnsupportedError,
   CloudAuthExchangeFailedError,
   CloudAuthInProgressError,
   CloudAuthInvalidProviderError,
@@ -228,6 +229,13 @@ export class CloudAccountService {
       this.attempts.cancel()
       this.emitStatus()
       throw new CloudAuthCallbackExpiredError()
+    }
+    // Implicit-flow residue (`#access_token=…`) is rejected BEFORE
+    // parsing with its own category: fragment tokens are never
+    // imported, never parsed, never logged. The pending attempt is
+    // left intact so the user can simply start sign-in again.
+    if (typeof rawUrl === 'string' && rawUrl.includes('#')) {
+      throw new CloudAuthCallbackUnsupportedError()
     }
     let code: string
     try {

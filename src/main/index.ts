@@ -7,6 +7,7 @@ import type { ProjectRuntimeUpdatedEvent } from '../shared/project-runtime/types
 import { setStarkAiDiagEnabled } from './ai/ai-provider-service'
 import { createOpenAiClient } from './ai/openai-adapter'
 import { createServices, type ApplicationServices } from './application/create-services'
+import { isUnsafeSupabaseValue } from './cloud-account/supabase-auth-adapter'
 import { extractDeepLinkFromArgv } from './cloud-account/deep-link'
 import { StarkDatabase } from './database/database'
 import { resolveDatabaseFile } from './database/paths'
@@ -42,6 +43,8 @@ import { parseSmokeConfig, smokeDatabaseFile, writeSmokeMarker } from './startup
 import { runStartupRecoveryPasses } from './startup/startup-order'
 import { TerminalHostManager, type TerminalHostLauncher } from './terminal/terminal-host-manager'
 import { configureNativeApplicationMenu } from './windows/app-menu'
+import { buildAuthProtocolRegistration, registerAuthProtocolClient } from './cloud-account/protocol-registration'
+import { loadDevEnvFile } from './startup/dev-env-file'
 import { TerminalProcessClient } from './terminal/terminal-host-client'
 import {
   devTerminalHostSourceDir,
@@ -180,17 +183,33 @@ function broadcastExtensionEvent(event: { kind: string; payload: Record<string, 
  * Handles one raw deep-link URL from the OS. Forwards exactly
  * stark:// callbacks to the account service; anything else is
  * ignored safely. Never logs the URL, code, or tokens — only a
- * secret-free outcome category.
+ * secret-free outcome category. Brings the existing window forward
+ * so the user sees the signed-in account right after the browser step.
  */
+function focusMainWindowBestEffort(): void {
+  try {
+    if (mainWindow !== null && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore()
+      }
+      mainWindow.focus()
+    }
+  } catch {
+    // Best effort focus during callback handling.
+  }
+}
+
 function handleAuthDeepLink(rawUrl: string): void {
   const service = accountServices?.cloudAccountService
   if (service === undefined || service === null) {
     return
   }
+  focusMainWindowBestEffort()
   void service
     .handleAuthCallback(rawUrl)
     .then((status) => {
       broadcastAccountStatus(status)
+      focusMainWindowBestEffort()
     })
     .catch(() => {
       // Safe log: outcome category only, never the URL or code.
@@ -315,26 +334,45 @@ function printTemporaryAiBuildDiag(): void {
  * Skipped entirely in packaged builds; failures are swallowed so
  * startup can never break on diagnostics.
  */
-function printAuthConfigDiag(): void {
+function printAuthConfigDiag(devEnvLoaded: boolean): void {
   if (app.isPackaged) {
     return
   }
   try {
-    const urlConfigured = (process.env['SUPABASE_URL'] ?? '') !== ''
-    const anonConfigured =
-      (process.env['SUPABASE_ANON_KEY'] ?? process.env['SUPABASE_PUBLISHABLE_KEY'] ?? '') !== ''
+    const url = process.env['SUPABASE_URL'] ?? ''
+    const anonKey = process.env['SUPABASE_ANON_KEY'] ?? process.env['SUPABASE_PUBLISHABLE_KEY'] ?? ''
+    const urlConfigured = url !== ''
+    const anonConfigured = anonKey !== ''
+    // Fail-closed refusal is already enforced by loadSupabasePublicConfig
+    // (service-role-shaped values yield "not configured"); this boolean
+    // tells QA *why* without ever printing the value.
+    const refusedUnsafe = isUnsafeSupabaseValue(url) || isUnsafeSupabaseValue(anonKey)
     console.log(
       '[STARK AUTH DIAG] ' +
         `supabaseUrl=${urlConfigured ? 'configured' : 'missing'} ` +
-        `publicAnonKey=${anonConfigured ? 'configured' : 'missing'}`
+        `publicAnonKey=${anonConfigured ? 'configured' : 'missing'} ` +
+        `devEnvFile=${devEnvLoaded ? 'loaded' : 'absent'} ` +
+        `unsafeRefused=${refusedUnsafe ? 'true' : 'false'}`
     )
   } catch {
     // Diagnostics must never break startup.
   }
 }
 
-void app.whenReady().then(() => {
-  // Release smoke mode (test packaging only): isolated userdata,
+/**
+ * Development-only `.env.local` load state, resolved once at module
+ * scope BEFORE app-ready service construction so CloudAccountService
+ * sees the real Supabase config. Packaged builds never load the file.
+ */
+const devEnvLoaded: boolean = (() => {
+  try {
+    return loadDevEnvFile({ appPath: app.getAppPath(), isPackaged: app.isPackaged, env: process.env }).loaded
+  } catch {
+    return false
+  }
+})()
+
+void app.whenReady().then(() => {  // Release smoke mode (test packaging only): isolated userdata,
   // full migrations, one bounded ready marker, clean quit. No
   // security bypass, no providers, no OAuth, no runtimes.
   const smokeConfig = parseSmokeConfig()
@@ -370,11 +408,17 @@ void app.whenReady().then(() => {
   // default File/Edit/View/Window application menu so the STARK
   // AppChrome is the only in-window bar. macOS keeps its system menu.
   configureNativeApplicationMenu({ platform: process.platform, setApplicationMenu: (menu) => Menu.setApplicationMenu(menu) })
-  try {
-    app.setAsDefaultProtocolClient('stark')
-  } catch {
-    // Best effort: protocol registration must never block startup.
-  }
+  // Auth deep-link registration: packaged builds register the app
+  // binary; development Electron processes register the executable
+  // plus the app entry so an OS relaunch boots far enough to hit the
+  // single-instance lock, forward the callback URL, and exit.
+  registerAuthProtocolClient(app, buildAuthProtocolRegistration({
+    isPackaged: app.isPackaged,
+    defaultApp: process.defaultApp,
+    execPath: process.execPath,
+    argv1: process.argv[1],
+    appPath: app.getAppPath()
+  }))
   if (!initializePersistence()) {
     fatalPresenter.presentFatal('local-data')
     return
@@ -722,7 +766,7 @@ void app.whenReady().then(() => {
     )
   }
   printTemporaryAiBuildDiag()
-  printAuthConfigDiag()
+  printAuthConfigDiag(devEnvLoaded)
   createMainWindow()
   // STARK startup never blocks on authentication: the window is already
   // created above; the single bounded session restore runs detached and
