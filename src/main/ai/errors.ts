@@ -142,6 +142,19 @@ export class GenerationInFlightError extends AiProviderError {
   }
 }
 
+/**
+ * The user cancelled the active AI operation. Distinct from timeout:
+ * cancellation is user-initiated, never fails over to the next
+ * LoopLink model, applies nothing, and leaves the session reusable.
+ */
+export class AiCancelledError extends AiProviderError {
+  override readonly name = 'AiCancelledError'
+
+  constructor(options?: { cause?: unknown }) {
+    super('The AI operation was cancelled.', options)
+  }
+}
+
 /** The session has no new user message to answer. */
 export class NothingToAnswerError extends AiProviderError {
   override readonly name = 'NothingToAnswerError'
@@ -248,7 +261,8 @@ export function toPublicProviderError(operation: ProviderOperation, error: unkno
     error instanceof ProviderStructuredOutputUnsupportedError ||
     error instanceof StarkHostedSignInRequiredError ||
     error instanceof StarkHostedUnavailableError ||
-    error instanceof UnknownProviderError
+    error instanceof UnknownProviderError ||
+    error instanceof AiCancelledError
   ) {
     return new Error(error.message)
   }

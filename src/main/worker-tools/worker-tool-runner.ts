@@ -27,8 +27,6 @@ import {
 } from '../ai/ai-brain-errors'
 import {
   MAX_ASSISTANT_OUTPUT_TOKENS,
-  MAX_AI_CONTEXT_BYTES,
-  MAX_AI_CONTEXT_MESSAGES,
   MAX_BRAIN_FINAL_BYTES,
   MAX_BRAIN_PLAN_SUMMARY_CODEPOINTS,
   MAX_ORCHESTRATION_RUN_MS,
@@ -37,6 +35,7 @@ import {
   STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
   STAGE_18_FIXED_WORKER_INSTRUCTIONS
 } from '../ai/limits'
+import { loadBoundedContext } from '../ai/context-window'
 import { BRAIN_PLAN_JSON_SCHEMA, BRAIN_PLAN_SCHEMA_NAME } from '../ai/ai-brain-service'
 import type { ChatAttachmentService } from '../chat-attachments/service'
 import { attachmentsNeedVision, VisionUnsupportedForModelError, workerAttachmentsRelevant } from '../ai/ai-attachment-context'
@@ -104,11 +103,12 @@ import {
   InvalidWorkerToolRequestError,
   PendingApprovalBlockedError,
   ToolInteractiveError,
+  WorkerApprovalCancelledError,
   WorkerApprovalExpiredError,
   WorkerToolLimitError,
   WorkerToolsUnsupportedError
 } from './worker-tool-errors'
-import { LoopLinkHeartEmptyError, eligibleLoopLinkModels, readLoopLinkChain, runLoopLinkChain } from '../ai/looplink-chain'
+import { LoopLinkHeartEmptyError, auditOfOutcome, eligibleLoopLinkModels, readLoopLinkChain, runLoopLinkChain, singleModelAuditFor, withEffort, type LoopLinkStepAuditWithEffort } from '../ai/looplink-chain'
 
 const encoder = new TextEncoder()
 
@@ -130,14 +130,6 @@ function hasStrictShape(value: unknown, allowed: readonly string[]): value is Re
 
 function countCodePoints(value: string): number {
   return [...value].length
-}
-
-function contextBytes(messages: readonly { readonly content: string }[]): number {
-  let total = 0
-  for (const entry of messages) {
-    total += encoder.encode(entry.content).byteLength
-  }
-  return total
 }
 
   const WORKER_TOOL_INSTRUCTIONS =
@@ -442,6 +434,55 @@ export class WorkerToolRunner {
     return this.deps.approvals.getPending(payload)
   }
 
+  /**
+   * Cancels a parked (waiting_for_approval) Work run for one session.
+   * Main-authoritative parked cancellation: the run moves
+   * `waiting_for_approval` → `cancelled` and its pending approval moves
+   * `pending` → `cancelled`, so later Approve/Deny cannot revive
+   * execution. Preserves the persisted proposal/review state (run_state
+   * + tool events are untouched) without applying anything and without
+   * touching the filesystem. Session-scoped only: a pending approval
+   * from another session/workspace never cancels here. Idempotent:
+   * an already-cancelled run returns true; a session with no parked
+   * (or already-terminal non-cancelled) run returns false.
+   */
+  cancelParkedWork(payload: unknown): { cancelled: boolean } {
+    const parsed = this.parseCancelScope(payload)
+    this.requireOwnership(parsed.workspaceId, parsed.sessionId)
+    const pending = this.deps.tools.findPendingForSession(parsed.sessionId)
+    if (pending === undefined || pending.workspaceId !== parsed.workspaceId) {
+      // No parked approval: idempotent sticky-true when the session's
+      // latest run is already cancelled (repeat Cancel after a prior
+      // parked cancel), otherwise a harmless false (idle).
+      const recent = this.deps.runs.listRecentForSession(parsed.sessionId, 5)
+      const sticky = recent.some(
+        (run) => run.workspaceId === parsed.workspaceId && run.sessionId === parsed.sessionId && run.status === 'cancelled'
+      )
+      return { cancelled: sticky }
+    }
+    const run = this.deps.runs.findRunById(pending.runId)
+    if (run === undefined || run.workspaceId !== parsed.workspaceId || run.sessionId !== parsed.sessionId) {
+      throw new InvalidWorkerToolRequestError('approval reference is invalid')
+    }
+    if (run.status === 'cancelled') {
+      this.deps.tools.transitionApproval(pending.id, 'cancelled', this.now())
+      return { cancelled: true }
+    }
+    if (run.status !== 'waiting_for_approval') {
+      return { cancelled: false }
+    }
+    const now = this.now()
+    const transitioned = this.deps.runs.cancelWaitingRun(pending.runId, now)
+    if (!transitioned) {
+      return { cancelled: false }
+    }
+    // Clear the pending approval so hasPending releases and the
+    // session is immediately reusable. `cancelled` is terminal and
+    // distinct from denied/expired — never interpreted as a decision.
+    this.deps.tools.transitionApproval(pending.id, 'cancelled', now)
+    return { cancelled: true }
+  }
+
   async approveAndResume(payload: unknown): Promise<WorkRecoveryResult> {
     const { workspaceId, sessionId, approvalId } = this.parseDecision(payload)
     this.requireOwnership(workspaceId, sessionId)
@@ -473,8 +514,11 @@ export class WorkerToolRunner {
   private parseScope(payload: unknown): { workspaceId: number; sessionId: number; effort: StarkEffort; brainChain: readonly string[] | null; heartChain: readonly string[] | null } {
     // 'effort' is optional (Regular baseline when absent); a
     // present-but-invalid value is rejected, never defaulted silently.
-    // 'brainModels'/'heartModels' are optional LoopLink snapshots.
-    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort', 'brainModels', 'heartModels'])) {
+    // 'brainModels'/'heartModels' are optional LoopLink snapshots;
+    // legacy 'disabledBrainModels'/'disabledHeartModels' are accepted
+    // but IGNORED for authority (main derives executability from its
+    // own catalog + compatibility state).
+    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort', 'brainModels', 'heartModels', 'disabledBrainModels', 'disabledHeartModels'])) {
       throw new InvalidBrainRequestError('brain request is invalid')
     }
     const record = payload as Record<string, unknown>
@@ -489,10 +533,10 @@ export class WorkerToolRunner {
       }
       effort = record['effort']
     }
-    const brainChain = readLoopLinkChain(record, 'brainModels', 'brain')
+    const brainChain = readLoopLinkChain(record, 'brainModels', 'brain', 'disabledBrainModels')
     const heartChain: readonly string[] | null = (() => {
       try {
-        return readLoopLinkChain(record, 'heartModels', 'heart')
+        return readLoopLinkChain(record, 'heartModels', 'heart', 'disabledHeartModels')
       } catch (error) {
         if (error instanceof LoopLinkHeartEmptyError) {
           return []
@@ -515,6 +559,18 @@ export class WorkerToolRunner {
     return { workspaceId, sessionId, approvalId }
   }
 
+  private parseCancelScope(payload: unknown): { workspaceId: number; sessionId: number } {
+    if (!hasStrictShape(payload, ['workspaceId', 'sessionId'])) {
+      throw new InvalidWorkerToolRequestError('cancellation request is invalid')
+    }
+    const record = payload as Record<string, unknown>
+    const { workspaceId, sessionId } = record
+    if (!isValidId(workspaceId) || !isValidId(sessionId)) {
+      throw new InvalidWorkerToolRequestError('cancellation request is invalid')
+    }
+    return { workspaceId, sessionId }
+  }
+
   private requireOwnership(workspaceId: number, sessionId: number): void {
     if (this.deps.workspaces.findById(workspaceId) === undefined) {
       throw new SessionWorkspaceUnavailableError()
@@ -529,12 +585,7 @@ export class WorkerToolRunner {
   }
 
   private loadContext(sessionId: number): { readonly role: 'user' | 'assistant'; readonly content: string }[] {
-    const probe = this.deps.sessions.listMessagesNewestFirst(sessionId, MAX_AI_CONTEXT_MESSAGES, null)
-    const kept = [...probe.slice(0, MAX_AI_CONTEXT_MESSAGES)]
-    while (kept.length > 1 && contextBytes(kept) > MAX_AI_CONTEXT_BYTES) {
-      kept.pop()
-    }
-    return kept.reverse().map((entry) => ({ role: entry.role, content: entry.content }))
+    return loadBoundedContext(this.deps.sessions, sessionId)
   }
 
   private advertisedTools(workspaceId: number, sessionId: number): { readonly name: string; readonly description: string; readonly parameters: unknown }[] {
@@ -831,6 +882,7 @@ export class WorkerToolRunner {
       let brainResolved: Awaited<ReturnType<typeof this.deps.providerService.resolveExplicitAssignment>>
       let brainModel: string
       let plan: { action: 'answer' | 'delegate'; planSummary: string; finalAnswer: string | null; workerInstruction: string | null; workerProfile: string }
+      let planAudit: LoopLinkStepAuditWithEffort | null = null
       if (brainChain !== null) {
         const eligiblePlan = eligibleLoopLinkModels(brainChain, { needsStructured: true, needsVision: false })
         if (eligiblePlan.length === 0) {
@@ -862,7 +914,7 @@ export class WorkerToolRunner {
                 { operation: 'brain_plan', workspaceId, sessionId, runId },
                 resolved.adapter.id,
                 resolved.model,
-                () => (generateStructured as (req: { apiKey: string; model: string; instructions: string; messages: readonly { readonly role: 'user' | 'assistant'; readonly content: string }[]; maxOutputTokens: number; reasoningEffort?: string; schemaName: string; schema: unknown; attachments?: readonly unknown[] }) => Promise<{ outputText: string }>)({
+                () => (generateStructured as (req: { apiKey: string; model: string; instructions: string; messages: readonly { readonly role: 'user' | 'assistant'; readonly content: string }[]; maxOutputTokens: number; reasoningEffort?: string; schemaName: string; schema: unknown; attachments?: readonly unknown[]; signal?: AbortSignal }) => Promise<{ outputText: string }>)({
                   apiKey: resolved.apiKey,
                   model: resolved.model,
                   instructions: STAGE_18_FIXED_BRAIN_PLANNING_INSTRUCTIONS,
@@ -871,7 +923,8 @@ export class WorkerToolRunner {
                   ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
                   schemaName: BRAIN_PLAN_SCHEMA_NAME,
                   schema: BRAIN_PLAN_JSON_SCHEMA,
-                  ...(section.payloads.length > 0 ? { attachments: section.payloads } : {})
+                  ...(section.payloads.length > 0 ? { attachments: section.payloads } : {}),
+                  ...this.deps.guard.signalOptionFor(sessionId)
                 })
               )
               const parsed = this.parsePlan(planned.outputText)
@@ -882,12 +935,13 @@ export class WorkerToolRunner {
               void resolved.apiKey
             }
           },
-          { isCancelled: () => this.now() > deadline }
+          { isCancelled: () => this.deps.guard.isCancelRequested(sessionId) || this.now() > deadline }
         )
         plan = outcome.result.parsed
         brainResolved = outcome.result.resolved
         brainModel = outcome.result.resolvedModel
         brainRouted = { ...brainRouted, assignment: { ...outcome.assignment } }
+        planAudit = withEffort(auditOfOutcome(outcome, eligiblePlan), effort)
       } else {
       const legacyResolved = await this.deps.providerService.resolveExplicitAssignment(brainRouted.assignment.providerId, brainRouted.assignment.model).catch((error: unknown) => {
         throw markInteractive(error)
@@ -895,13 +949,14 @@ export class WorkerToolRunner {
       brainResolved = legacyResolved
       const brainAdapter = brainResolved.adapter
       brainModel = brainResolved.model
+      planAudit = withEffort(singleModelAuditFor(brainModel), effort)
       if (typeof brainAdapter.generateStructured !== 'function') {
         throw new ProviderStructuredOutputUnsupportedError()
       }
       // Captured after the guard so tracking closures keep the
       // narrowed function type (narrowing is lost inside closures).
       // Bound to preserve adapter `this`.
-      const generateStructured = (brainAdapter.generateStructured as (...args: never[]) => unknown as unknown as (req: { apiKey: string; model: string; instructions: string; messages: readonly { readonly role: 'user' | 'assistant'; readonly content: string }[]; maxOutputTokens: number; reasoningEffort?: string; schemaName: string; schema: unknown; attachments?: readonly unknown[] }) => Promise<{ outputText: string }>).bind(brainAdapter)
+      const generateStructured = (brainAdapter.generateStructured as (...args: never[]) => unknown as unknown as (req: { apiKey: string; model: string; instructions: string; messages: readonly { readonly role: 'user' | 'assistant'; readonly content: string }[]; maxOutputTokens: number; reasoningEffort?: string; schemaName: string; schema: unknown; attachments?: readonly unknown[]; signal?: AbortSignal }) => Promise<{ outputText: string }>).bind(brainAdapter)
       // Effort policy for the plan call (Regular = baseline tokens,
       // no reasoning parameter).
       const planPolicy = deriveStarkRunPolicy(effort, brainModel)
@@ -929,7 +984,8 @@ export class WorkerToolRunner {
             ...(planPolicy.providerReasoningEffort !== null ? { reasoningEffort: planPolicy.providerReasoningEffort } : {}),
             schemaName: BRAIN_PLAN_SCHEMA_NAME,
             schema: BRAIN_PLAN_JSON_SCHEMA,
-            ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {})
+            ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {}),
+            ...this.deps.guard.signalOptionFor(sessionId)
           })
         )
         plan = this.parsePlan(planned.outputText)
@@ -941,7 +997,7 @@ export class WorkerToolRunner {
       }
       this.deps.runs.appendStepWithModel(
         { runId, ordinal: 0, kind: 'brain_plan', status: 'completed', instruction: null, output: plan.planSummary, now: this.now() },
-        { role: 'brain', providerId: brainRouted.assignment.providerId, model: brainModel, routeKey: 'primary', requestedProfile: null }
+        { role: 'brain', providerId: brainRouted.assignment.providerId, model: brainModel, routeKey: 'primary', requestedProfile: null, ...(planAudit ?? { ...singleModelAuditFor(brainModel), requestedEffort: effort }) }
       )
       if (plan.action === 'answer') {
         const finalAnswer = plan.finalAnswer ?? ''
@@ -993,8 +1049,12 @@ export class WorkerToolRunner {
       // Explicit bounded Worker tool loop: effort policy sets the
       // turn/tool caps (Regular reproduces the 5-turn / 4-tool
       // baseline); the absolute caps keep every level bounded.
+      // turnAudit carries the turn's LoopLink attempt truth to every
+      // step appended for the turn (winner + attempts + failover).
+      let turnAudit: LoopLinkStepAuditWithEffort | null = null
       for (let turn = 0; turn < maxTurns; turn += 1) {
         this.requireDeadline(deadline)
+        this.deps.guard.throwIfCancelled(sessionId)
         let turnResult: { kind: 'tool_request'; tool: string; args: unknown } | { kind: 'final_text'; text: string }
         if (heartChain !== null) {
           // LoopLink Heart chain per worker turn (P0): ordered failover,
@@ -1025,16 +1085,18 @@ export class WorkerToolRunner {
                 throw markInteractive(error)
               }
             },
-            { isCancelled: () => this.now() > deadline }
+            { isCancelled: () => this.deps.guard.isCancelRequested(sessionId) || this.now() > deadline }
           )
           turnResult = outcome.result
           selectedWorkerRoute = { assignment: { ...outcome.assignment }, routeKey: selectedWorkerRoute.routeKey }
+          turnAudit = withEffort(auditOfOutcome(outcome, eligibleWorker), effort)
         } else {
         try {
           turnResult = await this.workerTurn({
             workspaceId, sessionId, runId, workerRoute: selectedWorkerRoute, advertised, contextMessages, persisted, activeText,
             activeMessageId: latest.id, continuityBlock, workerInstruction, history, operation: turn === 0 ? 'worker' : 'worker_followup'
           })
+          turnAudit = withEffort(singleModelAuditFor(selectedWorkerRoute.assignment.model), effort)
         } catch (error) {
           throw markInteractive(error)
         }
@@ -1043,7 +1105,7 @@ export class WorkerToolRunner {
           workerOutput = this.validateWorkerText(turnResult.text)
           this.deps.runs.appendStepWithModel(
             { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: workerOutput, now: this.now() },
-            { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile }
+            { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, ...(turnAudit ?? { ...singleModelAuditFor(selectedWorkerRoute.assignment.model), requestedEffort: effort }) }
           )
           break
         }
@@ -1117,7 +1179,7 @@ export class WorkerToolRunner {
           })
           this.deps.runs.appendStepWithModel(
             { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: `Tool ${parsed.tool} denied.`, now: this.now() },
-            { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile }
+            { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, ...(turnAudit ?? { ...singleModelAuditFor(selectedWorkerRoute.assignment.model), requestedEffort: effort }) }
           )
           history.push({ tool: parsed.tool, argsJson, status: 'denied', payload: deniedHistoryPayload, summary })
           this.saveToolState({ runId, workerInstruction, activeUserMessageId: latest.id, continuityUsed: loop !== null, state: { workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history, toolCallCount, workerProviderId: selectedWorkerRoute.assignment.providerId, workerModel: selectedWorkerRoute.assignment.model, brainProviderId: brainRouted.assignment.providerId, brainModel, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, looplinkId, activeUserMessageId: latest.id } })
@@ -1137,7 +1199,7 @@ export class WorkerToolRunner {
               })
               this.deps.runs.appendStepWithModel(
                 { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: failedSummary, now: this.now() },
-                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile }
+                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, ...(turnAudit ?? { ...singleModelAuditFor(selectedWorkerRoute.assignment.model), requestedEffort: effort }) }
               )
               history.push({ tool: parsed.tool, argsJson, status: 'failed', payload: WORKER_PROPOSAL_UNKNOWN_TARGET_MESSAGE, summary: failedSummary })
               this.saveToolState({ runId, workerInstruction, activeUserMessageId: latest.id, continuityUsed: loop !== null, state: { workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history, toolCallCount, workerProviderId: selectedWorkerRoute.assignment.providerId, workerModel: selectedWorkerRoute.assignment.model, brainProviderId: brainRouted.assignment.providerId, brainModel, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, looplinkId, activeUserMessageId: latest.id } })
@@ -1157,7 +1219,7 @@ export class WorkerToolRunner {
               })
               this.deps.runs.appendStepWithModel(
                 { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: failedSummary, now: this.now() },
-                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile }
+                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, ...(turnAudit ?? { ...singleModelAuditFor(selectedWorkerRoute.assignment.model), requestedEffort: effort }) }
               )
               history.push({ tool: parsed.tool, argsJson, status: 'failed', payload: previewed.reason, summary: failedSummary })
               this.saveToolState({ runId, workerInstruction, activeUserMessageId: latest.id, continuityUsed: loop !== null, state: { workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history, toolCallCount, workerProviderId: selectedWorkerRoute.assignment.providerId, workerModel: selectedWorkerRoute.assignment.model, brainProviderId: brainRouted.assignment.providerId, brainModel, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, looplinkId, activeUserMessageId: latest.id } })
@@ -1179,7 +1241,7 @@ export class WorkerToolRunner {
               })
               this.deps.runs.appendStepWithModel(
                 { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: failedSummary, now: this.now() },
-                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile }
+                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, ...(turnAudit ?? { ...singleModelAuditFor(selectedWorkerRoute.assignment.model), requestedEffort: effort }) }
               )
               history.push({ tool: parsed.tool, argsJson, status: 'failed', payload: 'Project runtimes are unavailable.', summary: failedSummary })
               this.saveToolState({ runId, workerInstruction, activeUserMessageId: latest.id, continuityUsed: loop !== null, state: { workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history, toolCallCount, workerProviderId: selectedWorkerRoute.assignment.providerId, workerModel: selectedWorkerRoute.assignment.model, brainProviderId: brainRouted.assignment.providerId, brainModel, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, looplinkId, activeUserMessageId: latest.id } })
@@ -1195,7 +1257,7 @@ export class WorkerToolRunner {
               })
               this.deps.runs.appendStepWithModel(
                 { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: alreadySummary, now: this.now() },
-                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile }
+                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, ...(turnAudit ?? { ...singleModelAuditFor(selectedWorkerRoute.assignment.model), requestedEffort: effort }) }
               )
               history.push({ tool: parsed.tool, argsJson, status: 'succeeded', payload: alreadyPayload, summary: alreadySummary })
               this.saveToolState({ runId, workerInstruction, activeUserMessageId: latest.id, continuityUsed: loop !== null, state: { workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history, toolCallCount, workerProviderId: selectedWorkerRoute.assignment.providerId, workerModel: selectedWorkerRoute.assignment.model, brainProviderId: brainRouted.assignment.providerId, brainModel, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, looplinkId, activeUserMessageId: latest.id } })
@@ -1220,7 +1282,7 @@ export class WorkerToolRunner {
               })
               this.deps.runs.appendStepWithModel(
                 { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: failedSummary, now: this.now() },
-                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile }
+                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, ...(turnAudit ?? { ...singleModelAuditFor(selectedWorkerRoute.assignment.model), requestedEffort: effort }) }
               )
               history.push({ tool: parsed.tool, argsJson, status: 'failed', payload: 'Runtime observation is unavailable.', summary: failedSummary })
               this.saveToolState({ runId, workerInstruction, activeUserMessageId: latest.id, continuityUsed: loop !== null, state: { workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history, toolCallCount, workerProviderId: selectedWorkerRoute.assignment.providerId, workerModel: selectedWorkerRoute.assignment.model, brainProviderId: brainRouted.assignment.providerId, brainModel, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, looplinkId, activeUserMessageId: latest.id } })
@@ -1235,7 +1297,7 @@ export class WorkerToolRunner {
               })
               this.deps.runs.appendStepWithModel(
                 { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: emptySummary, now: this.now() },
-                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile }
+                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, ...(turnAudit ?? { ...singleModelAuditFor(selectedWorkerRoute.assignment.model), requestedEffort: effort }) }
               )
               history.push({ tool: parsed.tool, argsJson, status: 'succeeded', payload: emptyPayload, summary: emptySummary })
               this.saveToolState({ runId, workerInstruction, activeUserMessageId: latest.id, continuityUsed: loop !== null, state: { workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history, toolCallCount, workerProviderId: selectedWorkerRoute.assignment.providerId, workerModel: selectedWorkerRoute.assignment.model, brainProviderId: brainRouted.assignment.providerId, brainModel, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, looplinkId, activeUserMessageId: latest.id } })
@@ -1259,7 +1321,7 @@ export class WorkerToolRunner {
                 })
                 this.deps.runs.appendStepWithModel(
                   { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: emptySummary, now: this.now() },
-                  { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile }
+                  { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, ...(turnAudit ?? { ...singleModelAuditFor(selectedWorkerRoute.assignment.model), requestedEffort: effort }) }
                 )
                 history.push({ tool: parsed.tool, argsJson, status: 'succeeded', payload: emptyPayload, summary: emptySummary })
                 this.saveToolState({ runId, workerInstruction, activeUserMessageId: latest.id, continuityUsed: loop !== null, state: { workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history, toolCallCount, workerProviderId: selectedWorkerRoute.assignment.providerId, workerModel: selectedWorkerRoute.assignment.model, brainProviderId: brainRouted.assignment.providerId, brainModel, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, looplinkId, activeUserMessageId: latest.id } })
@@ -1272,7 +1334,7 @@ export class WorkerToolRunner {
               })
               this.deps.runs.appendStepWithModel(
                 { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: failedSummary, now: this.now() },
-                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile }
+                { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, ...(turnAudit ?? { ...singleModelAuditFor(selectedWorkerRoute.assignment.model), requestedEffort: effort }) }
               )
               history.push({ tool: parsed.tool, argsJson, status: 'failed', payload: 'Preview inspection is unavailable.', summary: failedSummary })
               this.saveToolState({ runId, workerInstruction, activeUserMessageId: latest.id, continuityUsed: loop !== null, state: { workerInstruction, activeText, contextMessages, continuityBlock, planSummary: plan.planSummary, history, toolCallCount, workerProviderId: selectedWorkerRoute.assignment.providerId, workerModel: selectedWorkerRoute.assignment.model, brainProviderId: brainRouted.assignment.providerId, brainModel, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, looplinkId, activeUserMessageId: latest.id } })
@@ -1306,7 +1368,7 @@ export class WorkerToolRunner {
           })
           this.deps.runs.appendStepWithModel(
             { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: `Tool ${parsed.tool} awaiting approval.`, now: this.now() },
-            { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile }
+            { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, ...(turnAudit ?? { ...singleModelAuditFor(selectedWorkerRoute.assignment.model), requestedEffort: effort }) }
           )
           // Release the guard before waiting; explicit pending state blocks new ops.
           this.deps.guard.release(sessionId)
@@ -1338,7 +1400,7 @@ export class WorkerToolRunner {
         }
         this.deps.runs.appendStepWithModel(
           { runId, ordinal: 1 + turn, kind: turn === 0 ? 'worker' : 'worker_followup', status: 'completed', instruction: turn === 0 ? workerInstruction : null, output: execResult.summary, now: this.now() },
-          { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile }
+          { role: 'worker', providerId: selectedWorkerRoute.assignment.providerId, model: selectedWorkerRoute.assignment.model, routeKey: selectedWorkerRoute.routeKey, requestedProfile: workerProfile, ...(turnAudit ?? { ...singleModelAuditFor(selectedWorkerRoute.assignment.model), requestedEffort: effort }) }
         )
         // Stage 24: failed proposal reasons (stale/unknown) stay visible to
         // the Worker as bounded untrusted data; succeeded payloads carry
@@ -1387,7 +1449,8 @@ export class WorkerToolRunner {
               model: synthesisResolved.model,
               instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
               messages: synthesisMessages,
-              maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+              maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+              ...this.deps.guard.signalOptionFor(sessionId)
             })
           )
           finalText = this.validateFinalText(synthesized.text)
@@ -1401,7 +1464,7 @@ export class WorkerToolRunner {
       }
       this.deps.runs.appendStepWithModel(
         { runId, ordinal: 99, kind: 'brain_synthesis', status: 'completed', instruction: null, output: null, now: this.now() },
-        { role: 'brain', providerId: brainRouted.assignment.providerId, model: brainModel, routeKey: 'primary', requestedProfile: null }
+        { role: 'brain', providerId: brainRouted.assignment.providerId, model: brainModel, routeKey: 'primary', requestedProfile: null, ...withEffort(singleModelAuditFor(brainModel), effort) }
       )
       const { messageId } = this.completeDelegateRun(
         { runId, sessionId, content: finalText, planSummary: plan.planSummary, now: this.now(), consumeLooplinkId: loop?.looplinkId ?? null }
@@ -1437,8 +1500,27 @@ export class WorkerToolRunner {
 
   private async resumeAfterDecision(workspaceId: number, sessionId: number, approvalId: number, approve: boolean): Promise<WorkRecoveryResult> {
     const stored = this.deps.approvals.loadForDecision(workspaceId, sessionId, approvalId)
+    // A cancelled approval never decides: user cancellation while
+    // parked is terminal (neither approval nor denial, never a
+    // revival). Deterministic cancelled error, distinct from expiry
+    // and timeout.
+    if (stored.status === 'cancelled') {
+      throw new WorkerApprovalCancelledError()
+    }
     if (stored.status !== 'pending') {
       throw new InvalidWorkerToolRequestError('approval is not pending')
+    }
+    // Stale approvals never revive dead runs: a run that failed,
+    // expired, was cancelled, or otherwise left waiting cannot resume,
+    // even if its approval row is still pending. Cancelled runs carry
+    // their own deterministic error (operation cancelled, distinct
+    // from timeout/expiry); other terminals keep the safe generic.
+    const decisionRun = this.deps.runs.findRunById(stored.runId)
+    if (decisionRun !== undefined && decisionRun.status === 'cancelled') {
+      throw new WorkerApprovalCancelledError()
+    }
+    if (decisionRun !== undefined && decisionRun.status !== 'waiting_for_approval') {
+      throw new InvalidWorkerToolRequestError('run is no longer waiting for approval')
     }
     if (this.deps.tools.expireIfStale(approvalId, this.now())) {
       this.deps.runs.updateRunState({
@@ -1495,7 +1577,7 @@ export class WorkerToolRunner {
           // the canonical audit stays in worker_tool_events).
           this.deps.runs.appendStepWithModel(
             { runId: stored.runId, ordinal: 50 + state.history.length, kind: 'worker_followup', status: 'completed', instruction: null, output: execResult.summary, now: this.now() },
-            { role: 'worker', providerId: state.workerProviderId, model: state.workerModel, routeKey: state.routeKey, requestedProfile: state.requestedProfile }
+            { role: 'worker', providerId: state.workerProviderId, model: state.workerModel, routeKey: state.routeKey, requestedProfile: state.requestedProfile, ...singleModelAuditFor(state.workerModel), requestedEffort: null }
           )
         }
         const terminalHistoryPayload =
@@ -1590,12 +1672,13 @@ export class WorkerToolRunner {
       // effort budgets applied at run start; resume never widens them.
       for (let turn = 0; turn < MAX_WORKER_TURNS; turn += 1) {
           this.requireDeadline(deadline)
+          this.deps.guard.throwIfCancelled(sessionId)
           const turnResult = await this.workerTurnFromState({ workspaceId, sessionId, runId, state: { ...state, history }, workerResolved })
           if (turnResult.kind === 'final_text') {
             const workerOutput = this.validateWorkerText(turnResult.text)
             this.deps.runs.appendStepWithModel(
               { runId, ordinal: 10 + turn, kind: 'worker_followup', status: 'completed', instruction: null, output: workerOutput, now: this.now() },
-              { role: 'worker', providerId: state.workerProviderId, model: state.workerModel, routeKey: state.routeKey, requestedProfile: state.requestedProfile }
+              { role: 'worker', providerId: state.workerProviderId, model: state.workerModel, routeKey: state.routeKey, requestedProfile: state.requestedProfile, ...singleModelAuditFor(state.workerModel), requestedEffort: null }
             )
             this.requireDeadline(deadline)
             const synthesisMessages = this.buildSynthesisMessages(state.contextMessages, state.planSummary, state.workerInstruction, workerOutput)
@@ -1610,13 +1693,14 @@ export class WorkerToolRunner {
                 model: brainResolved.model,
                 instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
                 messages: synthesisMessages,
-                maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+                maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+                ...this.deps.guard.signalOptionFor(sessionId)
               })
             )
             const finalText = this.validateFinalText(synthesized.text)
             this.deps.runs.appendStepWithModel(
               { runId, ordinal: 99, kind: 'brain_synthesis', status: 'completed', instruction: null, output: null, now: this.now() },
-              { role: 'brain', providerId: state.brainProviderId, model: state.brainModel, routeKey: 'primary', requestedProfile: null }
+              { role: 'brain', providerId: state.brainProviderId, model: state.brainModel, routeKey: 'primary', requestedProfile: null, ...singleModelAuditFor(state.brainModel), requestedEffort: null }
             )
             const { messageId } = this.completeDelegateRun(
               { runId, sessionId, content: finalText, planSummary: state.planSummary, now: this.now(), consumeLooplinkId: loop?.looplinkId ?? null }
@@ -1910,7 +1994,8 @@ export class WorkerToolRunner {
             messages,
             maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
             tools: input.advertised.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })),
-            ...chatPayloads
+            ...chatPayloads,
+            ...this.deps.guard.signalOptionFor(input.sessionId)
           })
         )
         return this.normalizeTurn(raw)
@@ -1942,7 +2027,8 @@ export class WorkerToolRunner {
               finalText: { type: 'string' }
             }
           },
-          ...chatPayloads
+          ...chatPayloads,
+          ...this.deps.guard.signalOptionFor(input.sessionId)
         })
       )
       return this.normalizeStructuredFallback(fallback.outputText)
@@ -1985,8 +2071,8 @@ export class WorkerToolRunner {
     })
     const resumeChatPayloads = resumeChatSection.payloads.length > 0 ? { attachments: resumeChatSection.payloads } : {}
     const adapter = workerResolved.adapter as {
-      generateWorkerTurn?: (request: { apiKey: string; model: string; instructions: string; messages: unknown; maxOutputTokens: number; tools: unknown; attachments?: unknown }) => Promise<unknown>
-      generateStructured?: (request: { apiKey: string; model: string; instructions: string; messages: unknown; maxOutputTokens: number; schemaName: string; schema: unknown; attachments?: unknown }) => Promise<{ outputText: string }>
+      generateWorkerTurn?: (request: { apiKey: string; model: string; instructions: string; messages: unknown; maxOutputTokens: number; tools: unknown; attachments?: unknown; signal?: AbortSignal }) => Promise<unknown>
+      generateStructured?: (request: { apiKey: string; model: string; instructions: string; messages: unknown; maxOutputTokens: number; schemaName: string; schema: unknown; attachments?: unknown; signal?: AbortSignal }) => Promise<{ outputText: string }>
     }
     const turnMeta = { operation: 'worker_followup' as const, workspaceId, sessionId, runId: input.runId }
     if (typeof adapter.generateWorkerTurn === 'function') {
@@ -1997,7 +2083,8 @@ export class WorkerToolRunner {
         state.workerModel,
         () => generateWorkerTurn({
           apiKey: workerResolved.apiKey, model: workerResolved.model, instructions: WORKER_TOOL_INSTRUCTIONS,
-          messages: messages as unknown, maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS, tools: advertised, ...resumeChatPayloads
+          messages: messages as unknown, maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS, tools: advertised, ...resumeChatPayloads,
+          ...this.deps.guard.signalOptionFor(sessionId)
         })
       )) as unknown
       return this.normalizeTurn(raw as never)
@@ -2011,7 +2098,8 @@ export class WorkerToolRunner {
         () => generateStructured({
           apiKey: workerResolved.apiKey, model: workerResolved.model, instructions: WORKER_TOOL_INSTRUCTIONS,
           messages: messages as unknown, maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
-          schemaName: 'stark_worker_turn', schema: {}, ...resumeChatPayloads
+          schemaName: 'stark_worker_turn', schema: {}, ...resumeChatPayloads,
+          ...this.deps.guard.signalOptionFor(sessionId)
         })
       )
       return this.normalizeStructuredFallback(fallback.outputText)
@@ -2267,7 +2355,7 @@ export class WorkerToolRunner {
         modelAudit:
           audit === undefined
             ? null
-            : { role: audit.role as 'brain' | 'worker', providerId: audit.providerId, model: audit.model, routeKey: audit.routeKey, requestedProfile: audit.requestedProfile }
+            : { role: audit.role as 'brain' | 'worker', providerId: audit.providerId, model: audit.model, routeKey: audit.routeKey, requestedProfile: audit.requestedProfile, attempts: audit.attempts, failoverNote: audit.failoverNote, attemptedModels: audit.attemptedModels, requestedChain: audit.requestedChain, requestedEffort: audit.requestedEffort }
       }
     })
     return {

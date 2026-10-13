@@ -20,7 +20,7 @@ export { DEFAULT_TERMINAL_COLS, DEFAULT_TERMINAL_ROWS }
  *
  * Human terminals only: worker/runtime/extension processes never
  * appear here. Live PTYs are runtime resources — never persisted, so
- * restart assumes nothing alive. Schema untouched (v19).
+ * restart assumes nothing alive. Schema untouched (v20).
  */
 
 export type HumanTerminalStatus = 'starting' | 'running' | 'exited'

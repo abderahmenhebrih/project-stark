@@ -9,10 +9,12 @@ import {
   type ProviderStructuredRequest,
   type ProviderStructuredResult,
   type ProviderWorkerTurnRequest,
-  type ProviderWorkerTurnResult
+  type ProviderWorkerTurnResult,
+  isAbortError
 } from '../ai/provider-adapter'
 import type { ProviderModel } from '../../shared/providers/types'
 import {
+  AiCancelledError,
   ProviderEmptyResponseError,
   ProviderGenericError,
   ProviderModelUnavailableError,
@@ -22,6 +24,7 @@ import {
   StarkHostedSignInRequiredError,
   StarkHostedUnavailableError
 } from '../ai/errors'
+import { ImageTooLargeForHostedTransportError } from '../ai/ai-attachment-context'
 import {
   isHostedBuiltinModel,
   resolveHostedModelRoute,
@@ -40,6 +43,52 @@ export interface StarkHostedAdapterDeps {
 
 /** Output-token ceiling enforced desktop-side (mirrors the function cap). */
 const HOSTED_MAX_OUTPUT_TOKENS = 8192
+
+/**
+ * Hosted transport bounds enforced desktop-side BEFORE any network
+ * call, so STARK never knowingly sends a request its own edge
+ * protocol will reject. Mirrors MAX_INFER_BODY_BYTES (384 KiB) and
+ * MAX_INFER_MESSAGE_BYTES (160 KiB) in
+ * `supabase/functions/stark-infer/protocol.ts` — parity is asserted
+ * by the adapter transport tests. Per-image preflight already
+ * happens in planAiAttachments; these checks are the aggregate and
+ * defense-in-depth backstop (base64 expansion included: measured on
+ * the serialized wire bytes, not filesystem sizes).
+ */
+const HOSTED_REQUEST_BODY_LIMIT_BYTES = 384 * 1024
+const HOSTED_REQUEST_MESSAGE_LIMIT_BYTES = 160 * 1024
+
+/** Exported for parity tests against the edge protocol (not for runtime use). */
+export const HOSTED_TRANSPORT_LIMITS = {
+  bodyBytes: HOSTED_REQUEST_BODY_LIMIT_BYTES,
+  messageBytes: HOSTED_REQUEST_MESSAGE_LIMIT_BYTES
+} as const
+
+/** Estimated UTF-8 wire bytes of one outbound message content. */
+function messageWireBytes(content: unknown): number {
+  if (typeof content === 'string') {
+    return Buffer.byteLength(content, 'utf8')
+  }
+  if (Array.isArray(content)) {
+    let bytes = 0
+    for (const part of content) {
+      if (typeof part !== 'object' || part === null) {
+        continue
+      }
+      const record = part as Record<string, unknown>
+      if (record['type'] === 'text' && typeof record['text'] === 'string') {
+        bytes += Buffer.byteLength(record['text'], 'utf8')
+      } else if (record['type'] === 'image_url' && typeof record['image_url'] === 'object' && record['image_url'] !== null) {
+        const url = (record['image_url'] as Record<string, unknown>)['url']
+        if (typeof url === 'string') {
+          bytes += Buffer.byteLength(url, 'utf8')
+        }
+      }
+    }
+    return bytes
+  }
+  return 0
+}
 
 interface EdgeToolCall {
   readonly id: string
@@ -208,7 +257,8 @@ export class StarkHostedProviderAdapter implements AiProviderAdapter {
       reasoningEffort: request.reasoningEffort ?? null,
       responseFormat: null,
       tools: null,
-      attachments: request.attachments
+      attachments: request.attachments,
+      signal: request.signal
     })
     if (result.text === null || result.text === '') {
       throw new ProviderEmptyResponseError()
@@ -235,7 +285,8 @@ export class StarkHostedProviderAdapter implements AiProviderAdapter {
       reasoningEffort: request.reasoningEffort ?? null,
       responseFormat: { name: request.schemaName, schema: request.schema },
       tools: null,
-      attachments: request.attachments
+      attachments: request.attachments,
+      signal: request.signal
     })
     if (result.text === null || result.text === '') {
       throw new ProviderEmptyResponseError()
@@ -263,7 +314,8 @@ export class StarkHostedProviderAdapter implements AiProviderAdapter {
       reasoningEffort: null,
       responseFormat: null,
       tools: request.tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })),
-      attachments: request.attachments
+      attachments: request.attachments,
+      signal: request.signal
     })
     const usage = toUsage(result.usage)
     const calls = result.toolCalls ?? []
@@ -293,6 +345,7 @@ export class StarkHostedProviderAdapter implements AiProviderAdapter {
     readonly responseFormat: { readonly name: string; readonly schema: unknown } | null
     readonly tools: readonly { readonly name: string; readonly description: string; readonly parameters: unknown }[] | null
     readonly attachments: readonly ProviderAttachmentContent[] | undefined
+    readonly signal?: AbortSignal
   }): Promise<EdgeResult> {
     const route = resolveHostedModelRoute(input.model)
     if (route === null || !isHostedBuiltinModel(input.model)) {
@@ -303,6 +356,34 @@ export class StarkHostedProviderAdapter implements AiProviderAdapter {
       throw new StarkHostedUnavailableError()
     }
     const fetchFn = this.deps.fetchFn ?? fetch
+    const payload = {
+      model: input.model,
+      instructions: input.instructions,
+      messages: toChatContent(input.messages, input.attachments),
+      maxTokens: Math.min(input.maxOutputTokens, HOSTED_MAX_OUTPUT_TOKENS),
+      ...(input.reasoningEffort !== null && route.reasoningEffort
+        ? { reasoningEffort: input.reasoningEffort }
+        : {}),
+      ...(input.responseFormat !== null ? { responseFormat: input.responseFormat } : {}),
+      ...(input.tools !== null ? { tools: input.tools } : {})
+    }
+    // Hosted preflight: fail early with honest copy instead of
+    // sending a request the edge protocol must reject. No bytes
+    // leave the process on this path (fetch is never reached).
+    for (const message of payload.messages) {
+      if (messageWireBytes(message.content) > HOSTED_REQUEST_MESSAGE_LIMIT_BYTES) {
+        throw new ImageTooLargeForHostedTransportError()
+      }
+    }
+    const requestBody = JSON.stringify(payload)
+    if (Buffer.byteLength(requestBody, 'utf8') > HOSTED_REQUEST_BODY_LIMIT_BYTES) {
+      throw new ImageTooLargeForHostedTransportError()
+    }
+    // User cancellation shares the timeout signal: aborting surfaces
+    // AiCancelledError below (never a timeout, never retryable), while
+    // plain expiry keeps the existing TimeoutError semantics.
+    const timeout = AbortSignal.timeout(AI_GENERATE_TIMEOUT_MS)
+    const signal = input.signal === undefined ? timeout : AbortSignal.any([timeout, input.signal])
     let response: Response
     try {
       response = await fetchFn(url, {
@@ -311,20 +392,13 @@ export class StarkHostedProviderAdapter implements AiProviderAdapter {
           Authorization: `Bearer ${input.accessToken}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          model: input.model,
-          instructions: input.instructions,
-          messages: toChatContent(input.messages, input.attachments),
-          maxTokens: Math.min(input.maxOutputTokens, HOSTED_MAX_OUTPUT_TOKENS),
-          ...(input.reasoningEffort !== null && route.reasoningEffort
-            ? { reasoningEffort: input.reasoningEffort }
-            : {}),
-          ...(input.responseFormat !== null ? { responseFormat: input.responseFormat } : {}),
-          ...(input.tools !== null ? { tools: input.tools } : {})
-        }),
-        signal: AbortSignal.timeout(AI_GENERATE_TIMEOUT_MS)
+        body: requestBody,
+        signal
       })
     } catch (error) {
+      if (isAbortError(error) || input.signal?.aborted === true) {
+        throw new AiCancelledError({ cause: error })
+      }
       if (error instanceof DOMException && error.name === 'TimeoutError') {
         throw new ProviderTimeoutError({ cause: error })
       }

@@ -20,6 +20,57 @@ export const MAX_AI_TEXT_ATTACHMENT_BYTES = 1024 * 1024
 /** AI ingestion bound for one image attachment (10 MiB, aligned with the inline-preview cap). */
 export const MAX_AI_IMAGE_BYTES = 10 * 1024 * 1024
 
+/**
+ * Largest RAW image bytes (stored file size, not encoded length) that
+ * may travel the STARK Free hosted inference route (`stark` provider
+ * → `stark-infer` Edge Function).
+ *
+ * Exact derivation (so the bound stays honest — safety beats the
+ * 100 KiB example: 100 KiB raw is REJECTED):
+ * - Edge protocol caps: one message 160 KiB UTF-8, whole body 384 KiB
+ *   (see supabase/functions/stark-infer/protocol.ts).
+ * - 96 KiB raw = 98,304 bytes → base64 ceil(98304/3)*4 = 131,072
+ *   bytes + `data:<mime>;base64,` prefix (22 bytes for image/png,
+ *   23 for image/jpeg) ≈ 131,094 wire bytes for the image part.
+ * - Base64 alphabet (A–Za–z0–9+/=) and the ASCII prefix need NO JSON
+ *   escaping, so JSON wire bytes equal UTF-8 bytes here.
+ * - 131,094 leaves ~32 KiB headroom inside one 160 KiB message for
+ *   the attachment review block + trailing user text for the common
+ *   small-text case. Larger user text, multiple images, or a larger
+ *   total body can still overflow — the adapter's payload-aware
+ *   backstop (measured on the serialized JSON body, not filesystem
+ *   sizes) rejects those honestly; this per-image preflight is the
+ *   conservative first gate, never the only gate.
+ * - Human QA values (must agree everywhere): 64 KiB → sends,
+ *   90 KiB → sends, 96 KiB (boundary) → sends, 100 KiB → clean
+ *   hosted rejection (ImageTooLargeForHostedTransportError), never
+ *   "Included". BYOK keeps the independent 10 MiB provider path.
+ */
+export const MAX_HOSTED_IMAGE_BYTES = 96 * 1024
+
+/** Length of the `data:<mime>;base64,` prefix for one image part (UTF-8 bytes; prefix is ASCII). */
+export function imageDataUrlPrefixBytes(mimeType: string): number {
+  return new TextEncoder().encode(`data:${mimeType};base64,`).length
+}
+
+/** Estimated wire bytes of raw image bytes as a data-URL part. */
+export function estimateImageTransportBytes(rawBytes: number, mimeType: string): number {
+  if (!Number.isSafeInteger(rawBytes) || rawBytes < 0) {
+    return Number.MAX_SAFE_INTEGER
+  }
+  return Math.ceil(rawBytes / 3) * 4 + imageDataUrlPrefixBytes(mimeType)
+}
+
+/** True when raw image bytes fit the hosted transport (fail closed on garbage). */
+export function isImageTransportableForHosted(sizeBytes: unknown): boolean {
+  return (
+    typeof sizeBytes === 'number' &&
+    Number.isSafeInteger(sizeBytes) &&
+    sizeBytes >= 0 &&
+    sizeBytes <= MAX_HOSTED_IMAGE_BYTES
+  )
+}
+
 /** Most attachments included in one AI request (matches the per-message cap). */
 export const MAX_AI_ATTACHMENT_COUNT = 10
 
@@ -123,11 +174,17 @@ export type AttachmentAiInclusion =
   | 'included-text'
   | 'metadata-only'
   | 'unsupported'
+  | 'route-too-large'
 
 /**
  * Predicts how one attachment reaches the model under a given model
  * id. Metadata-only helper for subtle UI states — main enforces the
  * authoritative decision (with byte-level checks) before any call.
+ *
+ * `route-too-large` means the model could view the image but this
+ * route cannot transport it (STARK Free hosted message/body caps):
+ * callers must not claim inclusion and main fails early with an
+ * explicit transport error instead of sending a doomed request.
  */
 export function attachmentInclusionFor(
   providerId: string,
@@ -138,7 +195,13 @@ export function attachmentInclusionFor(
     if (attachment.size > MAX_AI_IMAGE_BYTES) {
       return 'metadata-only'
     }
-    return modelSupportsVision(providerId, model) ? 'included-image' : 'unsupported'
+    if (!modelSupportsVision(providerId, model)) {
+      return 'unsupported'
+    }
+    if (providerId === 'stark' && !isImageTransportableForHosted(attachment.size)) {
+      return 'route-too-large'
+    }
+    return 'included-image'
   }
   if (hasTextAttachmentExtension(attachment.name) && attachment.size <= MAX_AI_TEXT_ATTACHMENT_BYTES) {
     return 'included-text'

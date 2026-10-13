@@ -61,7 +61,7 @@ import type {
   SaveProviderCredentialRequest,
   SetProviderModelRequest
 } from '../shared/providers/types'
-import type { AiApi, AiGenerateRequest, AiProposeFileChangeRequest, AiFileChangeProposalResult, AiProposeChangeSetRequest, AiChangeSetProposalResult, AiRunBrainRequest, AskRecoveryResult, WorkRecoveryResult } from '../shared/ai/types'
+import type { AiApi, AiCancelOperationRequest, AiCancelOperationResult, AiGenerateRequest, AiProposeFileChangeRequest, AiFileChangeProposalResult, AiProposeChangeSetRequest, AiChangeSetProposalResult, AiRunBrainRequest, AskRecoveryResult, WorkRecoveryResult } from '../shared/ai/types'
 import type { ChangeSetRequest, ChangeSetsApi, ListChangeSetsRequest } from '../shared/change-sets/types'
 import type { ChangeSet } from '../shared/change-sets/types'
 import type {
@@ -294,7 +294,9 @@ function createAiApi(): AiApi {
     proposeChangeSet: (request: AiProposeChangeSetRequest): Promise<AiChangeSetProposalResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.aiProposeChangeSet, request) as Promise<AiChangeSetProposalResult>,
     runBrain: (request: AiRunBrainRequest): Promise<WorkRecoveryResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.aiRunBrain, request) as Promise<WorkRecoveryResult>
+      ipcRenderer.invoke(IPC_CHANNELS.aiRunBrain, request) as Promise<WorkRecoveryResult>,
+    cancelOperation: (request: AiCancelOperationRequest): Promise<AiCancelOperationResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.aiCancelOperation, request) as Promise<AiCancelOperationResult>
   }
 }
 

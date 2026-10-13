@@ -112,6 +112,41 @@ export interface StoredStepModel {
   readonly model: string
   readonly routeKey: string
   readonly requestedProfile: string | null
+  /** LoopLink attempts (1..chain length), or null for pre-020 rows. */
+  readonly attempts: number | null
+  /** Human-safe failover note, or null when the first model served / pre-020. */
+  readonly failoverNote: string | null
+  /** Attempted model ids in order (JSON), or null for pre-020 rows. */
+  readonly attemptedModels: readonly string[] | null
+  /** Eligible requested chain in UI order (JSON), or null for pre-020 rows. */
+  readonly requestedChain: readonly string[] | null
+  /** Requested STARK effort, or null for pre-020 rows. */
+  readonly requestedEffort: string | null
+}
+
+function asNullablePositiveInt(value: unknown): number | null {
+  if (value === null) {
+    return null
+  }
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 ? value : null
+}
+
+function asStringArrayOrNull(value: unknown): readonly string[] | null {
+  if (value === null) {
+    return null
+  }
+  if (typeof value !== 'string') {
+    return null
+  }
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === 'string')) {
+      return null
+    }
+    return [...parsed]
+  } catch {
+    return null
+  }
 }
 
 function mapStepModel(row: unknown): StoredStepModel {
@@ -134,7 +169,23 @@ function mapStepModel(row: unknown): StoredStepModel {
   ) {
     throw new DatabaseError('stored orchestration step model row is invalid')
   }
-  return { stepId, role, providerId, model, routeKey, requestedProfile }
+  const requestedEffort = row['requested_effort']
+  if (requestedEffort !== undefined && requestedEffort !== null && typeof requestedEffort !== 'string') {
+    throw new DatabaseError('stored orchestration step model row is invalid')
+  }
+  return {
+    stepId,
+    role,
+    providerId,
+    model,
+    routeKey,
+    requestedProfile,
+    attempts: asNullablePositiveInt(row['attempts'] ?? null),
+    failoverNote: typeof row['failover_note'] === 'string' ? (row['failover_note'] as string) : null,
+    attemptedModels: asStringArrayOrNull(row['attempted_models'] ?? null),
+    requestedChain: asStringArrayOrNull(row['requested_chain'] ?? null),
+    requestedEffort: (requestedEffort as string | null | undefined) ?? null
+  }
 }
 
 function mapStep(row: unknown): StoredOrchestrationStep {
@@ -205,8 +256,9 @@ export class OrchestrationRepository {
     )
     this.insertStepModelStmt = db.prepare(
       'INSERT INTO orchestration_step_models ' +
-        '(step_id, role, provider_id, model, route_key, requested_profile) ' +
-        'VALUES (?, ?, ?, ?, ?, ?)'
+        '(step_id, role, provider_id, model, route_key, requested_profile, attempts, failover_note, ' +
+        'attempted_models, requested_chain, requested_effort) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     )
     this.findRunStmt = db.prepare(
       'SELECT id, workspace_id, session_id, user_message_id, status, action, plan_summary, ' +
@@ -217,7 +269,8 @@ export class OrchestrationRepository {
         'FROM orchestration_steps WHERE run_id = ? ORDER BY ordinal ASC'
     )
     this.findStepModelsStmt = db.prepare(
-      'SELECT step_id, role, provider_id, model, route_key, requested_profile ' +
+      'SELECT step_id, role, provider_id, model, route_key, requested_profile, attempts, failover_note, ' +
+        'attempted_models, requested_chain, requested_effort ' +
         'FROM orchestration_step_models WHERE step_id IN (SELECT id FROM orchestration_steps WHERE run_id = ?)'
     )
     this.listRecentStmt = db.prepare(
@@ -321,9 +374,31 @@ export class OrchestrationRepository {
       model: string
       routeKey: string
       requestedProfile: string | null
+      attempts?: number | null
+      failoverNote?: string | null
+      attemptedModels?: readonly string[] | null
+      requestedChain?: readonly string[] | null
+      requestedEffort?: string | null
     },
     fault?: { readonly failAfterStep: boolean }
   ): number {
+    const attempts = model.attempts ?? null
+    if (attempts !== null && (!Number.isSafeInteger(attempts) || attempts < 1)) {
+      throw new DatabaseError('step audit attempts must be a positive integer')
+    }
+    const failoverNote = model.failoverNote ?? null
+    if (failoverNote !== null && (failoverNote === '' || failoverNote.includes('\0'))) {
+      throw new DatabaseError('step audit failover note is invalid')
+    }
+    const attemptedModels = model.attemptedModels ?? null
+    if (attemptedModels !== null && (attemptedModels.length === 0 || attemptedModels.some((entry) => entry === ''))) {
+      throw new DatabaseError('step audit attempted models are invalid')
+    }
+    const requestedChain = model.requestedChain ?? null
+    if (requestedChain !== null && requestedChain.some((entry) => entry === '')) {
+      throw new DatabaseError('step audit requested chain is invalid')
+    }
+    const requestedEffort = model.requestedEffort ?? null
     let stepId: number
     this.db.exec('BEGIN')
     try {
@@ -347,7 +422,12 @@ export class OrchestrationRepository {
         model.providerId,
         model.model,
         model.routeKey,
-        model.requestedProfile
+        model.requestedProfile,
+        attempts,
+        failoverNote,
+        attemptedModels === null ? null : JSON.stringify([...attemptedModels]),
+        requestedChain === null ? null : JSON.stringify([...requestedChain]),
+        requestedEffort
       )
       this.db.exec('COMMIT')
     } catch (error) {
@@ -492,6 +572,39 @@ export class OrchestrationRepository {
       throw error
     }
     return { messageId }
+  }
+
+  /**
+   * Cancels a parked run: `waiting_for_approval` → `cancelled` with
+   * the user-cancelled error category. Idempotent: an already
+   * `cancelled` run returns true without rewriting; any other
+   * terminal/non-parked status returns false. Never touches
+   * completed/failed/interrupted/running rows. Preserves
+   * action/planSummary/finalMessageId; only status/errorCategory move.
+   * No filesystem, no approval mutation here (caller transitions the
+   * approval row separately so hasPending clears).
+   */
+  cancelWaitingRun(id: number, now: number): boolean {
+    const current = this.findRunById(id)
+    if (current === undefined) {
+      return false
+    }
+    if (current.status === 'cancelled') {
+      return true
+    }
+    if (current.status !== 'waiting_for_approval') {
+      return false
+    }
+    this.updateRunStmt.run(
+      'cancelled',
+      current.action,
+      current.planSummary,
+      current.finalMessageId,
+      'The AI operation was cancelled.',
+      now,
+      id
+    )
+    return true
   }
 
   /** Marks a run failed with a safe error category. */

@@ -247,7 +247,7 @@ export class CloudAccountService {
     this.attempts.consumeActive()
     let authenticated: AuthenticatedIdentity
     try {
-      authenticated = await this.authAdapter.exchangeCode(code)
+      authenticated = await this.authAdapter.exchangeCode(code, active.provider)
     } catch (error) {
       this.emitStatus()
       if (
@@ -355,9 +355,13 @@ export class CloudAccountService {
       }
       // Offline-safe: a network failure keeps the cached signed-in
       // status with no retry loop and no local data deletion.
+      // Provider attribution comes from the validated stored account
+      // (DB CHECK constrains it); the adapter still falls back to
+      // server metadata and fails closed without either.
       let restored: AuthenticatedIdentity | null
       try {
-        restored = await this.authAdapter.restoreSession(envelope)
+        const storedProvider = stored.provider === 'google' || stored.provider === 'github' ? stored.provider : undefined
+        restored = await this.authAdapter.restoreSession(envelope, storedProvider)
       } catch {
         return { state: 'signed_in', account: toSafeAccount(stored) }
       }

@@ -20,6 +20,7 @@ export type ChangeSetProposalErrorKind =
   | 'too-large'
   | 'structured-unsupported'
   | 'in-flight'
+  | 'cancelled'
   | 'generic'
 
 export interface NormalizedChangeSetProposalError {
@@ -40,6 +41,7 @@ const MAIN_TOO_LARGE = 'The grouped proposed changes are too large.'
 const MAIN_STRUCTURED_UNSUPPORTED =
   'The selected model could not create a structured code proposal. Choose another model.'
 const MAIN_IN_FLIGHT = 'STARK is already generating a response for this session.'
+const MAIN_CANCELLED = 'The AI operation was cancelled.'
 const MAIN_GENERIC = 'We couldn’t prepare this grouped code proposal.'
 
 export const CHANGE_SET_MISSING_CONTEXT_MESSAGE = MAIN_MISSING_CONTEXT
@@ -51,6 +53,7 @@ export const CHANGE_SET_INVALID_OUTPUT_MESSAGE = MAIN_INVALID_OUTPUT
 export const CHANGE_SET_TOO_LARGE_MESSAGE = MAIN_TOO_LARGE
 export const CHANGE_SET_STRUCTURED_UNSUPPORTED_MESSAGE = MAIN_STRUCTURED_UNSUPPORTED
 export const CHANGE_SET_IN_FLIGHT_MESSAGE = MAIN_IN_FLIGHT
+export const CHANGE_SET_CANCELLED_MESSAGE = MAIN_CANCELLED
 export const CHANGE_SET_GENERIC_MESSAGE = MAIN_GENERIC
 
 const KNOWN_OUTCOMES: readonly { readonly kind: ChangeSetProposalErrorKind; readonly mainMessage: string }[] = [
@@ -63,6 +66,7 @@ const KNOWN_OUTCOMES: readonly { readonly kind: ChangeSetProposalErrorKind; read
   { kind: 'too-large', mainMessage: MAIN_TOO_LARGE },
   { kind: 'structured-unsupported', mainMessage: MAIN_STRUCTURED_UNSUPPORTED },
   { kind: 'in-flight', mainMessage: MAIN_IN_FLIGHT },
+  { kind: 'cancelled', mainMessage: MAIN_CANCELLED },
   { kind: 'generic', mainMessage: MAIN_GENERIC }
 ]
 

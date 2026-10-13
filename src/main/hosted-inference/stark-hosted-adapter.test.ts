@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { StarkHostedProviderAdapter } from './stark-hosted-adapter'
+import { StarkHostedProviderAdapter, HOSTED_TRANSPORT_LIMITS } from './stark-hosted-adapter'
 import {
   ProviderEmptyResponseError,
   ProviderGenericError,
@@ -11,6 +11,12 @@ import {
   StarkHostedSignInRequiredError,
   StarkHostedUnavailableError
 } from '../ai/errors'
+import { ImageTooLargeForHostedTransportError } from '../ai/ai-attachment-context'
+import { MAX_HOSTED_IMAGE_BYTES } from '../../shared/ai/attachment-capabilities'
+import {
+  MAX_INFER_BODY_BYTES,
+  MAX_INFER_MESSAGE_BYTES
+} from '../../../supabase/functions/stark-infer/protocol'
 import type { HostedSessionProvider } from '../ai/provider-adapter'
 
 /**
@@ -247,6 +253,8 @@ describe('hosted adapter failure mapping', () => {
     await assert.rejects(signIn.adapter.generateText(textRequest()), StarkHostedSignInRequiredError)
     const limited = openAdapter(() => jsonResponse(429, { error: { code: 'hosted_capacity_limited' } }))
     await assert.rejects(limited.adapter.generateText(textRequest()), ProviderRateLimitedError)
+    const rateLimited = openAdapter(() => jsonResponse(429, { error: { code: 'hosted_rate_limited' } }))
+    await assert.rejects(rateLimited.adapter.generateText(textRequest()), ProviderRateLimitedError)
     const down = openAdapter(() => jsonResponse(502, { error: { code: 'hosted_service_unavailable' } }))
     await assert.rejects(down.adapter.generateText(textRequest()), StarkHostedUnavailableError)
     const malformed = openAdapter(() => jsonResponse(200, { nope: true }))
@@ -281,6 +289,154 @@ describe('hosted adapter failure mapping', () => {
         maxOutputTokens: 512
       }),
       StarkHostedUnavailableError
+    )
+  })
+})
+
+describe('hosted adapter transport preflight', () => {
+  function imageAttachment(rawBytes: number) {
+    return {
+      kind: 'image' as const,
+      id: 'a'.repeat(32),
+      name: 'hero.png',
+      mimeType: 'image/png',
+      base64: 'A'.repeat(Math.ceil(rawBytes / 3) * 4)
+    }
+  }
+
+  function imageRequest(rawBytes: number) {
+    return {
+      apiKey: 'ACCESS-MARKER',
+      model: 'builtin:gpt-5.6-luna',
+      instructions: 'Describe.',
+      messages: [{ role: 'user' as const, content: '[ATTACHMENTS 1]\n[ATTACHMENT 1] id: a name: hero.png Image' }],
+      maxOutputTokens: 512,
+      attachments: [imageAttachment(rawBytes)]
+    }
+  }
+
+  it('mirrors the edge protocol bounds (parity, not drift)', () => {
+    assert.equal(HOSTED_TRANSPORT_LIMITS.bodyBytes, MAX_INFER_BODY_BYTES)
+    assert.equal(HOSTED_TRANSPORT_LIMITS.messageBytes, MAX_INFER_MESSAGE_BYTES)
+  })
+
+  it('sends a very small image without preflight interference', async () => {
+    const { adapter, calls } = openAdapter(() => jsonResponse(200, TEXT_OK))
+    const result = await adapter.generateText(imageRequest(10 * 1024))
+    assert.equal(result.text, 'Hello from hosted.')
+    assert.equal(calls.length, 1)
+  })
+
+  it('sends a near-threshold image that still fits one message', async () => {
+    const { adapter, calls } = openAdapter(() => jsonResponse(200, TEXT_OK))
+    await adapter.generateText(imageRequest(MAX_HOSTED_IMAGE_BYTES))
+    assert.equal(calls.length, 1)
+  })
+
+  it('measures the exact hosted boundary wire bytes (adapter guards protocol truth, plan guards the 96 KiB gate)', async () => {
+    // boundary - 1 and boundary → send; assert the actual serialized wire bytes stay under both caps.
+    for (const raw of [MAX_HOSTED_IMAGE_BYTES - 1, MAX_HOSTED_IMAGE_BYTES]) {
+      const { adapter, calls } = openAdapter(() => jsonResponse(200, TEXT_OK))
+      await adapter.generateText(imageRequest(raw))
+      assert.equal(calls.length, 1, `${String(raw)} must send at the adapter (protocol truth)`)
+      const wire = Buffer.byteLength(calls[0]?.init.body ?? '', 'utf8')
+      assert.ok(wire < MAX_INFER_MESSAGE_BYTES, `wire ${String(wire)} must fit one message`)
+      assert.ok(wire < MAX_INFER_BODY_BYTES, `wire ${String(wire)} must fit the body`)
+    }
+    // boundary + 1 and 100 KiB still fit the 160 KiB wire alone, so the
+    // adapter (protocol truth) sends them — the CONSERVATIVE 96 KiB
+    // per-image gate lives earlier in planAiAttachments and rejects them
+    // there (safety beats the example; see the plan-level boundary suite).
+    // The adapter backstop rejects only true protocol overflow (e.g. 200 KiB raw).
+    for (const raw of [MAX_HOSTED_IMAGE_BYTES + 1, 100 * 1024]) {
+      const { adapter, calls } = openAdapter(() => jsonResponse(200, TEXT_OK))
+      await adapter.generateText(imageRequest(raw))
+      assert.equal(calls.length, 1, `${String(raw)} fits the wire alone so the adapter sends; plan rejects it earlier`)
+    }
+  })
+
+  it('small text plus a boundary image sends; larger text plus the same image overflows the message backstop', async () => {
+    const base = imageRequest(MAX_HOSTED_IMAGE_BYTES)
+    // Small text: review + 1 KiB still fits.
+    {
+      const { adapter, calls } = openAdapter(() => jsonResponse(200, TEXT_OK))
+      await adapter.generateText({ ...base, messages: [{ role: 'user' as const, content: `[ATTACHMENTS 1]\n${'t'.repeat(1024)}` }] })
+      assert.equal(calls.length, 1)
+    }
+    // Larger text: the same image plus ~32 KiB text overflows one 160 KiB message → backstop rejects.
+    {
+      const { adapter, calls } = openAdapter(() => jsonResponse(200, TEXT_OK))
+      await assert.rejects(
+        adapter.generateText({ ...base, messages: [{ role: 'user' as const, content: `[ATTACHMENTS 1]\n${'t'.repeat(32 * 1024)}` }] }),
+        ImageTooLargeForHostedTransportError
+      )
+      assert.equal(calls.length, 0)
+    }
+  })
+
+  it('multiple boundary images overflow one message even though each fits alone (backstop, not silent truncation)', async () => {
+    const { adapter, calls } = openAdapter(() => jsonResponse(200, TEXT_OK))
+    const one = imageAttachment(64 * 1024)
+    const two = { ...one, id: 'b'.repeat(32), name: 'b.png' }
+    await assert.rejects(
+      adapter.generateText({
+        apiKey: 'ACCESS-MARKER',
+        model: 'builtin:gpt-5.6-luna',
+        instructions: 'Describe.',
+        messages: [{ role: 'user' as const, content: '[ATTACHMENTS 2]' }],
+        maxOutputTokens: 512,
+        attachments: [one, two]
+      }),
+      ImageTooLargeForHostedTransportError
+    )
+    assert.equal(calls.length, 0)
+  })
+
+  it('rejects an over-threshold image before any network call', async () => {
+    // 200 KiB raw encodes to ~267 KiB on the wire: over the 160 KiB
+    // edge message cap. (The 96 KiB plan-level threshold is enforced
+    // earlier in planAiAttachments; the adapter guards protocol truth.)
+    const { adapter, calls } = openAdapter(() => jsonResponse(200, TEXT_OK))
+    await assert.rejects(adapter.generateText(imageRequest(200 * 1024)), ImageTooLargeForHostedTransportError)
+    assert.equal(calls.length, 0, 'doomed request must never reach the network')
+  })
+
+  it('rejects a desktop-maximum image before any network call', async () => {
+    const { adapter, calls } = openAdapter(() => jsonResponse(200, TEXT_OK))
+    await assert.rejects(adapter.generateText(imageRequest(5 * 1024 * 1024)), ImageTooLargeForHostedTransportError)
+    assert.equal(calls.length, 0)
+  })
+
+  it('rejects an aggregate body over the total limit even when each message fits', async () => {
+    const { adapter, calls } = openAdapter(() => jsonResponse(200, TEXT_OK))
+    const big = 'x'.repeat(130 * 1024)
+    await assert.rejects(
+      adapter.generateText({
+        apiKey: 'ACCESS-MARKER',
+        model: 'builtin:gpt-5.6-luna',
+        instructions: 'Be brief.',
+        messages: [
+          { role: 'user' as const, content: big },
+          { role: 'user' as const, content: big },
+          { role: 'user' as const, content: big }
+        ],
+        maxOutputTokens: 512
+      }),
+      ImageTooLargeForHostedTransportError
+    )
+    assert.equal(calls.length, 0)
+  })
+
+  it('keeps the transport error user-safe with no protocol internals', async () => {
+    const { adapter } = openAdapter(() => jsonResponse(200, TEXT_OK))
+    const error = await adapter.generateText(imageRequest(200 * 1024)).then(
+      () => null,
+      (caught: unknown) => caught
+    )
+    assert.ok(error instanceof ImageTooLargeForHostedTransportError)
+    assert.equal(
+      (error as Error).message,
+      'This image is too large to send with STARK Free. Use a smaller image or a connected provider.'
     )
   })
 })

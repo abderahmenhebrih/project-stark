@@ -23,6 +23,14 @@
  * `model` selector for STARK execution. Main validates every entry
  * (known id, no duplicates, bounded length) and rejects malformed
  * chains — the renderer can never inject arbitrary upstream ids.
+ *
+ * The optional legacy `disabledBrainModels` / `disabledHeartModels`
+ * fields carry a renderer UI snapshot (roster minus chain) for
+ * presentation/debugging only. MAIN IGNORES THEM FOR AUTHORITY:
+ * eligibility derives solely from the authoritative catalog +
+ * compatibility state (see model-eligibility.ts). A forged renderer
+ * that omits/empties/falsifies these arrays gains nothing — every
+ * chain entry must still be main-executable fail-closed.
  */
 
 import type { CodingMessage, CodingSession } from '../sessions/types'
@@ -49,6 +57,8 @@ export interface AiGenerateRequest {
    * reasoning runs on the Brain chain when present and valid.
    */
   readonly brainModels?: readonly string[]
+  /** Legacy renderer disabled-Brain snapshot (optional, IGNORED for authority). */
+  readonly disabledBrainModels?: readonly string[]
 }
 
 /** Generation result: the persisted assistant message plus session. */
@@ -71,6 +81,8 @@ export interface AiProposeFileChangeRequest {
   readonly model?: string
   /** Brain LoopLink snapshot (optional, see module header). */
   readonly brainModels?: readonly string[]
+  /** Legacy renderer disabled-Brain snapshot (optional, IGNORED for authority). */
+  readonly disabledBrainModels?: readonly string[]
 }
 
 /**
@@ -96,6 +108,8 @@ export interface AiProposeChangeSetRequest {
   readonly model?: string
   /** Brain LoopLink snapshot (optional, see module header). */
   readonly brainModels?: readonly string[]
+  /** Legacy renderer disabled-Brain snapshot (optional, IGNORED for authority). */
+  readonly disabledBrainModels?: readonly string[]
 }
 
 /**
@@ -122,6 +136,10 @@ export interface AiRunBrainRequest {
   readonly brainModels?: readonly string[]
   /** Heart LoopLink snapshot (optional, see module header). */
   readonly heartModels?: readonly string[]
+  /** Legacy renderer disabled-Brain snapshot (optional, IGNORED for authority). */
+  readonly disabledBrainModels?: readonly string[]
+  /** Legacy renderer disabled-Heart snapshot (optional, IGNORED for authority). */
+  readonly disabledHeartModels?: readonly string[]
 }
 
 /**
@@ -141,6 +159,26 @@ export interface AiApi {
   proposeFileChange: (request: AiProposeFileChangeRequest) => Promise<AiFileChangeProposalResult>
   proposeChangeSet: (request: AiProposeChangeSetRequest) => Promise<AiChangeSetProposalResult>
   runBrain: (request: AiRunBrainRequest) => Promise<WorkRecoveryResult>
+  cancelOperation: (request: AiCancelOperationRequest) => Promise<AiCancelOperationResult>
+}
+
+/**
+ * Operation-cancellation request: which session's ACTIVE AI
+ * operation to cancel. Session-scoped only — never a global kill.
+ * Main validates workspace/session ownership; the renderer never
+ * decides cancellation authority.
+ */
+export interface AiCancelOperationRequest {
+  readonly workspaceId: number
+  readonly sessionId: number
+}
+
+/**
+ * Operation-cancellation result: true when an operation was active
+ * and cancellation was recorded; false when idle (harmless no-op).
+ */
+export interface AiCancelOperationResult {
+  readonly cancelled: boolean
 }
 
 /**

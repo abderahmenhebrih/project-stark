@@ -161,7 +161,12 @@ describe('cross-provider handoff and audit', () => {
         providerId: OTHER_PROVIDER,
         model: 'model-B',
         routeKey: 'fixed',
-        requestedProfile: 'coding'
+        requestedProfile: 'coding',
+        attempts: 1,
+        failoverNote: null,
+        attemptedModels: ['model-B'],
+        requestedChain: ['model-B'],
+        requestedEffort: 'regular'
       })
     } finally {
       harness.db.close()
@@ -240,21 +245,36 @@ describe('cross-provider handoff and audit', () => {
         providerId: 'openai',
         model: 'model-A',
         routeKey: 'primary',
-        requestedProfile: null
+        requestedProfile: null,
+        attempts: 1,
+        failoverNote: null,
+        attemptedModels: ['model-A'],
+        requestedChain: ['model-A'],
+        requestedEffort: 'regular'
       })
       assert.deepEqual(byKind.get('worker'), {
         role: 'worker',
         providerId: 'openai',
         model: 'model-C',
         routeKey: 'coding',
-        requestedProfile: 'coding'
+        requestedProfile: 'coding',
+        attempts: 1,
+        failoverNote: null,
+        attemptedModels: ['model-C'],
+        requestedChain: ['model-C'],
+        requestedEffort: 'regular'
       })
       assert.deepEqual(byKind.get('brain_synthesis'), {
         role: 'brain',
         providerId: 'openai',
         model: 'model-A',
         routeKey: 'primary',
-        requestedProfile: null
+        requestedProfile: null,
+        attempts: 1,
+        failoverNote: null,
+        attemptedModels: ['model-A'],
+        requestedChain: ['model-A'],
+        requestedEffort: 'regular'
       })
       // Reload after restart: same values.
       const reloaded = await harness.brain.getRun({ runId: result.run.id })

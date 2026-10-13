@@ -161,7 +161,12 @@ describe('heart routing through brain runs', () => {
         providerId: 'openai',
         model: 'model-B',
         routeKey: 'fixed',
-        requestedProfile: 'coding'
+        requestedProfile: 'coding',
+        attempts: 1,
+        failoverNote: null,
+        attemptedModels: ['model-B'],
+        requestedChain: ['model-B'],
+        requestedEffort: 'regular'
       })
       assert.equal(harness.adapterA.calls.length, 3)
     } finally {
@@ -198,7 +203,12 @@ describe('heart routing through brain runs', () => {
         providerId: 'openai',
         model: 'model-C',
         routeKey: 'coding',
-        requestedProfile: 'coding'
+        requestedProfile: 'coding',
+        attempts: 1,
+        failoverNote: null,
+        attemptedModels: ['model-C'],
+        requestedChain: ['model-C'],
+        requestedEffort: 'regular'
       })
     } finally {
       closeHarness(harness)
@@ -229,7 +239,12 @@ describe('heart routing through brain runs', () => {
         providerId: 'openai',
         model: 'model-D',
         routeKey: 'default',
-        requestedProfile: 'coding'
+        requestedProfile: 'coding',
+        attempts: 1,
+        failoverNote: null,
+        attemptedModels: ['model-D'],
+        requestedChain: ['model-D'],
+        requestedEffort: 'regular'
       })
       assert.ok(!harness.adapterA.calls.some((call) => call.model === 'model-C'))
     } finally {
@@ -289,7 +304,12 @@ describe('heart routing through brain runs', () => {
         providerId: 'openai',
         model: 'model-A',
         routeKey: 'primary',
-        requestedProfile: null
+        requestedProfile: null,
+        attempts: 1,
+        failoverNote: null,
+        attemptedModels: ['model-A'],
+        requestedChain: ['model-A'],
+        requestedEffort: 'regular'
       })
     } finally {
       closeHarness(harness)

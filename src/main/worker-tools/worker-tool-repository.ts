@@ -236,11 +236,17 @@ export class WorkerToolRepository {
     return { approvalId }
   }
 
-  /** Marks an approval approved/denied/expired (pending/approved → terminal, one-way). */
-  transitionApproval(id: number, to: 'approved' | 'denied' | 'expired' | 'consumed', now: number): boolean {
+  /**
+   * Marks an approval approved/denied/expired/cancelled
+   * (pending → terminal, one-way). `cancelled` is user cancellation
+   * while parked — distinct from denied (user decision on the tool)
+   * and expired (lazy timeout): the run is terminally cancelled and
+   * nothing was applied.
+   */
+  transitionApproval(id: number, to: 'approved' | 'denied' | 'expired' | 'consumed' | 'cancelled', now: number): boolean {
     const current = this.findApproval(id)
     if (current === undefined) return false
-    if (to === 'approved' || to === 'denied' || to === 'expired') {
+    if (to === 'approved' || to === 'denied' || to === 'expired' || to === 'cancelled') {
       if (current.status !== 'pending') return false
       const decided = to === 'approved' ? { decided: now, consumed: null } : { decided: now, consumed: null }
       const result = this.db

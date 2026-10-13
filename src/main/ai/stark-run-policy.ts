@@ -17,6 +17,7 @@
  */
 
 import type { StarkEffort } from '../../shared/agent-target/types'
+import { resolveHostedModelRoute } from '../../shared/hosted-models/stark-model-map'
 import {
   AI_GENERATE_TIMEOUT_MS,
   MAX_ASSISTANT_OUTPUT_TOKENS,
@@ -66,14 +67,27 @@ const BASELINE_TOOL_ROUNDS = MAX_WORKER_TOOL_CALLS
 
 /**
  * Conservative model-capability gate for the provider reasoning
- * parameter. Only reasoning-capable OpenAI families accept it
- * (o-series, gpt-5); classic chat models (gpt-4o, gpt-4, gpt-3.5)
- * must receive NO reasoning parameter or the call fails.
+ * parameter.
+ *
+ * Hosted `builtin:*` models consult the authoritative hosted model map
+ * (`reasoningEffort` evidence flag) — never name-pattern inference.
+ * Non-hosted ids (BYOK/external) fall back to the OpenAI-family
+ * heuristic: only reasoning-capable OpenAI families accept the
+ * parameter (o-series, gpt-5); classic chat models (gpt-4o, gpt-4,
+ * gpt-3.5) must receive NO reasoning parameter or the call fails.
+ * Unknown/empty ids fail closed (false).
  */
 export function supportsProviderReasoning(modelId: string): boolean {
+  if (typeof modelId !== 'string') {
+    return false
+  }
   const id = modelId.trim().toLowerCase()
   if (id === '') {
     return false
+  }
+  const hosted = resolveHostedModelRoute(modelId.trim())
+  if (hosted !== null) {
+    return hosted.reasoningEffort
   }
   return (
     /(^|[^a-z0-9])(o1|o3|o4)([^a-z0-9]|$)/.test(id) ||

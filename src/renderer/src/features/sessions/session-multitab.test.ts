@@ -166,8 +166,8 @@ describe('no backend, polling, or schema drift', () => {
     assert.ok(panel.includes('useState<readonly number[]>([])'), 'open tabs must start empty per mount (no persisted tab set)')
     const dir = join(process.cwd(), 'src', 'main', 'database', 'migrations')
     const files = readdirSync(dir).filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
-    assert.ok(files.includes('019-message-attachments.ts'), 'migration 019 must exist (schema v19)')
-    assert.ok(!files.some((file) => file.startsWith('020')), 'no migration 020 may appear')
+    assert.ok(files.includes('020-looplink-audit.ts'), 'migration 020 must exist (schema v20)')
+    assert.ok(!files.some((file) => file.startsWith('021')), 'no migration 020 may appear')
   })
 
   it('shell snapshot carries the strip without new IPC', () => {

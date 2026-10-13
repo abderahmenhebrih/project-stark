@@ -27,7 +27,9 @@ import {
   MAX_LOOPLINK_CHAIN_MODELS,
   type LoopLinkCapabilityNeeds
 } from '../../shared/hosted-models/looplink-chains'
+import { isModelExecutable } from '../../shared/hosted-models/model-eligibility'
 import {
+  AiCancelledError,
   GenerationInFlightError,
   InvalidProviderRequestError,
   ProviderCredentialMissingError,
@@ -65,6 +67,7 @@ import {
 } from '../sessions/errors'
 
 export { MAX_LOOPLINK_CHAIN_MODELS }
+export { isModelExecutable, resolveModelEligibility } from '../../shared/hosted-models/model-eligibility'
 
 /** Brain chain arrived present-but-empty: fail safely, never inject a model. */
 export class LoopLinkBrainEmptyError extends Error {
@@ -97,12 +100,30 @@ function emptyErrorFor(kind: LoopLinkKind): LoopLinkBrainEmptyError | LoopLinkHe
 /**
  * Reads one LoopLink chain from a request record. Absent/null/undefined
  * means legacy behavior (no chain — caller keeps its previous routing).
- * A present value is validated strictly: non-arrays and malformed
- * entries throw InvalidProviderRequestError, unknown model ids throw
- * ProviderModelUnavailableError, duplicates are rejected, and an
- * empty array throws the kind-specific empty-chain safety error.
+ * A present value is validated strictly against MAIN authority only:
+ * non-arrays and malformed entries throw InvalidProviderRequestError,
+ * unknown model ids throw ProviderModelUnavailableError, duplicates
+ * are rejected, administratively unrunnable entries (known syntax but
+ * incompatible with STARK's inference shape — the main-owned disabled
+ * set) throw ProviderModelUnavailableError fail-closed, and an empty
+ * array throws the kind-specific empty-chain safety error.
+ *
+ * The optional `disabledKey` legacy parameter is ACCEPTED but IGNORED
+ * for authority: renderer-provided `disabledBrainModels` /
+ * `disabledHeartModels` are presentation-only UI snapshots (roster
+ * minus chain, session-local, never persisted). Main NEVER trusts them
+ * — eligibility derives solely from the authoritative catalog +
+ * compatibility state below. A forged renderer that omits/empties/
+ * falsifies the disabled list gains nothing: every chain entry must
+ * still be main-executable. Malformed disabled values are ignored
+ * (legacy tolerance), never authoritative.
  */
-export function readLoopLinkChain(record: Record<string, unknown>, key: 'brainModels' | 'heartModels', kind: LoopLinkKind): readonly string[] | null {
+export function readLoopLinkChain(
+  record: Record<string, unknown>,
+  key: 'brainModels' | 'heartModels',
+  kind: LoopLinkKind,
+  disabledKey?: 'disabledBrainModels' | 'disabledHeartModels'
+): readonly string[] | null {
   if (!(key in record) || record[key] === undefined || record[key] === null) {
     return null
   }
@@ -116,15 +137,42 @@ export function readLoopLinkChain(record: Record<string, unknown>, key: 'brainMo
     }
     throw new InvalidProviderRequestError(`looplink ${kind} chain is invalid`)
   }
+  // Main-authoritative executability: every entry must be genuinely
+  // runnable (catalog + inference-shape compatibility). Renderer
+  // disabled arrays are NOT consulted — see module header.
+  void disabledKey
+  void record
+  assertLoopLinkChainExecutable(validated.chain)
   return validated.chain
 }
 
 /**
+ * Main-authoritative executability gate for one validated chain.
+ * Throws ProviderModelUnavailableError when any entry is known-syntax
+ * but administratively unrunnable (incompatible BYOK family) or
+ * otherwise not executable per shared eligibility. Unknown ids are
+ * already rejected by validateLoopLinkChain; this covers the
+ * incompatible/disabled class fail-closed before execution (never
+ * silently skipped to the next model — the whole request fails).
+ */
+export function assertLoopLinkChainExecutable(chain: readonly string[]): void {
+  for (const entry of chain) {
+    if (!isModelExecutable(entry)) {
+      throw new ProviderModelUnavailableError()
+    }
+  }
+}
+
+/**
  * True when the error is a user cancellation — the chain stops
- * immediately, never failing over. Covers AbortError-style DOM
- * cancellations and explicit cancelled markers.
+ * immediately, never failing over. Covers the explicit cancelled
+ * error, AbortError-style DOM cancellations, and explicit cancelled
+ * markers.
  */
 export function isLoopLinkCancellation(error: unknown): boolean {
+  if (error instanceof AiCancelledError) {
+    return true
+  }
   if (error === null || typeof error !== 'object') {
     return false
   }
@@ -146,10 +194,19 @@ export function isLoopLinkCancellation(error: unknown): boolean {
  * else (auth, permissions, malformed requests, ownership, guards,
  * approvals, cancellations, non-model errors) returns false so the
  * original error surfaces unchanged.
+ *
+ * ProviderGenericError is cause-aware: bare generics (no cause, e.g.
+ * upstream shape violations) fail closed instead of burning the
+ * whole chain, while generics carrying transient evidence (5xx,
+ * 429/408, timeout/network markers) still fail over. Unknown causes
+ * fail closed — never assume transience.
  */
 export function isRetryableLoopLinkError(error: unknown): boolean {
   if (isLoopLinkCancellation(error)) {
     return false
+  }
+  if (error instanceof ProviderGenericError) {
+    return isTransientGenericCause((error as { readonly cause?: unknown }).cause)
   }
   if (
     error instanceof ProviderTimeoutError ||
@@ -159,7 +216,6 @@ export function isRetryableLoopLinkError(error: unknown): boolean {
     error instanceof ProviderModelUnavailableError ||
     error instanceof ProviderStructuredOutputUnsupportedError ||
     error instanceof ProviderEmptyResponseError ||
-    error instanceof ProviderGenericError ||
     error instanceof VisionUnsupportedForModelError ||
     error instanceof HeartImageUnsupportedError ||
     error instanceof InvalidBrainPlanError ||
@@ -192,6 +248,50 @@ export function isRetryableLoopLinkError(error: unknown): boolean {
   return false
 }
 
+/**
+ * Conservative transience probe for an unclassified provider
+ * failure's cause. True only for evidence of transient transport or
+ * capacity behavior: HTTP 5xx/429/408, timeout/network error codes
+ * and message markers, or the matching SDK error names. Everything
+ * else (auth shapes, 4xx, malformed bodies, unknown shapes) is
+ * non-retryable — the chain stops and the error surfaces.
+ */
+function isTransientGenericCause(cause: unknown): boolean {
+  if (cause === null || cause === undefined) {
+    return false
+  }
+  if (typeof cause === 'object') {
+    const record = cause as { status?: unknown; code?: unknown; name?: unknown }
+    if (typeof record.status === 'number') {
+      if (record.status === 429 || record.status === 408) {
+        return true
+      }
+      if (record.status >= 500 && record.status <= 599) {
+        return true
+      }
+      return false
+    }
+    if (typeof record.code === 'string') {
+      const transientCodes = ['ETIMEDOUT', 'ECONNABORTED', 'ENOTFOUND', 'ECONNREFUSED', 'ECONNRESET', 'ENETUNREACH', 'EAI_AGAIN'] as const
+      if ((transientCodes as readonly string[]).includes(record.code)) {
+        return true
+      }
+    }
+    if (typeof record.name === 'string') {
+      if (record.name === 'APIConnectionTimeoutError' || record.name === 'APIConnectionError' || record.name === 'RateLimitError') {
+        return true
+      }
+    }
+  }
+  const message = cause instanceof Error ? cause.message.toLowerCase() : String(cause).toLowerCase()
+  return (
+    message.includes('timed out') ||
+    message.includes('timeout') ||
+    message.includes('fetch failed') ||
+    message.includes('network')
+  )
+}
+
 export interface LoopLinkAttempt {
   readonly providerId: 'stark' | 'openai'
   readonly model: string
@@ -221,6 +321,52 @@ export interface LoopLinkFailoverOutcome<T> {
   readonly attempts: number
   /** Human-safe failover note, or null when the first model served. */
   readonly failoverNote: string | null
+  /** Chain ids actually invoked, in attempt order (for audit). */
+  readonly attemptedModelIds: readonly string[]
+}
+
+/** Serializable LoopLink execution audit shared by run-step persistence. */
+export interface LoopLinkStepAudit {
+  /** Total provider attempts made (1..chain length). */
+  readonly attempts: number
+  /** Human-safe failover note, or null when the first model served. */
+  readonly failoverNote: string | null
+  /** Chain ids actually invoked, in attempt order. */
+  readonly attemptedModels: readonly string[]
+  /** Eligible chain handed to the executor, in UI priority order. */
+  readonly requestedChain: readonly string[]
+}
+
+/**
+ * Builds the persistable audit for one chain outcome. Direct
+ * (non-chain) single-model calls use singleModelAuditFor instead so
+ * every provider-backed step carries uniform attempt metadata.
+ */
+export function auditOfOutcome(
+  outcome: Pick<LoopLinkFailoverOutcome<unknown>, 'attempts' | 'failoverNote' | 'attemptedModelIds'>,
+  requestedChain: readonly string[]
+): LoopLinkStepAudit {
+  return {
+    attempts: outcome.attempts,
+    failoverNote: outcome.failoverNote,
+    attemptedModels: [...outcome.attemptedModelIds],
+    requestedChain: [...requestedChain]
+  }
+}
+
+/** Uniform single-attempt audit for direct (non-chain) model calls. */
+export function singleModelAuditFor(modelId: string): LoopLinkStepAudit {
+  return { attempts: 1, failoverNote: null, attemptedModels: [modelId], requestedChain: [modelId] }
+}
+
+/** Persistable chain audit plus the requested STARK effort. */
+export interface LoopLinkStepAuditWithEffort extends LoopLinkStepAudit {
+  readonly requestedEffort: string | null
+}
+
+/** Attaches the requested effort to a chain audit for step persistence. */
+export function withEffort(audit: LoopLinkStepAudit, effort: string): LoopLinkStepAuditWithEffort {
+  return { ...audit, requestedEffort: effort }
 }
 
 /**
@@ -231,7 +377,10 @@ export interface LoopLinkFailoverOutcome<T> {
  * When every model fails, the last error is thrown (fail fast —
  * the best normalized final error).
  *
- * Cancellation is checked before each attempt via `isCancelled`.
+ * Cancellation is checked before each attempt via `isCancelled` and
+ * surfaces as AiCancelledError (user cancel, never timeout) with
+ * the in-progress error, if any, preserved as cause. The next model
+ * is never tried after cancellation.
  */
 export async function runLoopLinkChain<T>(
   chain: readonly string[],
@@ -242,13 +391,11 @@ export async function runLoopLinkChain<T>(
   let firstModelId: string | null = null
   const bounded = chain.slice(0, MAX_LOOPLINK_CHAIN_MODELS)
   let attempts = 0
+  const attemptedModelIds: string[] = []
   for (let index = 0; index < bounded.length; index += 1) {
     const modelId = bounded[index] as string
     if (options?.isCancelled?.() === true) {
-      if (lastError !== null) {
-        throw lastError
-      }
-      throw new InvalidBrainPlanError()
+      throw new AiCancelledError(lastError === null ? undefined : { cause: lastError })
     }
     const assignment = loopLinkAssignmentFor(modelId)
     if (assignment === null) {
@@ -259,11 +406,12 @@ export async function runLoopLinkChain<T>(
       firstModelId = modelId
     }
     attempts += 1
+    attemptedModelIds.push(modelId)
     try {
       const result = await invoke(modelId, assignment, index)
       const failoverNote =
         firstModelId !== null && firstModelId !== modelId ? `Switched to ${modelId} after ${firstModelId} was unavailable.` : null
-      return { result, modelId, assignment, attempts, failoverNote }
+      return { result, modelId, assignment, attempts, failoverNote, attemptedModelIds: [...attemptedModelIds] }
     } catch (error) {
       lastError = error
       if (!isRetryableLoopLinkError(error)) {

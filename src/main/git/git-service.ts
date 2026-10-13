@@ -124,16 +124,22 @@ export class GitService {
         overflowKind: 'status'
       })
       const available = result.exitCode === 0
-      this.availabilityCache = available
+      // Only positive availability is cached: a missing binary
+      // installed mid-session recovers on the next explicit Refresh
+      // instead of staying stale until restart. Negative probes are
+      // cheap (one bounded --version on explicit user action, never
+      // polled) and uninstalls surface honestly per call below.
+      if (available) {
+        this.availabilityCache = true
+      }
       return available
     } catch (error) {
       if (error instanceof GitUnavailableError) {
-        this.availabilityCache = false
         return false
       }
       // Timeout/overflow on --version still means "git ran"; treat as
       // available so the real operation can report its own bound.
-      // Only ENOENT-style unavailability flips the cache to false.
+      // Only ENOENT-style unavailability answers false.
       throw error
     }
   }

@@ -4,8 +4,11 @@ import {
   MAX_AI_ATTACHMENT_COUNT,
   MAX_AI_IMAGE_BYTES,
   MAX_AI_TEXT_ATTACHMENT_BYTES,
+  MAX_HOSTED_IMAGE_BYTES,
   attachmentInclusionFor,
+  estimateImageTransportBytes,
   hasTextAttachmentExtension,
+  isImageTransportableForHosted,
   modelSupportsVision
 } from '../../shared/ai/attachment-capabilities'
 import {
@@ -15,6 +18,7 @@ import {
   formatAiAttachmentReviewBlock,
   planAiAttachments,
   AttachmentTooLargeForModelError,
+  ImageTooLargeForHostedTransportError,
   TooManyAttachmentsForModelError,
   VisionUnsupportedForModelError,
   workerAttachmentsRelevant
@@ -190,5 +194,140 @@ describe('AI attachment capability model', () => {
       attachmentInclusionFor('openai', 'gpt-3.5-turbo', { kind: 'file', name: 'd.pdf', size: 10 }),
       'metadata-only'
     )
+  })
+
+  it('bounds hosted image transport below the edge message cap', () => {
+    assert.equal(MAX_HOSTED_IMAGE_BYTES, 96 * 1024)
+    // Very small images travel either route.
+    assert.equal(isImageTransportableForHosted(10), true)
+    assert.equal(isImageTransportableForHosted(MAX_HOSTED_IMAGE_BYTES), true)
+    // Over the hosted threshold: not transportable (fail closed on garbage).
+    assert.equal(isImageTransportableForHosted(MAX_HOSTED_IMAGE_BYTES + 1), false)
+    assert.equal(isImageTransportableForHosted(MAX_AI_IMAGE_BYTES), false)
+    assert.equal(isImageTransportableForHosted(-1), false)
+    assert.equal(isImageTransportableForHosted(Number.NaN), false)
+    assert.equal(isImageTransportableForHosted('1024'), false)
+    // Wire estimate accounts for base64 expansion: 96 KiB raw stays
+    // under the 160 KiB edge message bound with headroom for text.
+    const wire = estimateImageTransportBytes(MAX_HOSTED_IMAGE_BYTES, 'image/png')
+    assert.ok(wire < 160 * 1024, `96 KiB raw must fit one message (got ${String(wire)})`)
+    assert.ok(wire > MAX_HOSTED_IMAGE_BYTES, 'base64 expansion must be counted')
+  })
+
+  it('hosted boundary is exact raw bytes: boundary-1/boundary send, boundary+1 rejects (100 KiB rejected)', () => {
+    // MAX_HOSTED_IMAGE_BYTES is RAW binary bytes (stored file size).
+    const hosted = capabilitiesForModel('stark', 'builtin:gpt-5.6-luna')
+    // boundary - 1 → plans.
+    const below = planAiAttachments({ rows: [row({ sizeBytes: MAX_HOSTED_IMAGE_BYTES - 1 })], capabilities: hosted })
+    assert.equal(below.attachments[0]?.contentCapability, 'image')
+    // boundary → plans.
+    const at = planAiAttachments({ rows: [row({ sizeBytes: MAX_HOSTED_IMAGE_BYTES })], capabilities: hosted })
+    assert.equal(at.attachments[0]?.contentCapability, 'image')
+    // boundary + 1 → clean hosted rejection (never sent).
+    assert.throws(
+      () => planAiAttachments({ rows: [row({ sizeBytes: MAX_HOSTED_IMAGE_BYTES + 1 })], capabilities: hosted }),
+      ImageTooLargeForHostedTransportError
+    )
+    // Human QA values: 64 KiB and 90 KiB send; 100 KiB rejects.
+    for (const sends of [64 * 1024, 90 * 1024]) {
+      const planned = planAiAttachments({ rows: [row({ sizeBytes: sends })], capabilities: hosted })
+      assert.equal(planned.attachments[0]?.contentCapability, 'image', `${String(sends)} must send`)
+      assert.equal(
+        attachmentInclusionFor('stark', 'builtin:gpt-5.6-luna', { kind: 'image', name: 'a.png', size: sends }),
+        'included-image'
+      )
+    }
+    assert.throws(
+      () => planAiAttachments({ rows: [row({ sizeBytes: 100 * 1024 })], capabilities: hosted }),
+      ImageTooLargeForHostedTransportError
+    )
+    assert.equal(
+      attachmentInclusionFor('stark', 'builtin:gpt-5.6-luna', { kind: 'image', name: 'a.png', size: 100 * 1024 }),
+      'route-too-large'
+    )
+    // Exact wire math: 96 KiB raw → 131,072 base64 + 22 prefix = 131,094,
+    // leaving ~32 KiB headroom in one 160 KiB message. Base64 needs no
+    // JSON escaping, so wire bytes equal JSON bytes for the image part.
+    assert.equal(estimateImageTransportBytes(MAX_HOSTED_IMAGE_BYTES, 'image/png'), 131072 + 22)
+    assert.ok(estimateImageTransportBytes(MAX_HOSTED_IMAGE_BYTES, 'image/png') < 160 * 1024)
+    assert.ok(estimateImageTransportBytes(100 * 1024, 'image/png') < 160 * 1024, '100 KiB still fits one message alone — rejected by the conservative per-image gate anyway (safety beats the example)')
+  })
+
+  it('BYOK keeps its independent larger limit at and beyond the hosted boundary', () => {
+    const byok = capabilitiesForModel('openai', 'gpt-4o')
+    for (const size of [MAX_HOSTED_IMAGE_BYTES - 1, MAX_HOSTED_IMAGE_BYTES, MAX_HOSTED_IMAGE_BYTES + 1, 100 * 1024, 1024 * 1024]) {
+      const planned = planAiAttachments({ rows: [row({ sizeBytes: size })], capabilities: byok })
+      assert.equal(planned.attachments[0]?.contentCapability, 'image', `BYOK must carry ${String(size)}`)
+    }
+    assert.throws(
+      () => planAiAttachments({ rows: [row({ sizeBytes: MAX_AI_IMAGE_BYTES + 1 })], capabilities: byok }),
+      AttachmentTooLargeForModelError
+    )
+  })
+
+  it('distinguishes model support from route transport in inclusion states', () => {
+    // Small image, vision hosted model: included.
+    assert.equal(
+      attachmentInclusionFor('stark', 'builtin:gpt-5.6-luna', { kind: 'image', name: 'a.png', size: 10 * 1024 }),
+      'included-image'
+    )
+    // Same model, over hosted threshold: model supports, route cannot.
+    assert.equal(
+      attachmentInclusionFor('stark', 'builtin:gpt-5.6-luna', { kind: 'image', name: 'a.png', size: MAX_HOSTED_IMAGE_BYTES + 1 }),
+      'route-too-large'
+    )
+    // Non-vision hosted model: unsupported regardless of size.
+    assert.equal(
+      attachmentInclusionFor('stark', 'builtin:nemotron-3.5-lightning', { kind: 'image', name: 'a.png', size: 10 }),
+      'unsupported'
+    )
+    assert.equal(
+      attachmentInclusionFor('stark', 'builtin:nemotron-3.5-lightning', {
+        kind: 'image',
+        name: 'a.png',
+        size: MAX_HOSTED_IMAGE_BYTES + 1
+      }),
+      'unsupported'
+    )
+    // BYOK keeps the larger provider path for the same bytes.
+    assert.equal(
+      attachmentInclusionFor('openai', 'gpt-4o', { kind: 'image', name: 'a.png', size: MAX_HOSTED_IMAGE_BYTES + 1 }),
+      'included-image'
+    )
+  })
+
+  it('plans hosted images against the transport cap with an honest error', () => {
+    const hosted = capabilitiesForModel('stark', 'builtin:gpt-5.6-luna')
+    assert.equal(hosted.hostedTransport, true)
+    assert.equal(hosted.maxImageBytes, MAX_HOSTED_IMAGE_BYTES)
+    const byok = capabilitiesForModel('openai', 'gpt-4o')
+    assert.equal(byok.hostedTransport, false)
+    assert.equal(byok.maxImageBytes, MAX_AI_IMAGE_BYTES)
+    // Near-threshold hosted image plans fine.
+    const ok = planAiAttachments({ rows: [row({ sizeBytes: MAX_HOSTED_IMAGE_BYTES })], capabilities: hosted })
+    assert.equal(ok.attachments[0]?.contentCapability, 'image')
+    // Over-threshold hosted image fails early with transport copy (never sent).
+    assert.throws(
+      () => planAiAttachments({ rows: [row({ sizeBytes: MAX_HOSTED_IMAGE_BYTES + 1 })], capabilities: hosted }),
+      ImageTooLargeForHostedTransportError
+    )
+    // Same bytes on BYOK plan fine (larger provider path preserved).
+    const byokPlan = planAiAttachments({
+      rows: [row({ sizeBytes: MAX_HOSTED_IMAGE_BYTES + 1 })],
+      capabilities: byok
+    })
+    assert.equal(byokPlan.attachments[0]?.contentCapability, 'image')
+    // Desktop-maximum image still rejected everywhere by the generic bound.
+    assert.throws(
+      () => planAiAttachments({ rows: [row({ sizeBytes: MAX_AI_IMAGE_BYTES + 1 })], capabilities: byok }),
+      AttachmentTooLargeForModelError
+    )
+  })
+
+  it('hosted transport error carries user-safe copy with no internals', () => {
+    const error = new ImageTooLargeForHostedTransportError()
+    assert.equal(error.message, 'This image is too large to send with STARK Free. Use a smaller image or a connected provider.')
+    assert.ok(!error.message.includes('KiB') && !error.message.includes('384') && !error.message.includes('160'))
+    assert.ok(!error.message.includes('base64') && !error.message.includes('payload'))
   })
 })

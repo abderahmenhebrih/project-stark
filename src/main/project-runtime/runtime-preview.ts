@@ -39,8 +39,8 @@ export function buildPreviewWindowOptions(runtimeId: number): BrowserWindowConst
  * port. Same scheme + same host + same port navigations (any
  * path/query/hash) are allowed; everything else — external origins,
  * other ports or hosts (including `localhost` when the origin is
- * `127.0.0.1`), `file:`, `javascript:`, `data:`, custom schemes — is
- * denied. Pure and unit-testable.
+ * `127.0.0.1`), credentialed URLs, `file:`, `javascript:`, `data:`,
+ * custom schemes — is denied. Pure and unit-testable.
  */
 export function isAllowedPreviewNavigation(url: string, port: number): boolean {
   if (!Number.isInteger(port) || port < MIN_RUNTIME_PORT || port > MAX_RUNTIME_PORT) {
@@ -53,6 +53,9 @@ export function isAllowedPreviewNavigation(url: string, port: number): boolean {
     return false
   }
   if (parsed.protocol !== 'http:') {
+    return false
+  }
+  if (parsed.username !== '' || parsed.password !== '') {
     return false
   }
   if (parsed.hostname !== '127.0.0.1') {

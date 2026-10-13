@@ -19,6 +19,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.79.0'
 import {
   MAX_INFER_BODY_BYTES,
+  mapUpstreamStatus,
   normalizeUpstreamResponse,
   validateInferRequest,
   type InferErrorCode
@@ -171,10 +172,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return errorResponse(502, 'hosted_service_unavailable')
   }
   if (!upstream.ok) {
-    if (upstream.status === 429) {
-      return errorResponse(429, 'hosted_capacity_limited')
-    }
-    return errorResponse(502, 'hosted_service_unavailable')
+    const code = mapUpstreamStatus(upstream.status)
+    return errorResponse(code === 'hosted_service_unavailable' ? 502 : 429, code)
   }
   let payload: unknown
   try {

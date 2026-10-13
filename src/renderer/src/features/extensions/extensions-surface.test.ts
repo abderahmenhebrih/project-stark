@@ -169,7 +169,7 @@ describe('extensions install surface', () => {
     assert.ok(!types.includes('downloadUrl') && !types.includes('vsix') && !types.includes('installPath'), 'paths and archives must not exist in the contract')
   })
 
-  it('only the extension channels exist; schema stays v19', () => {
+  it('only the extension channels exist; schema stays v20', () => {
     for (const file of ['features/extensions/ExtensionsPanel.tsx', 'lib/stark-api.ts']) {
       const source = readRenderer(file)
       assert.ok(!source.includes('ipcRenderer'), `${file} must not touch IPC directly`)
@@ -206,7 +206,7 @@ describe('extensions install surface', () => {
       assert.ok(constants.includes(channel), `${channel} must be narrowly scoped`)
     }    const dir = join(process.cwd(), 'src', 'main', 'database', 'migrations')
     const files = readdirSync(dir).filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
-    assert.ok(files.includes('019-message-attachments.ts'), 'migration 019 must exist (schema v19)')
-    assert.ok(!files.some((file) => file.startsWith('020')), 'no migration 020 may appear')
+    assert.ok(files.includes('020-looplink-audit.ts'), 'migration 020 must exist (schema v20)')
+    assert.ok(!files.some((file) => file.startsWith('021')), 'no migration 020 may appear')
   })
 })

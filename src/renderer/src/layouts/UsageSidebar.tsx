@@ -4,6 +4,7 @@ import type { AgentTarget, StarkEffort } from '../../../shared/agent-target/type
 import { STARK_EFFORT_LABELS } from '../../../shared/agent-target/types'
 import type { ProviderReadiness } from '../features/sessions/provider-readiness'
 import { providerReadinessLabel } from '../features/sessions/provider-readiness'
+import { displayLabelForStableId } from '../features/settings/sections/models/model-library'
 import { getSessionUsageSummary } from '../lib/usage-api'
 import { UiIcon } from '../components/icons/UiIcon'
 import './UsageSidebar.css'
@@ -46,9 +47,11 @@ function formatTimestamp(createdAt: number): string {
  * Real layout space beside the workarea — never a floating popover.
  * Reads ONLY real mirrored state: session metadata, canonical
  * provider readiness, provider-reported token counts, plan, target,
- * and effort. Anything unknown renders as unavailable/not
- * reported/not tracked: no invented context windows, costs, or
- * token counts. No secrets (summaries carry counts only).
+ * effort, and the last successfully executed model (actual
+ * executor, distinct from the requested selector). Anything unknown
+ * renders as unavailable/not reported/not tracked: no invented
+ * context windows, costs, or token counts. No secrets (summaries
+ * carry counts only).
  */
 export function UsageSidebar({
   sessionTitle,
@@ -97,6 +100,19 @@ export function UsageSidebar({
 
   const contextTokens = sessionUsage?.latestInputTokens ?? null
   const headerStamp = sessionCreatedAt === null ? '' : formatTimestamp(sessionCreatedAt)
+  // Actual executor (last successfully executed model), distinct
+  // from the requested selector above. Usage events store the
+  // adapter id plus the downstream model (`builtin:*` stable ids for
+  // hosted, bare ids for BYOK) — normalized to a stable id here.
+  // Null until anything succeeds: unknown, never guessed.
+  const rawExecutorModel = sessionUsage?.lastExecutorModel ?? null
+  const rawExecutorProvider = sessionUsage?.lastExecutorProviderId ?? null
+  const executorLabel =
+    rawExecutorModel === null || rawExecutorProvider === null
+      ? null
+      : displayLabelForStableId(
+          rawExecutorModel.includes(':') ? rawExecutorModel : `${rawExecutorProvider}:${rawExecutorModel}`
+        )
 
   return (
     <aside className="usage-sidebar" aria-label="Usage and session information">
@@ -177,6 +193,10 @@ export function UsageSidebar({
           <div className="usage-sidebar__row">
             <dt>Model</dt>
             <dd>{providerModel ?? 'Not reported'}</dd>
+          </div>
+          <div className="usage-sidebar__row">
+            <dt>Executed</dt>
+            <dd>{sessionUsageError ? 'Not reported' : (executorLabel ?? 'Not reported')}</dd>
           </div>
           <div className="usage-sidebar__row">
             <dt>Effort</dt>

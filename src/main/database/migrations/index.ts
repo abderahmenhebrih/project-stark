@@ -20,6 +20,7 @@ import { migration016RuntimeObservationCapabilities } from './016-runtime-observ
 import { migration017AiUsageThresholds } from './017-ai-usage-thresholds'
 import { migration018CloudAccount } from './018-cloud-account'
 import { migration019MessageAttachments } from './019-message-attachments'
+import { migration020LooplinkAudit } from './020-looplink-audit'
 
 /**
  * Ordered migration registry. Append-only: add new migrations to the end
@@ -44,7 +45,8 @@ export const migrations: readonly Migration[] = [
   migration016RuntimeObservationCapabilities,
   migration017AiUsageThresholds,
   migration018CloudAccount,
-  migration019MessageAttachments
+  migration019MessageAttachments,
+  migration020LooplinkAudit
 ]
 
 /**

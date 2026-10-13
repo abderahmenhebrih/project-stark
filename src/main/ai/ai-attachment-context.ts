@@ -3,6 +3,7 @@ import {
   MAX_AI_ATTACHMENT_TOTAL_TEXT_BYTES,
   MAX_AI_IMAGE_BYTES,
   MAX_AI_TEXT_ATTACHMENT_BYTES,
+  MAX_HOSTED_IMAGE_BYTES,
   hasTextAttachmentExtension,
   modelSupportsVision
 } from '../../shared/ai/attachment-capabilities'
@@ -37,24 +38,35 @@ export interface ProviderAttachmentCapabilities {
   readonly supportsMultipleImages: boolean
   readonly maxImageBytes: number
   readonly maxAttachmentCount: number
+  /**
+   * True on the STARK Free hosted route, where the edge message/body
+   * caps additionally bound image transport. Oversize hosted images
+   * throw ImageTooLargeForHostedTransportError (fail early, honest
+   * copy) instead of the generic too-large error.
+   */
+  readonly hostedTransport: boolean
 }
 
 /**
- * Derives the attachment capabilities for one provider model. Only
- * the `openai` provider exists in v1: vision-capable families accept
- * images (bounded), text attachments are bounded text, and native
+ * Derives the attachment capabilities for one provider model. The
+ * `openai` BYOK provider keeps its larger provider-supported image
+ * path; the `stark` hosted provider additionally bounds images to
+ * the hosted transport (edge message/body caps) so planning fails
+ * early and honestly instead of sending a doomed request. Native
  * binary documents (PDF/office/archives) are metadata-only in this
  * pass — no ad-hoc parsers, no OCR.
  */
 export function capabilitiesForModel(providerId: string, model: string): ProviderAttachmentCapabilities {
   const vision = modelSupportsVision(providerId, model)
+  const hostedTransport = providerId === 'stark'
   return {
     supportsImages: vision,
     supportsDocuments: false,
     supportsTextAttachments: true,
     supportsMultipleImages: vision,
-    maxImageBytes: MAX_AI_IMAGE_BYTES,
-    maxAttachmentCount: MAX_AI_ATTACHMENT_COUNT
+    maxImageBytes: hostedTransport ? MAX_HOSTED_IMAGE_BYTES : MAX_AI_IMAGE_BYTES,
+    maxAttachmentCount: MAX_AI_ATTACHMENT_COUNT,
+    hostedTransport
   }
 }
 
@@ -108,6 +120,9 @@ export function planAiAttachments(input: {
   }
   for (const row of images) {
     if (row.sizeBytes > input.capabilities.maxImageBytes && (input.capabilities.supportsImages || visionMode === 'require')) {
+      if (input.capabilities.hostedTransport) {
+        throw new ImageTooLargeForHostedTransportError()
+      }
       throw new AttachmentTooLargeForModelError()
     }
   }
@@ -260,6 +275,20 @@ export class AttachmentTooLargeForModelError extends AttachmentCapabilityError {
 
   constructor() {
     super('Attachment is too large for this model.')
+  }
+}
+
+/**
+ * An image exceeds the STARK Free hosted transport (edge
+ * message/body caps). The model could view it and BYOK may still
+ * carry it — only this route cannot. Copy explains the limitation
+ * without exposing protocol internals.
+ */
+export class ImageTooLargeForHostedTransportError extends AttachmentCapabilityError {
+  override readonly name: string = 'ImageTooLargeForHostedTransportError'
+
+  constructor() {
+    super('This image is too large to send with STARK Free. Use a smaller image or a connected provider.')
   }
 }
 

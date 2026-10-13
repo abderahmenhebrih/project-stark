@@ -29,12 +29,12 @@ function count(db: DatabaseSync, table: string): number {
   return row['n'] as number
 }
 
-describe('upgrade matrix to v19', () => {
-  it('fresh install lands on v19 with cloud and attachment tables', () => {
+describe('upgrade matrix to v20', () => {
+  it('fresh install lands on v20 with cloud and attachment tables', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 19)
-      assert.equal(getUserVersion(db), 19)
+      assert.equal(runMigrations(db, migrations), 20)
+      assert.equal(getUserVersion(db), 20)
       const tables = (
         db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as unknown as Record<
           string,
@@ -49,7 +49,7 @@ describe('upgrade matrix to v19', () => {
     }
   })
 
-  it('v5 provider-config era upgrades to v19 preserving rows', () => {
+  it('v5 provider-config era upgrades to v20 preserving rows', () => {
     const db = openFresh()
     try {
       assert.equal(runMigrations(db, migrations.filter((migration) => migration.version <= 5)), 5)
@@ -58,7 +58,7 @@ describe('upgrade matrix to v19', () => {
         "INSERT INTO ai_provider_configs (provider_id, selected_model, created_at, updated_at) " +
           "VALUES ('openai', 'gpt-4o', 1, 1)"
       )
-      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(runMigrations(db, migrations), 20)
       assert.equal(count(db, 'workspaces'), 1)
       const config = db
         .prepare('SELECT selected_model FROM ai_provider_configs WHERE provider_id = ?')
@@ -69,7 +69,7 @@ describe('upgrade matrix to v19', () => {
     }
   })
 
-  it('v9 Heart era upgrades to v19 preserving rows', () => {
+  it('v9 Heart era upgrades to v20 preserving rows', () => {
     const db = openFresh()
     try {
       assert.equal(runMigrations(db, migrations.filter((migration) => migration.version <= 9)), 9)
@@ -77,7 +77,7 @@ describe('upgrade matrix to v19', () => {
       db.exec(
         "INSERT INTO ai_heart_settings (id, worker_mode, created_at, updated_at) VALUES (1, 'fixed', 1, 1)"
       )
-      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(runMigrations(db, migrations), 20)
       assert.equal(count(db, 'workspaces'), 1)
       assert.equal(count(db, 'ai_heart_settings'), 1)
     } finally {
@@ -85,7 +85,7 @@ describe('upgrade matrix to v19', () => {
     }
   })
 
-  it('v13 Worker-tool era upgrades to v19 preserving rows', () => {
+  it('v13 Worker-tool era upgrades to v20 preserving rows', () => {
     const db = openFresh()
     try {
       assert.equal(runMigrations(db, migrations.filter((migration) => migration.version <= 13)), 13)
@@ -94,7 +94,7 @@ describe('upgrade matrix to v19', () => {
         `INSERT INTO coding_sessions (workspace_id, title, created_at, updated_at) ` +
           `VALUES (1, 'era session', 1, 1)`
       )
-      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(runMigrations(db, migrations), 20)
       assert.equal(count(db, 'workspaces'), 1)
       assert.equal(count(db, 'coding_sessions'), 1)
     } finally {
@@ -102,12 +102,12 @@ describe('upgrade matrix to v19', () => {
     }
   })
 
-  it('v15 managed-runtime era upgrades to v19 preserving rows', () => {
+  it('v15 managed-runtime era upgrades to v20 preserving rows', () => {
     const db = openFresh()
     try {
       assert.equal(runMigrations(db, migrations.filter((migration) => migration.version <= 15)), 15)
       seedBaseEra(db, 'v15')
-      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(runMigrations(db, migrations), 20)
       assert.equal(count(db, 'workspaces'), 1)
       const row = db
         .prepare("SELECT value FROM key_value WHERE key = 'stark.settings.v15'")
@@ -118,7 +118,7 @@ describe('upgrade matrix to v19', () => {
     }
   })
 
-  it('v17 usage era upgrades to v19 preserving rows', () => {
+  it('v17 usage era upgrades to v20 preserving rows', () => {
     const db = openFresh()
     try {
       assert.equal(runMigrations(db, migrations.filter((migration) => migration.version <= 17)), 17)
@@ -127,7 +127,7 @@ describe('upgrade matrix to v19', () => {
         'INSERT INTO ai_usage_settings (id, heart_threshold_routing_enabled, created_at, updated_at) ' +
           "VALUES (1, 0, 1, 1)"
       )
-      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(runMigrations(db, migrations), 20)
       assert.equal(count(db, 'workspaces'), 1)
       assert.equal(count(db, 'ai_usage_settings'), 1)
       assert.equal(count(db, 'cloud_account'), 0)
@@ -136,7 +136,7 @@ describe('upgrade matrix to v19', () => {
     }
   })
 
-  it('v18 cloud-account era upgrades to v19 preserving rows', () => {
+  it('v18 cloud-account era upgrades to v20 preserving rows', () => {
     const db = openFresh()
     try {
       assert.equal(runMigrations(db, migrations.filter((migration) => migration.version <= 18)), 18)
@@ -149,7 +149,7 @@ describe('upgrade matrix to v19', () => {
         `INSERT INTO coding_sessions (workspace_id, title, created_at, updated_at) ` +
           `VALUES (1, 'era session', 1, 1)`
       )
-      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(runMigrations(db, migrations), 20)
       assert.equal(count(db, 'workspaces'), 1)
       assert.equal(count(db, 'coding_sessions'), 1)
       assert.equal(count(db, 'cloud_account'), 1)

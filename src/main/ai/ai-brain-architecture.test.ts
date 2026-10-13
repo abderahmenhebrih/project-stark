@@ -75,6 +75,28 @@ describe('brain no-authority architecture', () => {
     assert.ok(!brain.includes('setTimeout'), 'no timer waits')
   })
 
+  it('repair budgets come from policy caps and cancel is checked between rounds', () => {
+    const brain = readSource('src', 'main', 'ai', 'ai-brain-service.ts')
+    // Structured-output repeats use the effort policy budget (capped
+    // at the absolute cap in stark-run-policy), never a literal.
+    assert.ok(brain.includes('policy.structuredOutputRepeatBudget'), 'repeats must read the policy budget')
+    assert.ok(!brain.includes('structuredOutputRepeatBudget: 2'), 'no hardcoded repeat budget in the service')
+    // Cancel and deadline are both checked between plan-shape repeats.
+    const repeatBlock = brain.slice(brain.indexOf('attempts += 1'))
+    assert.ok(repeatBlock.includes('this.guard.throwIfCancelled(sessionId)'), 'cancel must be checked between repeats')
+    assert.ok(repeatBlock.includes('this.requireDeadline(deadline)'), 'deadline must be checked between repeats')
+    const policy = readSource('src', 'main', 'ai', 'stark-run-policy.ts')
+    assert.ok(policy.includes('STARK_POLICY_ABSOLUTE_CAPS'), 'absolute caps must exist')
+  })
+
+  it('LoopLink tries each model at most once per phase with no inner retry', () => {
+    const chain = readSource('src', 'main', 'ai', 'looplink-chain.ts')
+    assert.equal((chain.match(/attempts \+= 1/g) ?? []).length, 1, 'exactly one attempt counter increment')
+    assert.ok(!chain.includes('while ('), 'no while loops in chain execution')
+    assert.ok(chain.includes('chain.slice(0, MAX_LOOPLINK_CHAIN_MODELS)'), 'chain is hard-capped')
+    assert.ok(chain.includes('isCancelled'), 'cancellation is threaded through failover')
+  })
+
   it('provider IPC takes no model, prompt, instruction, context, or messageId from the renderer', () => {
     const ipc = readSource('src', 'main', 'ipc', 'orchestration.ts')
     assert.ok(ipc.includes('aiRunBrain'), 'orchestration IPC must expose the run channel')

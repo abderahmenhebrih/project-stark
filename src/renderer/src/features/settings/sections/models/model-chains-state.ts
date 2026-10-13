@@ -25,7 +25,7 @@ import {
  * preserved for the life of the workspace session.
  *
  * Persistence is intentionally session-local: there is no chain
- * storage in schema v19 and this pass adds no migration and no IPC.
+ * storage in schema v20 and this pass adds no migration and no IPC.
  * Configuration survives while the workspace session lives and resets
  * (to defaults) on workspace switch — reported as the known limitation
  * until the AI integration pass owns chain persistence. No secrets ever

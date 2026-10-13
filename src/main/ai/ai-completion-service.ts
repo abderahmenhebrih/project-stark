@@ -1,4 +1,3 @@
-import { TextEncoder } from 'node:util'
 import type { AiGenerateResult } from '../../shared/ai/types'
 import type { CodingMessage } from '../../shared/sessions/types'
 import type { AiProviderRepository } from '../database/repositories/ai-provider-repository'
@@ -12,17 +11,20 @@ import {
   ProviderEmptyResponseError,
   ProviderModelMissingError,
   ProviderModelUnavailableError,
-  UnknownProviderError
+  UnknownProviderError,
+  toPublicProviderError
 } from './errors'
-import { MAX_AI_CONTEXT_BYTES, MAX_AI_CONTEXT_MESSAGES, MAX_ASSISTANT_OUTPUT_TOKENS, STAGE_14_FIXED_INSTRUCTIONS } from './limits'
+import type { OrchestrationRepository } from '../database/repositories/orchestration-repository'
+import { auditOfOutcome, eligibleLoopLinkModels, readLoopLinkChain, runLoopLinkChain, singleModelAuditFor, withEffort, type LoopLinkStepAuditWithEffort } from './looplink-chain'
+import { MAX_ASSISTANT_OUTPUT_TOKENS, STAGE_14_FIXED_INSTRUCTIONS } from './limits'
 import { deriveStarkRunPolicy } from './stark-run-policy'
+import { loadBoundedContext } from './context-window'
 import { isStarkEffort, type StarkEffort } from '../../shared/agent-target/types'
 import type { ProviderRegistry } from './provider-adapter'
 import { formatProviderContext } from '../session-context/session-context-service'
 import { AiOperationGuard } from './ai-operation-guard'
 import { isHostedBuiltinModel } from '../../shared/hosted-models/stark-model-map'
 import { readRequestedModel } from './model-request'
-import { eligibleLoopLinkModels, readLoopLinkChain, runLoopLinkChain } from './looplink-chain'
 import { attachmentsNeedVision, VisionUnsupportedForModelError } from './ai-attachment-context'
 import type { LooplinkRepository } from '../looplink/looplink-repository'
 import type { LooplinkService } from '../looplink/looplink-service'
@@ -33,8 +35,6 @@ import { InvalidSessionMessageError, SessionMessageTooLargeError, SessionNotFoun
 import { validateUserMessageContent } from '../sessions/message-validation'
 import { PendingApprovalBlockedError } from '../worker-tools/worker-tool-errors'
 import type { AiUsageDeps } from '../usage/ai-usage-tracker'
-
-const encoder = new TextEncoder()
 
 function isValidId(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0
@@ -50,14 +50,6 @@ function hasStrictShape(value: unknown, allowed: readonly string[]): value is Re
     }
   }
   return true
-}
-
-function contextBytes(messages: readonly { readonly content: string }[]): number {
-  let total = 0
-  for (const entry of messages) {
-    total += encoder.encode(entry.content).byteLength
-  }
-  return total
 }
 
 /**
@@ -110,6 +102,15 @@ export interface AiCompletionServiceOptions {
    * only — legacy harnesses keep working, nothing is sent silently.
    */
   readonly attachments?: ChatAttachmentService
+  /**
+   * LoopLink execution audit (optional). When present, every Ask
+   * creates one orchestration run with a single `ask` step carrying
+   * the winning model plus attempts/failover metadata, linked to the
+   * final assistant message — the same audit shape as Work steps.
+   * Absent means legacy behavior without run records — existing
+   * harnesses keep working.
+   */
+  readonly runs?: OrchestrationRepository
 }
 
 /**
@@ -129,6 +130,7 @@ export class AiCompletionService {
   private readonly pendingApprovals: { hasPending(sessionId: number): boolean } | undefined
   private readonly usage: AiUsageDeps | undefined
   private readonly attachmentService: ChatAttachmentService | undefined
+  private readonly runs: OrchestrationRepository | undefined
 
   constructor(
     private readonly workspaces: WorkspaceRepository,
@@ -144,6 +146,7 @@ export class AiCompletionService {
     this.pendingApprovals = options?.pendingApprovals
     this.usage = options?.usage
     this.attachmentService = options?.attachments
+    this.runs = options?.runs
   }
 
   /**
@@ -177,6 +180,58 @@ export class AiCompletionService {
       },
       invoke
     )
+  }
+
+  /**
+   * LoopLink execution audit for one Ask: on success persists the
+   * winning model plus attempts/failover metadata as a single `ask`
+   * step linked to the final assistant message. Audit-write failures
+   * propagate (like Work) so a silent unaudited Ask is impossible
+   * when the repository is wired. No-op without the runs dep.
+   */
+  private completeAskRun(
+    runId: number | null,
+    messageId: number,
+    winner: { readonly providerId: string; readonly model: string },
+    audit: LoopLinkStepAuditWithEffort
+  ): void {
+    if (runId === null || this.runs === undefined) {
+      return
+    }
+    this.runs.appendStepWithModel(
+      { runId, ordinal: 0, kind: 'ask', status: 'completed', instruction: null, output: null, now: this.now() },
+      { role: 'brain', providerId: winner.providerId, model: winner.model, routeKey: 'ask', requestedProfile: null, ...audit }
+    )
+    this.runs.updateRunState({
+      id: runId,
+      status: 'completed',
+      action: 'answer',
+      planSummary: null,
+      finalMessageId: messageId,
+      errorCategory: null,
+      now: this.now()
+    })
+  }
+
+  /**
+   * Best-effort Ask failure audit: records a failed `ask` step plus
+   * the safe error category, then lets the original error win. Never
+   * throws — telemetry must not mask provider failures.
+   */
+  private failAskRun(runId: number | null, error: unknown): void {
+    if (runId === null || this.runs === undefined) {
+      return
+    }
+    try {
+      this.runs.appendStep({ runId, ordinal: 0, kind: 'ask', status: 'failed', instruction: null, output: null, now: this.now() })
+    } catch {
+      // Original error below is what matters.
+    }
+    try {
+      this.runs.failRun(runId, toPublicProviderError('generate', error).message, this.now())
+    } catch {
+      // Original error below is what matters.
+    }
   }
 
   /**
@@ -217,7 +272,7 @@ export class AiCompletionService {
     return [...base.slice(0, -1), { role: 'user' as const, content: block }, trailing]
   }
 
-  async generateResponse(payload: unknown): Promise<AiGenerateResult> {    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort', 'model', 'brainModels'])) {
+  async generateResponse(payload: unknown): Promise<AiGenerateResult> {    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort', 'model', 'brainModels', 'disabledBrainModels'])) {
       throw new InvalidProviderRequestError('generation request is invalid')
     }
     const record = payload as Record<string, unknown>
@@ -227,7 +282,7 @@ export class AiCompletionService {
     }
     const effort = readRequestEffort(record)
     const requestedModel = readRequestedModel(record)
-    const brainChain = readLoopLinkChain(record, 'brainModels', 'brain')
+    const brainChain = readLoopLinkChain(record, 'brainModels', 'brain', 'disabledBrainModels')
     if (this.workspaces.findById(workspaceId) === undefined) {
       throw new SessionWorkspaceUnavailableError()
     }
@@ -248,6 +303,14 @@ export class AiCompletionService {
     if (latest === undefined || latest.role !== 'user') {
       throw new NothingToAnswerError()
     }
+    // Ask run audit (when the runs dep is wired): one run per Ask so
+    // the winning model plus attempts/failover persist exactly like
+    // Work steps. Legacy harnesses without runs keep working.
+    const askRunId = this.runs?.createRun({ workspaceId, sessionId, userMessageId: latest.id, now: this.now() }) ?? null
+    // User cancellation stops LoopLink failover (no next model after
+    // cancel) and aborts the in-flight provider call via the guard
+    // signal threaded through generateWithAdapter.
+    const isCancelled = (): boolean => this.guard.isCancelRequested(sessionId)
     // LoopLink Brain chain (P0): when a valid snapshot is present it
     // controls Ask execution — first enabled model is primary,
     // failover walks the remaining enabled models in UI order.
@@ -266,26 +329,41 @@ export class AiCompletionService {
       }
       this.guard.acquire(sessionId)
       try {
-        const outcome = await runLoopLinkChain(eligible, async (_modelId, assignment) => {
-          const resolved = await this.providerService.resolveExplicitAssignment(assignment.providerId, assignment.model)
-          try {
-            return await this.generateWithAdapter(
-              workspaceId,
-              sessionId,
-              latest.id,
-              assignment.providerId,
-              resolved.adapter,
-              resolved.model,
-              null,
-              'ask',
-              resolved.apiKey,
-              effort
-            )
-          } finally {
-            void resolved.apiKey
-          }
-        })
-        return outcome.result
+        const outcome = await runLoopLinkChain(
+          eligible,
+          async (_modelId, assignment) => {
+            const resolved = await this.providerService.resolveExplicitAssignment(assignment.providerId, assignment.model)
+            try {
+              const response = await this.generateWithAdapter(
+                workspaceId,
+                sessionId,
+                latest.id,
+                assignment.providerId,
+                resolved.adapter,
+                resolved.model,
+                null,
+                'ask',
+                resolved.apiKey,
+                effort
+              )
+              return { response, resolvedModel: resolved.model }
+            } finally {
+              void resolved.apiKey
+            }
+          },
+          { isCancelled }
+        )
+        const result = outcome.result.response
+        this.completeAskRun(
+          askRunId,
+          result.message.id,
+          { providerId: outcome.assignment.providerId, model: outcome.result.resolvedModel },
+          withEffort(auditOfOutcome(outcome, eligible), effort)
+        )
+        return result
+      } catch (error) {
+        this.failAskRun(askRunId, error)
+        throw error
       } finally {
         this.guard.release(sessionId)
       }
@@ -301,7 +379,7 @@ export class AiCompletionService {
       }      const resolved = await this.providerService.resolveExplicitAssignment('stark', requestedModel)
       this.guard.acquire(sessionId)
       try {
-        return await this.generateWithAdapter(
+        const result = await this.generateWithAdapter(
           workspaceId,
           sessionId,
           latest.id,
@@ -313,6 +391,16 @@ export class AiCompletionService {
           resolved.apiKey,
           effort
         )
+        this.completeAskRun(
+          askRunId,
+          result.message.id,
+          { providerId: 'stark', model: resolved.model },
+          withEffort(singleModelAuditFor(resolved.model), effort)
+        )
+        return result
+      } catch (error) {
+        this.failAskRun(askRunId, error)
+        throw error
       } finally {
         void resolved.apiKey
         this.guard.release(sessionId)
@@ -330,7 +418,17 @@ export class AiCompletionService {
     }
       this.guard.acquire(sessionId)
     try {
-      return await this.generateWithAdapter(workspaceId, sessionId, latest.id, providerId, adapter, model, null, 'ask', undefined, effort)
+      const result = await this.generateWithAdapter(workspaceId, sessionId, latest.id, providerId, adapter, model, null, 'ask', undefined, effort)
+      this.completeAskRun(
+        askRunId,
+        result.message.id,
+        { providerId, model },
+        withEffort(singleModelAuditFor(model), effort)
+      )
+      return result
+    } catch (error) {
+      this.failAskRun(askRunId, error)
+      throw error
     } finally {
       this.guard.release(sessionId)
     }
@@ -552,7 +650,8 @@ export class AiCompletionService {
             messages: providerMessages,
             maxOutputTokens: policy.maxOutputTokens,
             ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
-            ...(chatSection.payloads.length > 0 ? { attachments: chatSection.payloads } : {})
+            ...(chatSection.payloads.length > 0 ? { attachments: chatSection.payloads } : {}),
+            ...this.guard.signalOptionFor(sessionId)
           })
         )
         text = result.text
@@ -608,22 +707,12 @@ export class AiCompletionService {
 
   /**
    * Newest session messages within both context budgets, returned
-   * chronologically. Oldest-first dropping keeps the trailing user
-   * message (index 0 of the newest-first probe is always retained).
+   * chronologically. Shared bounded loader (see context-window):
+   * at most MAX_AI_CONTEXT_MESSAGES newest rows, oldest dropped
+   * while over budget, always retaining the trailing user message.
    */
   loadContext(sessionId: number): { readonly role: 'user' | 'assistant'; readonly content: string }[] {
-    // The repository returns a limit+1 hasMore probe; generation takes
-    // at most MAX_AI_CONTEXT_MESSAGES newest rows, then drops oldest
-    // while over the byte budget (always retaining the trailing user
-    // message at probe index 0).
-    const probe = this.sessions.listMessagesNewestFirst(sessionId, MAX_AI_CONTEXT_MESSAGES, null)
-    const kept = [...probe.slice(0, MAX_AI_CONTEXT_MESSAGES)]
-    while (kept.length > 1 && contextBytes(kept) > MAX_AI_CONTEXT_BYTES) {
-      kept.pop()
-    }
-    return kept
-      .reverse()
-      .map((entry) => ({ role: entry.role, content: entry.content }))
+    return loadBoundedContext(this.sessions, sessionId)
   }
 
   private validateAssistantText(text: unknown): string {

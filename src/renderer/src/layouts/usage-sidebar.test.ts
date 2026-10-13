@@ -71,13 +71,25 @@ describe('docked usage sidebar', () => {
     }
     assert.ok(sidebar.includes('Not tracked'), 'unknown cost must say Not tracked')
     assert.ok(!sidebar.includes('$0.00'), 'zero cost must never render for unknown cost')
-    for (const row of ['Agent', 'Provider', 'Model', 'Effort']) {
+    for (const row of ['Agent', 'Provider', 'Model', 'Executed', 'Effort']) {
       assert.ok(sidebar.includes(row), `model block must show ${row}`)
     }
     assert.ok(sidebar.includes('Not reported'), 'unknown values must say Not reported')
     for (const fabrication of ['quota', 'remaining', 'monthly limit', 'billing usage']) {
       assert.ok(!sidebar.toLowerCase().includes(fabrication), `sidebar must not invent ${fabrication}`)
     }
+  })
+
+  it('shows the actual executor distinct from the requested selector', () => {
+    const sidebar = readRenderer('layouts/UsageSidebar.tsx')
+    assert.ok(sidebar.includes('lastExecutorModel'), 'executor must come from the ledger summary')
+    assert.ok(sidebar.includes('displayLabelForStableId'), 'executor ids must resolve through the model library')
+    assert.ok(sidebar.includes('<dt>Executed</dt>'), 'executor must be its own row')
+    // The requested Model row stays selector truth; Executed is executor truth.
+    const modelAt = sidebar.indexOf('<dt>Model</dt>')
+    const executedAt = sidebar.indexOf('<dt>Executed</dt>')
+    assert.ok(modelAt >= 0 && executedAt > modelAt, 'Executed must follow the requested Model row')
+    assert.ok(sidebar.includes("executorLabel ?? 'Not reported'"), 'unknown executor must say Not reported')
   })
 
   it('updates live from ledger state without polling', () => {

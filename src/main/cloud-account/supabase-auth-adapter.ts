@@ -238,7 +238,7 @@ export class SupabaseAuthAdapter implements CloudAuthAdapter {
     return { url }
   }
 
-  async exchangeCode(code: string): Promise<AuthenticatedIdentity> {
+  async exchangeCode(code: string, provider?: StarkAuthProvider): Promise<AuthenticatedIdentity> {
     const client = this.requireClient()
     // Exactly one exchange per callback — callers consume the pending
     // attempt BEFORE invoking this.
@@ -255,11 +255,11 @@ export class SupabaseAuthAdapter implements CloudAuthAdapter {
     const envelope = toEnvelope(session)
     validateSessionEnvelope(envelope)
     const user = (outcome.data as { user?: unknown } | null)?.user as
-      | { id?: unknown; email?: unknown; user_metadata?: Record<string, unknown> }
+      | { id?: unknown; email?: unknown; user_metadata?: Record<string, unknown>; app_metadata?: unknown }
       | undefined
     const identity = normalizeSupabaseIdentity({
       id: user?.id,
-      provider: inferProviderFromSession(session),
+      provider: resolveSessionProvider(provider, user),
       email: user?.email,
       displayName: user?.user_metadata?.['full_name'] ?? user?.user_metadata?.['name'] ?? user?.user_metadata?.['display_name'],
       avatarUrl: user?.user_metadata?.['avatar_url'] ?? user?.user_metadata?.['picture']
@@ -267,7 +267,7 @@ export class SupabaseAuthAdapter implements CloudAuthAdapter {
     return { identity, session: envelope }
   }
 
-  async restoreSession(session: CloudSessionEnvelope): Promise<AuthenticatedIdentity | null> {
+  async restoreSession(session: CloudSessionEnvelope, provider?: StarkAuthProvider): Promise<AuthenticatedIdentity | null> {
     const client = this.requireClient()
     validateSessionEnvelope(session)
     // At most one bounded restore operation: a single setSession, plus
@@ -290,11 +290,11 @@ export class SupabaseAuthAdapter implements CloudAuthAdapter {
       const envelope = toEnvelope(current)
       validateSessionEnvelope(envelope)
       const user = (setOutcome.data as { user?: unknown } | null)?.user as
-        | { id?: unknown; email?: unknown; user_metadata?: Record<string, unknown> }
+        | { id?: unknown; email?: unknown; user_metadata?: Record<string, unknown>; app_metadata?: unknown }
         | undefined
       const identity = normalizeSupabaseIdentity({
         id: user?.id ?? session.userId,
-        provider: inferProviderFromSession(current),
+        provider: resolveSessionProvider(provider, user),
         email: user?.email,
         displayName: user?.user_metadata?.['full_name'] ?? user?.user_metadata?.['name'],
         avatarUrl: user?.user_metadata?.['avatar_url'] ?? user?.user_metadata?.['picture']
@@ -352,13 +352,26 @@ function toEnvelope(session: {
   }
 }
 
-function inferProviderFromSession(_session: unknown): StarkAuthProvider {
-  // The SDK session does not reliably carry the OAuth provider after a
-  // code exchange; the pending attempt already knows it. Callers that
-  // need exact provider attribution pass it explicitly — this fallback
-  // exists only to satisfy the adapter seam shape. Defaulting is
-  // unreachable in the service path (see CloudAccountService which
-  // re-stamps the attempt provider). Kept minimal by design.
-  void _session
-  return 'google'
+/**
+ * Resolves the OAuth provider deterministically: the trusted
+ * attempt/request context wins whenever the caller has it; else the
+ * server-authoritative Supabase `app_metadata.provider` (validated,
+ * never a heuristic over display names or emails). Anything else —
+ * including a standalone call with no context and no server metadata
+ * — fails closed so GitHub is never silently mislabeled.
+ */
+function resolveSessionProvider(explicit: StarkAuthProvider | undefined, user: unknown): StarkAuthProvider {
+  if (explicit === 'google' || explicit === 'github') {
+    return explicit
+  }
+  if (typeof user === 'object' && user !== null) {
+    const appMetadata = (user as { app_metadata?: unknown }).app_metadata
+    if (typeof appMetadata === 'object' && appMetadata !== null) {
+      const provider = (appMetadata as { provider?: unknown }).provider
+      if (provider === 'google' || provider === 'github') {
+        return provider
+      }
+    }
+  }
+  throw new CloudAuthExchangeFailedError()
 }

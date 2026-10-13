@@ -19,6 +19,7 @@ import type { AiBrainService } from '../ai/ai-brain-service'
 import type { AiCodeProposalService } from '../ai/ai-code-proposal-service'
 import type { AiCompletionService } from '../ai/ai-completion-service'
 import type { AiMultiFileProposalService } from '../ai/ai-multi-file-proposal-service'
+import type { AiOperationGuard } from '../ai/ai-operation-guard'
 import type { AiProviderService } from '../ai/ai-provider-service'
 import type { GitService } from '../git/git-service'
 import type { CodingSessionService } from '../sessions/coding-session-service'
@@ -44,7 +45,7 @@ import type { ChatAttachmentService } from '../chat-attachments/service'
 import type { VoiceTranscriptionService } from '../voice/voice-transcription-service'
 import { getAppInfo } from '../services/app-info'
 import type { IpcBinding } from './binding'
-import { createAiBindings } from './ai'
+import { createAiBindings, createAiCancelBinding } from './ai'
 import { createCapabilityBindings } from './capabilities'
 import { createWorkerToolBindings } from './worker-tools'
 import { createUsageBindings } from './usage'
@@ -158,6 +159,11 @@ export interface IpcDependencies {
   readonly sessionContextService: SessionContextService
   readonly aiProviderService: AiProviderService
   readonly aiCompletionService: AiCompletionService
+  /**
+   * Shared per-session AI operation guard (cancellation authority).
+   * Optional in older harnesses; absent means no cancel channel.
+   */
+  readonly aiOperationGuard?: AiOperationGuard
   /** Stage 16 proposal service. Optional in older harnesses; absent means no proposal channel. */
   readonly aiCodeProposalService?: AiCodeProposalService
   /** Stage 17 grouped proposals. Optional in older harnesses; absent means no change-set channels. */
@@ -212,6 +218,11 @@ export function createIpcBindings(deps: IpcDependencies): readonly IpcBinding[] 
       deps.recoveryCoordinator
     )
   ]
+  if (deps.aiOperationGuard !== undefined && deps.workspaces !== undefined && deps.codingSessions !== undefined) {
+    bindings.push(
+      createAiCancelBinding(deps.aiOperationGuard, deps.workspaces, deps.codingSessions, deps.workerToolRunner)
+    )
+  }
   if (deps.changeSetService !== undefined) {
     bindings.push(...createChangeSetBindings(deps.changeSetService))
   }

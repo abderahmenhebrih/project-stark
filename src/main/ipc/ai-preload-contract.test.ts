@@ -32,12 +32,13 @@ describe('provider/AI preload contract', () => {
     }
   })
 
-  it('exposes ai.generateResponse, ai.proposeFileChange, ai.proposeChangeSet, and ai.runBrain', () => {
+  it('exposes ai.generateResponse, ai.proposeFileChange, ai.proposeChangeSet, ai.runBrain, and ai.cancelOperation', () => {
     const source = readPreloadSource()
     assert.ok(source.includes('IPC_CHANNELS.aiGenerateResponse'))
     assert.ok(source.includes('IPC_CHANNELS.aiProposeFileChange'))
     assert.ok(source.includes('IPC_CHANNELS.aiProposeChangeSet'))
     assert.ok(source.includes('IPC_CHANNELS.aiRunBrain'))
+    assert.ok(source.includes('IPC_CHANNELS.aiCancelOperation'))
     assert.ok(source.includes('IPC_CHANNELS.orchestrationGet'))
     assert.ok(source.includes('IPC_CHANNELS.orchestrationListRecent'))
     assert.ok(source.includes('createAiApi()'))

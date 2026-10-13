@@ -83,8 +83,7 @@ function readyHandler(root: string): (args: readonly string[], cwd: string) => F
 }
 
 describe('git service (fake runner)', () => {
-  it('returns unavailable when git is missing', async () => {
-    const fixture = openWorkspaces()
+  it('returns unavailable when git is missing', async () => {    const fixture = openWorkspaces()
     try {
       const id = await createWorkspace(fixture.workspaces, fixture.root)
       const runner = fakeRunner(() => {
@@ -101,6 +100,59 @@ describe('git service (fake runner)', () => {
       const state = await service.getStatus({ workspaceId: id })
       assert.equal(state.kind, 'unavailable')
       assert.equal(runner.calls.length, 0)
+    } finally {
+      fixture.db.close()
+      rmSync(fixture.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('recovers without restart when git appears mid-session', async () => {
+    const fixture = openWorkspaces()
+    try {
+      const id = await createWorkspace(fixture.workspaces, fixture.root)
+      const { GitUnavailableError } = await import('./errors')
+      let installed = false
+      const runner = fakeRunner((args) => {
+        const joined = args.join(' ')
+        if (joined.includes('--version')) {
+          if (!installed) {
+            throw new GitUnavailableError()
+          }
+          return { exitCode: 0, stdout: 'git version 2.40.0\n', stderr: '' }
+        }
+        if (joined.includes('--show-toplevel')) {
+          return { exitCode: 0, stdout: `${fixture.root}\n`, stderr: '' }
+        }
+        if (joined.includes('--is-bare-repository')) {
+          return { exitCode: 0, stdout: 'false\n', stderr: '' }
+        }
+        if (joined.includes('--is-inside-work-tree')) {
+          return { exitCode: 0, stdout: 'true\n', stderr: '' }
+        }
+        if (joined.includes('symbolic-ref')) {
+          return { exitCode: 0, stdout: 'main\n', stderr: '' }
+        }
+        if (joined.includes('--short=12')) {
+          return { exitCode: 0, stdout: 'abc123def456\n', stderr: '' }
+        }
+        if (joined.includes('@{upstream}')) {
+          if (joined.includes('rev-list')) {
+            return { exitCode: 0, stdout: '2\t1\n', stderr: '' }
+          }
+          return { exitCode: 0, stdout: 'origin/main\n', stderr: '' }
+        }
+        if (joined.includes('status')) {
+          return { exitCode: 0, stdout: '', stderr: '' }
+        }
+        return { exitCode: 0, stdout: '', stderr: '' }
+      })
+      const service = new GitService(fixture.workspaces, runner)
+      assert.equal((await service.getStatus({ workspaceId: id })).kind, 'unavailable')
+      // Negative availability is never cached: installing git later
+      // recovers on the next explicit call.
+      installed = true
+      const recovered = await service.getStatus({ workspaceId: id })
+      assert.notEqual(recovered.kind, 'unavailable')
     } finally {
       fixture.db.close()
       rmSync(fixture.dir, { recursive: true, force: true })

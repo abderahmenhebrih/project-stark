@@ -18,9 +18,9 @@ Baseline: `npm run release:check` ALL CHECKS PASSED
 
 ## Schema
 
-Current schema: **v19** (chat attachments step: append-only migration
-019 `message-attachments` adds `chat_attachments` +
-`message_attachments`; migrations 001–018 untouched). Singleton cloud
+Current schema: **v20** (LoopLink audit step: append-only migration
+020 `looplink-audit` adds nullable attempt/failover columns to
+`orchestration_step_models`; migrations 001–019 untouched). Singleton cloud
 tables (`cloud_account`, `cloud_auth_session`) from v18 remain the
 only account storage.
 
@@ -170,17 +170,18 @@ this RC as release-ready.
 Product scope grew after the Stage 31 record above: chat attachments
 (schema v19, migration 019), AI image/file understanding, attachment
 → workspace mobility, voice-to-text, and single/multi image
-generation. This addendum records the final verification truth; the
+generation, plus LoopLink execution audit (schema v20, migration
+020). This addendum records the final verification truth; the
 Stage 31 sections above are preserved verbatim as history.
 
-- Commit: `d54b2d7` (v027). Schema: **v19** (migrations 001–019 only;
-  no migration 020). Upgrade paths fresh→v19 and v5/v9/v13/v15/v17/v18→v19
+- Commit: `d54b2d7` (v027). Schema: **v20** (migrations 001–020 only;
+  no migration 021). Upgrade paths fresh→v20 and v5/v9/v13/v15/v17/v18→v20
   covered by `upgrade-matrix` + per-migration suites.
 - Automated baseline (this host, clean tree): `typecheck` PASS,
   `lint` PASS, `build` PASS (out/main, out/preload, out/renderer +
   Extension Host modules), `npm test` **388 suites / 2365 tests /
   0 failures**, `release:check` ALL CHECKS PASSED,
-  `release:smoke` ready marker ok (schema v19).
+  `release:smoke` ready marker ok (schema v20).
 - Worker tools now number ten (workspace_read, workspace_search,
   git_read, change_propose, attachment_import, image_generate,
   terminal_execute, runtime_start, runtime_observe, preview_inspect);

@@ -393,10 +393,10 @@ describe('generic activation service', () => {
     assert.ok(!formatter.includes('writeWorkspaceTextFile'), 'formatter must never write directly')
   })
 
-  it('schema stays v19 with no migration 020', async () => {
+  it('schema stays v20 with no migration 020', async () => {
     const { readdirSync } = await import('node:fs')
     const files = readdirSync(join(process.cwd(), 'src', 'main', 'database', 'migrations')).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
-    assert.ok(files.includes('019-message-attachments.ts'))
-    assert.ok(!files.some((f) => f.startsWith('020')))
+    assert.ok(files.includes('020-looplink-audit.ts'))
+    assert.ok(!files.some((f) => f.startsWith('021')))
   })
 })

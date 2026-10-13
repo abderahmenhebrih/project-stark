@@ -107,6 +107,41 @@ const BUILT_IN_DEFINITIONS: readonly CatalogDefinition[] = [
 export const FREE_CATALOG_COUNT = 15
 
 /**
+ * Honest display label for one executed stable model id (Usage
+ * "Executed" row). `builtin:<slug>` resolves through the Free
+ * catalog definitions; `openai:<id>` displays the provider id
+ * itself (BYOK display names are always the raw id — never
+ * fabricated here either); anything else renders raw so unknown
+ * ids are visible, never invented.
+ */
+export function displayLabelForStableId(stableId: string): string {
+  if (stableId.startsWith('builtin:')) {
+    const slug = stableId.slice('builtin:'.length)
+    const definition = BUILT_IN_DEFINITIONS.find((entry) => entry.model === slug)
+    if (definition !== undefined) {
+      return definition.displayName
+    }
+  }
+  if (stableId.startsWith('openai:')) {
+    return stableId.slice('openai:'.length)
+  }
+  return stableId
+}
+
+/**
+ * Roster ids currently disabled for one chain (roster minus the
+ * active chain, order-preserving). Presentation-only UI helper
+ * (toggle display, counts); NOT sent to main and NEVER authoritative
+ * — main derives executability from its own catalog + compatibility
+ * state and ignores renderer disabled snapshots. Pure and total:
+ * empty chain means the whole roster is disabled.
+ */
+export function disabledRosterIds(rosterStableIds: readonly string[], chain: readonly string[]): readonly string[] {
+  const active = new Set<string>(chain)
+  return rosterStableIds.filter((id) => !active.has(id))
+}
+
+/**
  * Default STARK Free Brain Chain (product configuration, fixed order):
  * planning-first orchestration defaults. Entries are catalog `model`
  * slugs — stable ids derive via `stableModelId('builtin', …)` so the

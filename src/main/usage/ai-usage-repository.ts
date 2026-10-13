@@ -603,6 +603,33 @@ export class AiUsageRepository {
   }
 
   /**
+   * Newest successfully executed provider/model for one session in
+   * the window (actual executor, not the requested selector), or
+   * null when nothing succeeded. Only finalized successes count —
+   * failed attempts are not executors.
+   */
+  latestSessionExecutor(sessionId: number, sinceMs: number): { providerId: string; model: string } | null {
+    const row: unknown = this.db
+      .prepare(
+        "SELECT provider_id AS providerId, model AS model FROM ai_usage_events WHERE session_id = ? AND created_at >= ? " +
+          "AND status = 'success' ORDER BY created_at DESC, id DESC LIMIT 1"
+      )
+      .get(sessionId, sinceMs)
+    if (row === undefined) {
+      return null
+    }
+    if (!isRecord(row)) {
+      throw new DatabaseError('stored usage aggregate row is invalid')
+    }
+    const providerId = row['providerId']
+    const model = row['model']
+    if (typeof providerId !== 'string' || typeof model !== 'string') {
+      throw new DatabaseError('stored usage aggregate row is invalid')
+    }
+    return { providerId, model }
+  }
+
+  /**
    * Latest provider-reported input-token count for one session in the
    * window (newest finalized success carrying input_tokens), or null
    * when the provider never reported one. Drives the Context section —

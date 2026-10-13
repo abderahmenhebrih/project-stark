@@ -99,6 +99,8 @@ export interface ApplicationServices {
   readonly imageGenerationService?: ImageGenerationService
   readonly aiProviderService: AiProviderService
   readonly aiCompletionService: AiCompletionService
+  /** Shared per-session AI operation guard (cancellation authority). Always present. */
+  readonly aiOperationGuard: AiOperationGuard
   readonly aiCodeProposalService: AiCodeProposalService
   /** Stage 17 grouped proposals. Absent in older harnesses without a change-set repository. */
   readonly changeSetService?: ChangeSetService
@@ -390,7 +392,7 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
           registry,
           workspaceFilesService,
           changeSetService,
-          { operationGuard: aiOperationGuard, pendingApprovals, usage }
+          { operationGuard: aiOperationGuard, pendingApprovals, usage, runs: deps.orchestrationRuns }
         )
   // Stage 20 continuity: built only when a looplink repository is
   // supplied; older harnesses omit it and keep legacy AI behavior.
@@ -432,7 +434,7 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
       deps.aiProviders,
       aiProviderService,
       registry,
-      { operationGuard: aiOperationGuard, looplink: looplinkOption, pendingApprovals, usage, attachments: chatAttachmentService }
+      { operationGuard: aiOperationGuard, looplink: looplinkOption, pendingApprovals, usage, attachments: chatAttachmentService, runs: deps.orchestrationRuns }
     )
   // Stage 21 recovery: built only when a recovery repository is
   // supplied; older harnesses omit it and keep legacy AI behavior.
@@ -599,6 +601,7 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
     imageGenerationService,
     aiProviderService,
     aiCompletionService,
+    aiOperationGuard,
     aiCodeProposalService: new AiCodeProposalService(
       deps.workspaces,
       deps.codingSessions,
@@ -607,7 +610,7 @@ export function createServices(deps: ServiceDependencies, providers?: ProviderCo
       registry,
       workspaceFilesService,
       changeTransactionService,
-      { operationGuard: aiOperationGuard, pendingApprovals, usage }
+      { operationGuard: aiOperationGuard, pendingApprovals, usage, runs: deps.orchestrationRuns }
     ),
     changeSetService,
     aiMultiFileProposalService,

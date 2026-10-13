@@ -408,14 +408,14 @@ describe('image_generate tool', () => {
     }
   })
 
-  it('stays on schema v19 with no migration 020 and leaves extensions untouched', async () => {
+  it('stays on schema v20 with no migration 020 and leaves extensions untouched', async () => {
     const h = openHarness()
     try {
-      assert.equal(getUserVersion(h.db), 19)
+      assert.equal(getUserVersion(h.db), 20)
       const { readdirSync } = await import('node:fs')
       const { join: joinPath } = await import('node:path')
       const files = readdirSync(joinPath(process.cwd(), 'src', 'main', 'database', 'migrations'))
-      assert.ok(!files.some((file) => file.startsWith('020-')), 'no migration 020')
+      assert.ok(!files.some((file) => file.startsWith('021-')), 'no migration 020')
       const { readFileSync: read } = await import('node:fs')
       for (const file of [
         'image-generation/image-generation-service.ts',

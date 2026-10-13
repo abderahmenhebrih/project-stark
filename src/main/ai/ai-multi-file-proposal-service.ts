@@ -30,19 +30,19 @@ import {
   ChangeSetStaleDuringProviderError,
   ChangeSetTooLargeError,
   InvalidChangeSetOutputError,
-  InvalidChangeSetRequestError
+  InvalidChangeSetRequestError,
+  toPublicChangeSetProposalError
 } from './ai-change-set-errors'
 import {
   MAX_AI_CHANGE_SET_FILES,
   MAX_AI_CHANGE_SET_FILE_SUMMARY_CODEPOINTS,
   MAX_AI_CHANGE_SET_SUMMARY_CODEPOINTS,
   MAX_AI_CHANGE_SET_TOTAL_PROPOSED_BYTES,
-  MAX_AI_CONTEXT_BYTES,
-  MAX_AI_CONTEXT_MESSAGES,
   MAX_AI_PROPOSED_FILE_BYTES,
   MIN_AI_CHANGE_SET_FILES,
   STAGE_17_FIXED_MULTI_FILE_INSTRUCTIONS
 } from './limits'
+import { loadBoundedContext } from './context-window'
 import type { AiProviderService } from './ai-provider-service'
 import { AiOperationGuard } from './ai-operation-guard'
 import { deriveStarkRunPolicy } from './stark-run-policy'
@@ -53,7 +53,8 @@ import type { AiUsageDeps } from '../usage/ai-usage-tracker'
 import { formatProviderContext } from '../session-context/session-context-service'
 import { isHostedBuiltinModel } from '../../shared/hosted-models/stark-model-map'
 import { readRequestedModel } from './model-request'
-import { eligibleLoopLinkModels, readLoopLinkChain, runLoopLinkChain } from './looplink-chain'
+import { auditOfOutcome, eligibleLoopLinkModels, readLoopLinkChain, runLoopLinkChain, singleModelAuditFor, withEffort, type LoopLinkStepAuditWithEffort } from './looplink-chain'
+import type { OrchestrationRepository } from '../database/repositories/orchestration-repository'
 
 const encoder = new TextEncoder()
 
@@ -148,6 +149,14 @@ export interface AiMultiFileProposalServiceOptions {
    * untracked behavior.
    */
   readonly usage?: AiUsageDeps
+  /**
+   * LoopLink execution audit (optional). When present, every Change
+   * Set proposal creates one orchestration run with a single
+   * `proposal` step carrying the winning model plus
+   * attempts/failover metadata. Absent means legacy behavior
+   * without run records.
+   */
+  readonly runs?: OrchestrationRepository
 }
 
 /**
@@ -163,6 +172,7 @@ export class AiMultiFileProposalService {
   private readonly guard: AiOperationGuard
   private readonly pendingApprovals: { hasPending(sessionId: number): boolean } | undefined
   private readonly usage: AiUsageDeps | undefined
+  private readonly runs: OrchestrationRepository | undefined
 
   constructor(
     private readonly workspaces: WorkspaceRepository,
@@ -178,6 +188,7 @@ export class AiMultiFileProposalService {
     this.guard = options?.operationGuard ?? new AiOperationGuard()
     this.pendingApprovals = options?.pendingApprovals
     this.usage = options?.usage
+    this.runs = options?.runs
   }
 
   /**
@@ -201,7 +212,7 @@ export class AiMultiFileProposalService {
   }
 
   async proposeChangeSet(payload: unknown): Promise<AiChangeSetProposalResult> {
-    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort', 'model', 'brainModels'])) {
+    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort', 'model', 'brainModels', 'disabledBrainModels'])) {
       throw new InvalidChangeSetRequestError('change-set proposal request is invalid')
     }
     const record = payload as Record<string, unknown>
@@ -217,7 +228,7 @@ export class AiMultiFileProposalService {
       effort = record['effort']
     }
     const requestedModel = readRequestedModel(record)
-    const brainChain = readLoopLinkChain(record, 'brainModels', 'brain')
+    const brainChain = readLoopLinkChain(record, 'brainModels', 'brain', 'disabledBrainModels')
     if (this.workspaces.findById(workspaceId) === undefined) {
       throw new SessionWorkspaceUnavailableError()
     }
@@ -236,13 +247,73 @@ export class AiMultiFileProposalService {
     }
     this.guard.acquire(sessionId)
     try {
-      return await this.proposeInner(workspaceId, sessionId, effort, requestedModel, brainChain)
+      const trailingForRun = this.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
+      const proposalRunId =
+        trailingForRun !== undefined && trailingForRun.role === 'user' && this.runs !== undefined
+          ? this.runs.createRun({ workspaceId, sessionId, userMessageId: trailingForRun.id, now: this.now() })
+          : null
+      try {
+        return await this.proposeInner(workspaceId, sessionId, effort, requestedModel, brainChain, proposalRunId)
+      } catch (error) {
+        this.failProposalRun(proposalRunId, error)
+        throw error
+      }
     } finally {
       this.guard.release(sessionId)
     }
   }
 
-  private async proposeInner(workspaceId: number, sessionId: number, effort: StarkEffort = 'regular', requestedModel: string | null = null, brainChain: readonly string[] | null = null): Promise<AiChangeSetProposalResult> {
+  /**
+   * Persists one completed Change Set proposal as a `proposal` run
+   * step. Audit-write failures propagate (like Work). Returns the
+   * public result unchanged. No-op without a run id.
+   */
+  private completeProposalRun(
+    runId: number | null,
+    changeSet: ChangeSet,
+    summary: string,
+    winner: { readonly providerId: string; readonly model: string },
+    audit: LoopLinkStepAuditWithEffort
+  ): { changeSet: ChangeSet } {
+    if (runId === null || this.runs === undefined) {
+      return { changeSet }
+    }
+    this.runs.appendStepWithModel(
+      { runId, ordinal: 0, kind: 'proposal', status: 'completed', instruction: null, output: summary, now: this.now() },
+      { role: 'brain', providerId: winner.providerId, model: winner.model, routeKey: 'proposal', requestedProfile: null, ...audit }
+    )
+    this.runs.updateRunState({
+      id: runId,
+      status: 'completed',
+      action: null,
+      planSummary: summary,
+      finalMessageId: null,
+      errorCategory: null,
+      now: this.now()
+    })
+    return { changeSet }
+  }
+
+  /**
+   * Best-effort Change Set failure audit. Never throws.
+   */
+  private failProposalRun(runId: number | null, error: unknown): void {
+    if (runId === null || this.runs === undefined) {
+      return
+    }
+    try {
+      this.runs.appendStep({ runId, ordinal: 0, kind: 'proposal', status: 'failed', instruction: null, output: null, now: this.now() })
+    } catch {
+      // Original error below is what matters.
+    }
+    try {
+      this.runs.failRun(runId, toPublicChangeSetProposalError('propose-set', error).message, this.now())
+    } catch {
+      // Original error below is what matters.
+    }
+  }
+
+  private async proposeInner(workspaceId: number, sessionId: number, effort: StarkEffort = 'regular', requestedModel: string | null = null, brainChain: readonly string[] | null = null, proposalRunId: number | null = null): Promise<AiChangeSetProposalResult> {
     const latest = this.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
     if (latest === undefined || latest.role !== 'user') {
       throw new ChangeSetNothingToProposeError()
@@ -312,6 +383,10 @@ export class AiMultiFileProposalService {
     ]
 
     // LoopLink Brain chain: ordered failover, precedence over single `model`.
+    // Winner + audit are assigned in both branches below (or the branch
+    // throws) so the shared persistence tail always audits truthfully.
+    let proposalWinner: { readonly providerId: string; readonly model: string }
+    let proposalAudit: LoopLinkStepAuditWithEffort
     let summary: string
     let changes: { readonly targetId: string; readonly summary: string; readonly proposedContent: string }[]
     if (brainChain !== null) {
@@ -339,16 +414,19 @@ export class AiMultiFileProposalService {
               maxOutputTokens: policy.maxOutputTokens,
               ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
               schemaName: CHANGE_SET_SCHEMA_NAME,
-              schema: buildChangeSetJsonSchema(targets.length)
+              schema: buildChangeSetJsonSchema(targets.length),
+              ...this.guard.signalOptionFor(sessionId)
             })
           )
-          return this.parseAndValidateOutput(result.outputText, byTargetId)
+          return { ...this.parseAndValidateOutput(result.outputText, byTargetId), resolvedModel: resolved.model }
         } finally {
           void resolved.apiKey
         }
-      })
+      }, { isCancelled: () => this.guard.isCancelRequested(sessionId) })
       summary = outcome.result.summary
       changes = [...outcome.result.changes]
+      proposalWinner = { providerId: outcome.assignment.providerId, model: outcome.result.resolvedModel }
+      proposalAudit = withEffort(auditOfOutcome(outcome, eligible), effort)
     } else {
     let model: string
     let adapter: NonNullable<ReturnType<ProviderRegistry['get']>>
@@ -404,7 +482,8 @@ export class AiMultiFileProposalService {
           maxOutputTokens: policy.maxOutputTokens,
           ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
           schemaName: CHANGE_SET_SCHEMA_NAME,
-          schema: buildChangeSetJsonSchema(targets.length)
+          schema: buildChangeSetJsonSchema(targets.length),
+          ...this.guard.signalOptionFor(sessionId)
         })
       )
       outputText = result.outputText
@@ -415,6 +494,8 @@ export class AiMultiFileProposalService {
     const parsed = this.parseAndValidateOutput(outputText, byTargetId)
     summary = parsed.summary
     changes = [...parsed.changes]
+    proposalWinner = { providerId: adapter.id, model }
+    proposalAudit = withEffort(singleModelAuditFor(model), effort)
     }
 
     // Drop per-target no-ops against pre-provider content.
@@ -475,7 +556,7 @@ export class AiMultiFileProposalService {
       throw error
     }
     void this.now
-    return { changeSet }
+    return this.completeProposalRun(proposalRunId, changeSet, summary, proposalWinner, proposalAudit)
   }
 
   private parseAndValidateOutput(
@@ -548,21 +629,10 @@ export class AiMultiFileProposalService {
 
   /**
    * Newest session messages within both context budgets, returned
-   * chronologically — same budgets as single-file Ask/proposal paths.
+   * chronologically. Shared bounded loader (see context-window) —
+   * identical budgets and oldest-first semantics to every AI path.
    */
   loadContext(sessionId: number): { readonly role: 'user' | 'assistant'; readonly content: string }[] {
-    const probe = this.sessions.listMessagesNewestFirst(sessionId, MAX_AI_CONTEXT_MESSAGES, null)
-    const kept = [...probe.slice(0, MAX_AI_CONTEXT_MESSAGES)]
-    let total = 0
-    for (const entry of kept) {
-      total += encoder.encode(entry.content).byteLength
-    }
-    while (kept.length > 1 && total > MAX_AI_CONTEXT_BYTES) {
-      const dropped = kept.pop()
-      if (dropped !== undefined) {
-        total -= encoder.encode(dropped.content).byteLength
-      }
-    }
-    return kept.reverse().map((entry) => ({ role: entry.role, content: entry.content }))
+    return loadBoundedContext(this.sessions, sessionId)
   }
 }

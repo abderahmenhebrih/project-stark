@@ -9,6 +9,7 @@ import {
 } from './limits'
 import {
   classifyProviderError,
+  isAbortError,
   type AiProviderAdapter,
   type ConnectionDiagnosis,
   type ProviderAttachmentContent,
@@ -26,6 +27,7 @@ import type { ProviderUsage } from '../usage/ai-usage-types'
 import type { ProviderModel } from '../../shared/providers/types'
 import { MAX_GENERATED_IMAGE_BYTES } from '../../shared/ai/image-capabilities'
 import {
+  AiCancelledError,
   ProviderEmptyResponseError,
   ProviderForbiddenError,
   ProviderInvalidCredentialError,
@@ -56,7 +58,9 @@ export interface OpenAiResponsesClient {
       text?: unknown
       reasoning?: { effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' } | null
     },
-    options?: { timeout?: number; maxRetries?: number }
+    // The official SDK also accepts an AbortSignal here (user
+    // cancellation); the seam declares it so fakes stay honest.
+    options?: { timeout?: number; maxRetries?: number; signal?: AbortSignal }
   ): Promise<{
     output_text?: string
     output?: readonly unknown[]
@@ -253,7 +257,11 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
           // models never receive this field.
           ...(request.reasoningEffort ? { reasoning: { effort: request.reasoningEffort } } : {})
         },
-        { timeout: AI_GENERATE_TIMEOUT_MS, maxRetries: 0 }
+        {
+          timeout: AI_GENERATE_TIMEOUT_MS,
+          maxRetries: 0,
+          ...(request.signal !== undefined ? { signal: request.signal } : {})
+        }
       )
       const text = extractOutputText(response)
       if (text === null || text === '') {
@@ -263,6 +271,11 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
     } catch (error) {
       if (error instanceof ProviderEmptyResponseError) {
         throw error
+      }
+      // User cancellation aborts the SDK call: surface cancel, never
+      // a timeout or a retryable generic (no failover on cancel).
+      if (isAbortError(error) || request.signal?.aborted === true) {
+        throw new AiCancelledError({ cause: error })
       }
       throw classifyProviderError(error)
     }
@@ -297,7 +310,11 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
             }
           }
         },
-        { timeout: AI_GENERATE_TIMEOUT_MS, maxRetries: 0 }
+        {
+          timeout: AI_GENERATE_TIMEOUT_MS,
+          maxRetries: 0,
+          ...(request.signal !== undefined ? { signal: request.signal } : {})
+        }
       )
       const text = extractOutputText(response)
       if (text === null || text === '') {
@@ -307,6 +324,9 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
     } catch (error) {
       if (error instanceof ProviderEmptyResponseError) {
         throw error
+      }
+      if (isAbortError(error) || request.signal?.aborted === true) {
+        throw new AiCancelledError({ cause: error })
       }
       if (isStructuredUnsupported(error)) {
         throw new ProviderStructuredOutputUnsupportedError({ cause: error })
@@ -457,14 +477,10 @@ export class OpenAiProviderAdapter implements AiProviderAdapter {
       outcome = { error: classified }
     }
     const native = await diagnoseNativeFetchPath(apiKey)
-    console.log(
-      '[STARK AI DIAGNOSTIC] ' +
-        `sdkSucceeded=${String(sdk.succeeded)} sdkStatus=${sdk.status === null ? 'none' : String(sdk.status)} ` +
-        `sdkCategory=${sdk.category} sdkOrigin=${sdk.origin} sdkRequestIdPresent=${String(sdk.requestIdPresent)} ` +
-        `nativeSucceeded=${String(native.succeeded)} nativeStatus=${native.status === null ? 'none' : String(native.status)} ` +
-        `nativeOrigin=${native.origin} nativeContentTypeJson=${String(native.contentTypeJson)} ` +
-        `nativeRequestIdPresent=${String(native.requestIdPresent)} sameCredentialForBothPaths=true`
-    )
+    // No console output: the structured diagnosis above is the
+    // complete record for the caller (testConnection reuses the Path
+    // A outcome). Ad-hoc stdout logging does not belong in
+    // production paths, even for secret-free metadata.
     return { sdk, native, sameCredentialForBothPaths: true as const, outcome }
   }
 }

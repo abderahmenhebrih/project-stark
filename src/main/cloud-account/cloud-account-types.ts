@@ -45,14 +45,22 @@ export interface CloudAuthAdapter {
   isConfigured(): boolean
   /** Builds the provider OAuth authorization URL (no browser here). */
   beginOAuth(provider: StarkAuthProvider): Promise<{ url: string }>
-  /** Exchanges one authorization code exactly once. */
-  exchangeCode(code: string): Promise<AuthenticatedIdentity>
+  /**
+   * Exchanges one authorization code exactly once. The trusted
+   * provider comes from the pending OAuth attempt context whenever
+   * the caller has it (pass explicitly); otherwise the adapter
+   * falls back to the server-authoritative session metadata and
+   * fails closed when neither is available — never a default.
+   */
+  exchangeCode(code: string, provider?: StarkAuthProvider): Promise<AuthenticatedIdentity>
   /**
    * Restores a persisted envelope (at most one SDK refresh inside
    * when the token is expired). Returns null when the session is no
-   * longer usable. Single attempt, no retry loop.
+   * longer usable. Single attempt, no retry loop. Provider
+   * attribution follows the same explicit-then-metadata rule as
+   * exchangeCode.
    */
-  restoreSession(session: CloudSessionEnvelope): Promise<AuthenticatedIdentity | null>
+  restoreSession(session: CloudSessionEnvelope, provider?: StarkAuthProvider): Promise<AuthenticatedIdentity | null>
   /** Clears the SDK-local session; best effort, single attempt. */
   signOut(): Promise<void>
   /**

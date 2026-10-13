@@ -71,8 +71,13 @@ export async function getValidHostedAccessToken(deps: HostedAccessTokenDeps): Pr
     return accessToken
   }
   let restored: { identity: NormalizedCloudIdentity; session: { accessToken: string; refreshToken: string; expiresAt: number | null; userId: string } } | null
+  // Provider attribution for the restore comes from the validated
+  // stored account (checked below); the adapter fails closed
+  // without it or server metadata.
+  const restoreProvider: StarkAuthProvider | undefined =
+    account.provider === 'google' || account.provider === 'github' ? account.provider : undefined
   try {
-    restored = await deps.adapter.restoreSession({ accessToken, refreshToken, expiresAt, userId })
+    restored = await deps.adapter.restoreSession({ accessToken, refreshToken, expiresAt, userId }, restoreProvider)
   } catch {
     throw new CloudAuthSignInRequiredError()
   }

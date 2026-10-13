@@ -40,6 +40,7 @@ import {
   normalizeContextError
 } from '../../lib/session-context-error'
 import {
+  cancelAiOperation,
   clearProviderCredential,
   generateAssistantResponseRaw,
   getProviderState,
@@ -390,7 +391,7 @@ export function SessionPanel({
   }))
   // Settings → Models V2 Brain/Heart LoopLink chain configuration:
   // renderer/session-local ordered stable model ids, workspace-scoped
-  // like every other panel state. No persistence (schema stays v19),
+  // like every other panel state. No persistence (schema stays v20),
   // no IPC, no secrets — configuration for the later AI pass only.
   // STARK Free composer selection: intrinsic catalog state, always
   // present with zero provider setup. Defaults to the first Free
@@ -598,8 +599,12 @@ export function SessionPanel({
   // LoopLink snapshots (P0): ordered ENABLED ids from Settings →
   // Models → Brain/Heart LoopLink. Included in every AI request so
   // the NEXT run uses the current UI order immediately.
-  // Session-local, no persistence (schema v19). Main validates
-  // authoritatively (known id, max 5, no duplicates).
+  // Session-local, no persistence (schema v20). Main validates
+  // authoritatively (catalog + inference-shape executability, known
+  // id, max 5, no duplicates) and IGNORES any renderer disabled
+  // roster for authority — the chain IS the enabled set, so omission
+  // from the chain is the enforcement. Disabled snapshots are not
+  // sent (no security-irrelevant duplicated payload state).
   const brainChainSnapshot = [...modelChains.brain]
   const heartChainSnapshot = [...modelChains.heart]
 
@@ -2476,6 +2481,36 @@ export function SessionPanel({
     work.preparing ||
     extensionRunning ||
     proposeGated
+  // User cancellation is available while an AI operation is in flight
+  // (send, generation, proposal, or work) AND while a Work run is
+  // parked awaiting tool approval. A parked run is still logically
+  // active: Cancel MUST cancel the parked operation (terminal
+  // `cancelled`, never approval/denial, session immediately reusable).
+  // The control only requests — main owns cancellation authority and
+  // the normal completion/error paths report the outcome. Parked
+  // approvals keep their own Approve/Deny controls as well.
+  const cancellable =
+    state.selectedSessionId !== null &&
+    (state.sending || state.generating || proposal.preparing || work.preparing || pendingApproval !== null)
+
+  async function handleCancel(): Promise<void> {
+    if (!cancellable || state.selectedSessionId === null) {
+      return
+    }
+    // Fire-and-forget by design: the in-flight operation settles
+    // through its normal path (cancelled error or completion) and
+    // the session becomes reusable. A rejected request is safe to
+    // ignore — the operation still settles on its own. A parked
+    // cancellation clears the approval card via an explicit reload so
+    // a cancelled run never lingers as pending.
+    const sessionId = state.selectedSessionId
+    const hadParked = pendingApproval !== null
+    await cancelAiOperation({ workspaceId, sessionId }).catch(() => false)
+    if (hadParked) {
+      void loadPendingApproval(sessionId)
+      void loadLatestWorkRun(sessionId)
+    }
+  }
   // Sponsored-working narrow binding: observational AI-run state only.
   // Never delays, gates, or alters sends, generations, proposals, work
   // runs, streaming, cancellation, navigation, Settings, or terminal.
@@ -3273,11 +3308,36 @@ export function SessionPanel({
                     {work.run.steps.map((step) => (
                       <li key={step.id}>
                         <span className="session__hint">
-                          {step.kind === 'brain_plan' ? 'Brain Plan' : step.kind === 'worker' ? 'Worker result' : 'Brain Final response'} · {step.status}
+                          {step.kind === 'brain_plan'
+                            ? 'Brain Plan'
+                            : step.kind === 'worker'
+                              ? 'Worker result'
+                              : step.kind === 'worker_followup'
+                                ? 'Worker follow-up'
+                                : step.kind === 'ask'
+                                  ? 'Ask response'
+                                  : step.kind === 'proposal'
+                                    ? 'Proposal'
+                                    : 'Brain Final response'}{' '}
+                          · {step.status}
                           {step.modelAudit !== null
                             ? ` · ${step.modelAudit.providerId} / ${step.modelAudit.model}`
                             : ' · Model information unavailable for this older run.'}
                         </span>
+                        {step.modelAudit !== null && step.modelAudit.failoverNote !== null && (
+                          <span className="session__hint">
+                            {step.modelAudit.failoverNote}
+                            {typeof step.modelAudit.attempts === 'number'
+                              ? ` · ${step.modelAudit.attempts} attempts`
+                              : ''}
+                          </span>
+                        )}
+                        {step.modelAudit !== null &&
+                          step.modelAudit.failoverNote === null &&
+                          typeof step.modelAudit.attempts === 'number' &&
+                          step.modelAudit.attempts > 1 && (
+                            <span className="session__hint">{`${step.modelAudit.attempts} attempts · no failover`}</span>
+                          )}
                         {step.kind === 'worker' && (
                           <span className="session__hint">
                             {step.modelAudit !== null && step.modelAudit.requestedProfile !== null
@@ -3589,6 +3649,17 @@ export function SessionPanel({
                   sessionKey={String(state.selectedSessionId ?? 'none')}
                   onTranscribed={handleVoiceTranscribed}
                 />
+                {cancellable && (
+                  <button
+                    className="explorer__secondary session__cancel"
+                    type="button"
+                    onClick={() => void handleCancel()}
+                    aria-label="Cancel AI operation"
+                    title="Cancel the running AI operation"
+                  >
+                    <UiIcon name="close" size={18} />
+                  </button>
+                )}
                 <button
                   className="explorer__primary session__send session__send--fab"
                   type="button"

@@ -56,6 +56,15 @@ export class WorkerApprovalExpiredError extends WorkerToolError {
   }
 }
 
+/** A parked approval was cancelled by the user. Distinct from expiry/denial/timeout: the run is terminally cancelled, nothing was applied. */
+export class WorkerApprovalCancelledError extends WorkerToolError {
+  override readonly name = 'WorkerApprovalCancelledError'
+
+  constructor() {
+    super('The AI operation was cancelled.')
+  }
+}
+
 /** Marks a provider failure that occurred after tool interaction (no auto-recovery). */
 export class ToolInteractiveError extends WorkerToolError {
   override readonly name = 'ToolInteractiveError'
@@ -96,7 +105,8 @@ export function toPublicWorkerToolError(operation: WorkerToolOperation, error: u
     error instanceof WorkerToolLimitError ||
     error instanceof WorkerToolsUnsupportedError ||
     error instanceof PendingApprovalBlockedError ||
-    error instanceof WorkerApprovalExpiredError
+    error instanceof WorkerApprovalExpiredError ||
+    error instanceof WorkerApprovalCancelledError
   ) {
     return new Error(error.message)
   }

@@ -436,11 +436,11 @@ describe('no formatter, lsp, schema, or ipc coupling', () => {
     assert.equal(detectEditorLanguage('next.config.ts'), 'typescript', 'TS colors must resolve with zero extensions')
   })
 
-  it('leaves schema v19 and IPC untouched', () => {
+  it('leaves schema v20 and IPC untouched', () => {
     const migrations = join(process.cwd(), 'src', 'main', 'database', 'migrations')
     const files = readdirSync(migrations).map((name) => name.toLowerCase())
-    assert.ok(files.includes('019-message-attachments.ts'), 'schema v19 must remain')
-    assert.ok(!files.some((name) => name.startsWith('020-')), 'no schema migration may be added')
+    assert.ok(files.includes('020-looplink-audit.ts'), 'schema v20 must remain')
+    assert.ok(!files.some((name) => name.startsWith('021-')), 'no schema migration may be added')
     for (const relative of [
       'features/editor/editor-theme.ts',
       'features/editor/editor-setup.ts',

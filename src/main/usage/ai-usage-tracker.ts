@@ -32,7 +32,8 @@ import {
   ProviderNetworkError,
   ProviderRateLimitedError,
   ProviderStructuredOutputUnsupportedError,
-  ProviderTimeoutError
+  ProviderTimeoutError,
+  AiCancelledError
 } from '../ai/errors'
 
 /** Main-owned tracking metadata for one outbound provider attempt. */
@@ -51,6 +52,9 @@ export interface TrackCallMeta {
  * Only error type names are inspected — never payloads or secrets.
  */
 export function failureCategoryOf(error: unknown): string {
+  if (error instanceof AiCancelledError) {
+    return 'cancelled'
+  }
   if (error instanceof ProviderRateLimitedError) {
     return 'provider-rate-limit'
   }

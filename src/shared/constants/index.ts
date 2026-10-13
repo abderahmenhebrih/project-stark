@@ -70,6 +70,7 @@ export const IPC_CHANNELS = {
   aiProposeFileChange: 'stark:ai:propose-file-change',
   aiProposeChangeSet: 'stark:ai:propose-change-set',
   aiRunBrain: 'stark:ai:run-brain',
+  aiCancelOperation: 'stark:ai:cancel-operation',
   changeSetsGet: 'stark:change-sets:get',
   changeSetsListRecent: 'stark:change-sets:list-recent',
   orchestrationGet: 'stark:orchestration:get',

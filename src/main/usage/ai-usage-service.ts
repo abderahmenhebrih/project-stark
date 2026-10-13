@@ -272,6 +272,7 @@ export class AiUsageService {
     }
     const now = this.now()
     const rows = this.store.summarizeSessionWindow(rawSessionId, now - USAGE_WINDOW_MS)
+    const executor = this.store.latestSessionExecutor(rawSessionId, now - USAGE_WINDOW_MS)
     let calls = 0
     let successes = 0
     let successesWithTokens = 0
@@ -299,7 +300,9 @@ export class AiUsageService {
       outputTokens: successes === 0 ? 0 : outputTokens,
       totalTokens: successes === 0 ? 0 : totalTokens,
       latestInputTokens: this.store.latestSessionInputTokens(rawSessionId, now - USAGE_WINDOW_MS),
-      telemetryComplete: successes === 0 || successesWithTokens === successes
+      telemetryComplete: successes === 0 || successesWithTokens === successes,
+      lastExecutorProviderId: executor?.providerId ?? null,
+      lastExecutorModel: executor?.model ?? null
     }
   }
 

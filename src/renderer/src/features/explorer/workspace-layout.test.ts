@@ -283,8 +283,8 @@ describe('secondary close returns the session to full width', () => {
     assert.ok(!frameSlice.includes('stark-api') && !frameSlice.includes('migration'), 'split styles must stay presentational')
     const migrations = join(process.cwd(), 'src', 'main', 'database', 'migrations')
     const files = readdirSync(migrations).map((name) => name.toLowerCase())
-    assert.ok(files.includes('019-message-attachments.ts'), 'schema v19 must remain')
-    assert.ok(!files.some((name) => name.startsWith('020-')), 'no schema migration may be added')
+    assert.ok(files.includes('020-looplink-audit.ts'), 'schema v20 must remain')
+    assert.ok(!files.some((name) => name.startsWith('021-')), 'no schema migration may be added')
   })
 
   it('terminal claims pane space instead of sizing to content', () => {

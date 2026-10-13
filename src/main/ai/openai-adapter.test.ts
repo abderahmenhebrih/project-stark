@@ -271,7 +271,7 @@ describe('OpenAI provider adapter', () => {
     assert.ok(!JSON.stringify(result).includes('sk-super-secret'))
   })
 
-  it('diagnostic reuses one SDK call and logs only safe metadata', async () => {
+  it('diagnostic reuses one SDK call and never logs', async () => {
     let fetchCalls = 0
     let authorization: unknown = null
     const originalFetch = globalThis.fetch
@@ -304,10 +304,7 @@ describe('OpenAI provider adapter', () => {
       assert.equal(diagnosis.native.succeeded, true)
       assert.equal(diagnosis.native.requestIdPresent, true)
       assert.equal(diagnosis.native.contentTypeJson, true)
-      const combined = logged.join('\n')
-      assert.ok(combined.includes('[STARK AI DIAGNOSTIC]'))
-      assert.ok(!combined.includes('sk-diag-secret'))
-      assert.ok(!combined.includes('Bearer'))
+      assert.deepEqual(logged, [], 'production paths must not log, even secret-free metadata')
     } finally {
       globalThis.fetch = originalFetch
       console.log = originalLog

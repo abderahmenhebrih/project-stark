@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -717,5 +717,189 @@ describe('worker tool work flows', () => {
       }
     }
     rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+describe('cancellation while approval is parked (STARK contract)', () => {
+  function parkOne(h: ReturnType<typeof openHarness>, sessionId: number): Promise<{ approvalId: number; runId: number }> {
+    h.capService.updateConfig({
+      workspaceId: h.workspaceId, enabled: true,
+      policies: [
+        { capability: 'workspace.read', mode: 'ask' },
+        { capability: 'workspace.search', mode: 'deny' },
+        { capability: 'git.read', mode: 'deny' },
+        { capability: 'change.propose', mode: 'deny' },
+        { capability: 'terminal.execute', mode: 'deny' },
+        { capability: 'runtime.observe', mode: 'deny' },
+        { capability: 'preview.inspect', mode: 'deny' },
+        { capability: 'attachment.import', mode: 'deny' },
+        { capability: 'image.generate', mode: 'deny' }
+      ]
+    })
+    h.adapter.planScript = [delegatePlan('coding')]
+    h.adapter.turnScript = [
+      { kind: 'tool_request', tool: 'workspace_read', args: { relativePath: 'app.ts' } },
+      { kind: 'final_text', text: 'WORKER_DONE' }
+    ]
+    h.adapter.textScript = ['FINAL_ANSWER']
+    return h.runner.runToolWork({ workspaceId: h.workspaceId, sessionId }).then((waiting) => {
+      assert.equal(waiting.kind, 'waiting_for_approval')
+      if (waiting.kind !== 'waiting_for_approval') throw new Error('unreachable')
+      return { approvalId: waiting.approval.id, runId: waiting.run.id }
+    })
+  }
+
+  it('A. work pauses for approval; B/C/D. cancel transitions the parked run to terminal cancelled', async () => {
+    const h = openHarness()
+    try {
+      const sessionId = await seedWork(h)
+      const parked = await parkOne(h, sessionId)
+      // A. parked: guard released (no active op) but run is waiting.
+      assert.equal(h.guard.isActive(sessionId), false)
+      assert.equal(h.runs.findRunById(parked.runId)?.status, 'waiting_for_approval')
+      // B/C. user invokes cancel → cancelled:true.
+      const outcome = h.runner.cancelParkedWork({ workspaceId: h.workspaceId, sessionId })
+      assert.deepEqual(outcome, { cancelled: true })
+      // D. run is terminally cancelled (distinct from failed/timeout).
+      assert.equal(h.runs.findRunById(parked.runId)?.status, 'cancelled')
+      assert.equal(h.runs.findRunById(parked.runId)?.errorCategory, 'The AI operation was cancelled.')
+      // Approval leaves pending → cancelled (hasPending clears).
+      assert.equal(h.tools.findApproval(parked.approvalId)?.status, 'cancelled')
+      assert.equal(h.runner.hasPending(sessionId), false)
+    } finally {
+      closeHarness(h)
+    }
+  })
+
+  it('E. session is immediately reusable after parked cancellation (no filesystem write)', async () => {
+    const h = openHarness()
+    try {
+      const sessionId = await seedWork(h)
+      const parked = await parkOne(h, sessionId)
+      const before = readFileSync(join(h.dir, 'project', 'app.ts'), 'utf8')
+      h.runner.cancelParkedWork({ workspaceId: h.workspaceId, sessionId })
+      // H. cancellation writes no project files.
+      assert.equal(readFileSync(join(h.dir, 'project', 'app.ts'), 'utf8'), before)
+      // Preserved review state without applying: run_state + events intact.
+      assert.ok(h.tools.findState(parked.runId) !== undefined, 'parked state preserved for audit')
+      assert.equal(h.tools.listEvents(parked.runId).length, 0, 'no tool executed on cancel')
+      // E. a brand-new request starts immediately (no pending block, no in-flight guard).
+      h.adapter.planScript = [delegatePlan('coding')]
+      h.adapter.turnScript = [{ kind: 'final_text', text: 'FRESH_DONE' }]
+      h.adapter.textScript = ['FRESH_FINAL']
+      // workspace.read stays ask but the fresh plan answers directly (no tool), so no re-park.
+      const outcome = await h.runner.runToolWork({ workspaceId: h.workspaceId, sessionId })
+      assert.equal(outcome.kind, 'completed')
+      if (outcome.kind !== 'completed') throw new Error('unreachable')
+      assert.notEqual(outcome.result.run.id, parked.runId, 'fresh run, not the cancelled one')
+    } finally {
+      closeHarness(h)
+    }
+  })
+
+  it('F/G. stale approve/deny after cancellation cannot resume or mutate (deterministic cancelled error)', async () => {
+    const h = openHarness()
+    try {
+      const sessionId = await seedWork(h)
+      const parked = await parkOne(h, sessionId)
+      h.runner.cancelParkedWork({ workspaceId: h.workspaceId, sessionId })
+      await assert.rejects(
+        h.runner.approveAndResume({ workspaceId: h.workspaceId, sessionId, approvalId: parked.approvalId }),
+        /cancelled/i
+      )
+      await assert.rejects(
+        h.runner.denyAndResume({ workspaceId: h.workspaceId, sessionId, approvalId: parked.approvalId }),
+        /cancelled/i
+      )
+      // Run stays cancelled; no assistant message was fabricated.
+      assert.equal(h.runs.findRunById(parked.runId)?.status, 'cancelled')
+      const messages = h.codingRows.listMessagesNewestFirst(sessionId, 10, null)
+      assert.ok(messages.every((entry) => entry.role !== 'assistant'), 'cancel applies nothing')
+    } finally {
+      closeHarness(h)
+    }
+  })
+
+  it('I. repeated Cancel is harmless and idempotent', async () => {
+    const h = openHarness()
+    try {
+      const sessionId = await seedWork(h)
+      const parked = await parkOne(h, sessionId)
+      assert.deepEqual(h.runner.cancelParkedWork({ workspaceId: h.workspaceId, sessionId }), { cancelled: true })
+      // Second cancel: still harmless, still reports cancelled (sticky terminal).
+      assert.deepEqual(h.runner.cancelParkedWork({ workspaceId: h.workspaceId, sessionId }), { cancelled: true })
+      assert.equal(h.runs.findRunById(parked.runId)?.status, 'cancelled')
+      // Idle session with no parked run: harmless false.
+      const other = await h.sessions.createSession({ workspaceId: h.workspaceId })
+      assert.deepEqual(h.runner.cancelParkedWork({ workspaceId: h.workspaceId, sessionId: other.id }), { cancelled: false })
+    } finally {
+      closeHarness(h)
+    }
+  })
+
+  it('J. wrong-session cancellation is rejected and never touches another session', async () => {
+    const h = openHarness()
+    try {
+      const sessionId = await seedWork(h)
+      const parked = await parkOne(h, sessionId)
+      const otherWorkspace = h.workspaces.create({ rootPath: join(h.dir, 'other'), displayName: 'o', now: 2 }).id
+      const otherSession = h.codingRows.createSession({ workspaceId: otherWorkspace, title: 's', now: 3 })
+      // Cross-workspace cancel for the parked session is rejected.
+      await assert.rejects(
+        (async () => h.runner.cancelParkedWork({ workspaceId: otherWorkspace, sessionId }))(),
+        /mismatch|invalid/i
+      )
+      // The parked run is untouched.
+      assert.equal(h.runs.findRunById(parked.runId)?.status, 'waiting_for_approval')
+      assert.equal(h.tools.findApproval(parked.approvalId)?.status, 'pending')
+      void otherSession
+    } finally {
+      closeHarness(h)
+    }
+  })
+
+  it('K. expiry/timeout stays timeout-flavoured, never cancelled', async () => {
+    const h = openHarness()
+    try {
+      const sessionId = await seedWork(h)
+      const parked = await parkOne(h, sessionId)
+      // Simulate terminal failure after parking (non-cancel terminal).
+      h.runs.failRun(parked.runId, 'We couldn’t complete this work run.', 9999)
+      await assert.rejects(
+        h.runner.approveAndResume({ workspaceId: h.workspaceId, sessionId, approvalId: parked.approvalId }),
+        /no longer waiting/
+      )
+      // Failed ≠ cancelled: the run is failed, not cancelled.
+      assert.equal(h.runs.findRunById(parked.runId)?.status, 'failed')
+      assert.notEqual(h.runs.findRunById(parked.runId)?.status, 'cancelled')
+      await assert.rejects(
+        h.runner.denyAndResume({ workspaceId: h.workspaceId, sessionId, approvalId: parked.approvalId }),
+        /no longer waiting/
+      )
+    } finally {
+      closeHarness(h)
+    }
+  })
+
+  it('a stale approval cannot revive a failed run', async () => {
+    const h = openHarness()
+    try {
+      const sessionId = await seedWork(h)
+      const parked = await parkOne(h, sessionId)
+      // Simulate terminal failure after parking (expiry, cancellation,
+      // or any terminal error): the run is dead while the approval row
+      // is still pending.
+      h.runs.failRun(parked.runId, 'We couldn’t complete this work run.', 9999)
+      await assert.rejects(
+        h.runner.approveAndResume({ workspaceId: h.workspaceId, sessionId, approvalId: parked.approvalId }),
+        /no longer waiting/
+      )
+      await assert.rejects(
+        h.runner.denyAndResume({ workspaceId: h.workspaceId, sessionId, approvalId: parked.approvalId }),
+        /no longer waiting/
+      )
+    } finally {
+      closeHarness(h)
+    }
   })
 })

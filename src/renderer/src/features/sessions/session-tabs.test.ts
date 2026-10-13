@@ -232,10 +232,10 @@ describe('per-session draft stash', () => {
 })
 
 describe('tab-cap schema marker', () => {
-  it('schema remains v19 with no migration 020', () => {
+  it('schema remains v20 with no migration 020', () => {
     const dir = join(process.cwd(), 'src', 'main', 'database', 'migrations')
     const files = readdirSync(dir).filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
-    assert.ok(files.includes('019-message-attachments.ts'), 'migration 019 must exist (schema v19)')
-    assert.ok(!files.some((file) => file.startsWith('020')), 'no migration 020 may appear')
+    assert.ok(files.includes('020-looplink-audit.ts'), 'migration 020 must exist (schema v20)')
+    assert.ok(!files.some((file) => file.startsWith('021')), 'no migration 020 may appear')
   })
 })

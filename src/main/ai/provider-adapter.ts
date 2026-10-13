@@ -36,6 +36,13 @@ export interface ProviderGenerateRequest {
   readonly messages: readonly ProviderContextMessage[]
   readonly maxOutputTokens: number
   /**
+   * User-cancellation signal (optional). Adapters abort the
+   * in-flight call on abort and surface AiCancelledError — never a
+   * timeout, never a generic retryable error. Absent means no
+   * cancellation hookup; adapters keep their own bounded timeouts.
+   */
+  readonly signal?: AbortSignal
+  /**
    * Provider reasoning effort (optional). Sent ONLY when the model
    * officially supports it (see stark-run-policy capability gating).
    * Absent/null means current/default provider behavior — never an
@@ -70,6 +77,11 @@ export interface ProviderStructuredRequest {
   readonly schemaName: string
   readonly schema: unknown
   /**
+   * User-cancellation signal (optional). Same contract as the
+   * text-generation request.
+   */
+  readonly signal?: AbortSignal
+  /**
    * Provider reasoning effort (optional). Same contract as the
    * text-generation request — model-gated, never unsupported.
    */
@@ -102,6 +114,11 @@ export interface ProviderWorkerTurnRequest {
   readonly messages: readonly ProviderContextMessage[]
   readonly maxOutputTokens: number
   readonly tools: readonly ProviderWorkerToolSchema[]
+  /**
+   * User-cancellation signal (optional). Same contract as the
+   * text-generation request.
+   */
+  readonly signal?: AbortSignal
   /**
    * Resolved attachment content (Step 2, optional). The Worker
    * receives it only when explicitly relevant to the delegated task —
@@ -262,6 +279,25 @@ export class ProviderRegistry {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+/**
+ * True for user-abort failures: DOM AbortError from fetch/signal
+ * cancellation, or the OpenAI SDK's user-abort error. Adapters check
+ * this BEFORE provider classification so cancellation surfaces as
+ * AiCancelledError — never a timeout, never a retryable generic.
+ */
+export function isAbortError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === 'AbortError') {
+    return true
+  }
+  if (typeof error === 'object' && error !== null) {
+    const name = (error as { name?: unknown }).name
+    if (name === 'APIUserAbortError') {
+      return true
+    }
+  }
+  return false
 }
 
 /** SDK error class name without importing the SDK (keeps this unit-testable). */

@@ -11,14 +11,14 @@
  * a second source of truth.
  */
 
-/** Lifecycle of an orchestration run. `interrupted` is crash recovery only. */
-export type OrchestrationRunStatus = 'running' | 'completed' | 'failed' | 'interrupted' | 'waiting_for_approval'
+/** Lifecycle of an orchestration run. `interrupted` is crash recovery only; `cancelled` is user cancellation while parked (distinct from timeout/failure, no migration — statuses are not CHECK-locked). */
+export type OrchestrationRunStatus = 'running' | 'completed' | 'failed' | 'interrupted' | 'waiting_for_approval' | 'cancelled'
 
 /** Brain plan decision for a run. */
 export type OrchestrationRunAction = 'answer' | 'delegate'
 
-/** Step kinds: Stage 18 base plus Stage 23 Worker follow-ups (one row per Worker turn). */
-export type OrchestrationStepKind = 'brain_plan' | 'worker' | 'worker_followup' | 'brain_synthesis'
+/** Step kinds: Stage 18 base plus Stage 23 Worker follow-ups (one row per Worker turn), plus Ask and proposal audits. */
+export type OrchestrationStepKind = 'brain_plan' | 'worker' | 'worker_followup' | 'brain_synthesis' | 'ask' | 'proposal'
 
 /** Step execution state. */
 export type OrchestrationStepStatus = 'completed' | 'failed'
@@ -48,6 +48,21 @@ export interface StepModelAudit {
   readonly model: string
   readonly routeKey: string
   readonly requestedProfile: string | null
+  /**
+   * LoopLink execution truth (schema v20+). Null/unknown for
+   * pre-020 rows: historical winner fields stay intact while new
+   * fields read as unavailable. Optional so older fixtures and
+   * renderer harnesses keep typechecking.
+   */
+  readonly attempts?: number | null
+  /** Human-safe failover note, or null when the first model served. */
+  readonly failoverNote?: string | null
+  /** Attempted model ids in execution order. */
+  readonly attemptedModels?: readonly string[] | null
+  /** Eligible requested chain in UI priority order. */
+  readonly requestedChain?: readonly string[] | null
+  /** Requested STARK effort for the execution. */
+  readonly requestedEffort?: string | null
 }
 
 /** Public orchestration run: header plus steps in ordinal order. */

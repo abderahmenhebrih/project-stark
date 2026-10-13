@@ -70,7 +70,7 @@ interface ModelsSettingsProps {
  * Brain-owned phases, Heart chain for Worker phases) with bounded
  * failover. Chain snapshots travel with each AI request;
  * renderer/session-local and resets on workspace switch (schema
- * stays v19).
+ * stays v20).
  */
 export function ModelsSettings(props: ModelsSettingsProps): ReactElement {
   const [addOpen, setAddOpen] = useState(false)

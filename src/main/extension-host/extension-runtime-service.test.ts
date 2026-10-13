@@ -241,13 +241,13 @@ describe('runtime host cooperation', () => {
     }
   })
 
-  it('keeps schema at v19 with no migration 020', async () => {
+  it('keeps schema at v20 with no migration 020', async () => {
     const { readdirSync } = await import('node:fs')
     const { join: joinPath } = await import('node:path')
     const files = readdirSync(joinPath(process.cwd(), 'src', 'main', 'database', 'migrations')).filter(
       (file) => file.endsWith('.ts') && !file.endsWith('.test.ts')
     )
-    assert.ok(files.includes('019-message-attachments.ts'))
-    assert.ok(!files.some((file) => file.startsWith('020')))
+    assert.ok(files.includes('020-looplink-audit.ts'))
+    assert.ok(!files.some((file) => file.startsWith('021')))
   })
 })

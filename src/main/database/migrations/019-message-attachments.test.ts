@@ -15,11 +15,11 @@ function tableExists(db: DatabaseSync, name: string): boolean {
 }
 
 describe('migration 19 (message attachments)', () => {
-  it('fresh database migrates to schema version 19', () => {
+  it('fresh database migrates to schema version 20', () => {
     const db = openFresh()
     try {
-      assert.equal(runMigrations(db, migrations), 19)
-      assert.equal(getUserVersion(db), 19)
+      assert.equal(runMigrations(db, migrations), 20)
+      assert.equal(getUserVersion(db), 20)
       assert.ok(tableExists(db, 'chat_attachments'))
       assert.ok(tableExists(db, 'message_attachments'))
     } finally {
@@ -27,7 +27,7 @@ describe('migration 19 (message attachments)', () => {
     }
   })
 
-  it('v18 database upgrades to v19 preserving existing rows', () => {
+  it('v18 database upgrades to v20 preserving existing rows', () => {
     const db = openFresh()
     try {
       const without19 = migrations.filter((migration) => migration.version <= 18)
@@ -36,8 +36,8 @@ describe('migration 19 (message attachments)', () => {
       db.exec("INSERT INTO workspaces (root_path, display_name, created_at, last_opened_at) VALUES ('w', 'w', 1, 1)")
       db.exec("INSERT INTO coding_sessions (workspace_id, title, created_at, updated_at) VALUES (1, 's', 1, 1)")
       db.exec("INSERT INTO coding_messages (session_id, role, content, created_at) VALUES (1, 'user', 'hi', 1)")
-      assert.equal(runMigrations(db, migrations), 19)
-      assert.equal(getUserVersion(db), 19)
+      assert.equal(runMigrations(db, migrations), 20)
+      assert.equal(getUserVersion(db), 20)
       const workspace: unknown = db.prepare('SELECT COUNT(*) AS n FROM workspaces').get()
       assert.equal(JSON.stringify(workspace), JSON.stringify({ n: 1 }))
       const message: unknown = db.prepare('SELECT COUNT(*) AS n FROM coding_messages').get()
@@ -81,7 +81,7 @@ describe('migration 19 (message attachments)', () => {
     }
   })
 
-  it('rerunning v19 is idempotent and keeps attachment rows', () => {
+  it('rerunning v20 is idempotent and keeps attachment rows', () => {
     const db = openFresh()
     try {
       runMigrations(db, migrations)
@@ -93,7 +93,7 @@ describe('migration 19 (message attachments)', () => {
           'f'.repeat(64) +
           "', 1)"
       )
-      assert.equal(runMigrations(db, migrations), 19)
+      assert.equal(runMigrations(db, migrations), 20)
       const count: unknown = db.prepare('SELECT COUNT(*) AS n FROM chat_attachments').get()
       assert.equal(JSON.stringify(count), JSON.stringify({ n: 1 }))
     } finally {
@@ -104,7 +104,7 @@ describe('migration 19 (message attachments)', () => {
   it('migrations remain registered in ascending order ending at 19', () => {
     assert.deepEqual(
       migrations.map((migration) => migration.version),
-      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     )
   })
 })

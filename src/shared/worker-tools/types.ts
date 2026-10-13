@@ -77,8 +77,8 @@ export interface WorkerToolResult {
   readonly reason?: string
 }
 
-/** Approval lifecycle. Terminal states never transition back. */
-export type WorkerToolApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'consumed'
+/** Approval lifecycle. Terminal states never transition back. `cancelled` is user cancellation while parked (distinct from denied/expired, never CHECK-locked). */
+export type WorkerToolApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'consumed' | 'cancelled'
 
 /** Renderer-safe approval (exact action, no editable args). */
 export interface WorkerToolApproval {

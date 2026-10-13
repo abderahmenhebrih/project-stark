@@ -260,8 +260,13 @@ describe('AI completion service', () => {
       await harness.completion.generateResponse({ workspaceId, sessionId })
       const seen = harness.adapter.seen[0]
       assert.ok(seen !== undefined)
-      // Structural allowlist: exactly the five provider-neutral fields.
-      assert.deepEqual(Object.keys(seen).sort(), ['apiKey', 'instructions', 'maxOutputTokens', 'messages', 'model'])
+      // Structural allowlist: exactly the five provider-neutral fields
+      // plus the optional cancellation signal (an AbortSignal only).
+      const { signal, ...rest } = seen as unknown as Record<string, unknown>
+      assert.deepEqual(Object.keys(rest).sort(), ['apiKey', 'instructions', 'maxOutputTokens', 'messages', 'model'])
+      if (signal !== undefined) {
+        assert.ok(signal instanceof AbortSignal, 'signal must be an AbortSignal when present')
+      }
       assert.equal(seen?.instructions, (await import('./limits')).STAGE_14_FIXED_INSTRUCTIONS)
       assert.ok(!JSON.stringify(seen?.messages ?? []).includes('rootPath'))
     } finally {

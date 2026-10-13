@@ -18,6 +18,7 @@ export type BrainErrorKind =
   | 'synthesis-failed'
   | 'interrupted'
   | 'in-flight'
+  | 'cancelled'
   | 'generic'
 
 export interface NormalizedBrainError {
@@ -33,6 +34,7 @@ const MAIN_SYNTHESIS_FAILED = 'STARK could not complete the final response.'
 const MAIN_INTERRUPTED = 'A previous work run was interrupted. Start a new one explicitly.'
 const MAIN_IN_FLIGHT = 'STARK is already generating a response for this session.'
 const MAIN_START_FAILED = 'We couldn’t start this work run.'
+const MAIN_CANCELLED = 'The AI operation was cancelled.'
 const MAIN_GENERIC = 'We couldn’t complete this work run.'
 
 export const BRAIN_NOTHING_TO_ANSWER_MESSAGE = MAIN_NOTHING_TO_ANSWER
@@ -42,6 +44,7 @@ export const BRAIN_SYNTHESIS_FAILED_MESSAGE = MAIN_SYNTHESIS_FAILED
 export const BRAIN_INTERRUPTED_MESSAGE = MAIN_INTERRUPTED
 export const BRAIN_IN_FLIGHT_MESSAGE = MAIN_IN_FLIGHT
 export const BRAIN_START_FAILED_MESSAGE = MAIN_START_FAILED
+export const BRAIN_CANCELLED_MESSAGE = MAIN_CANCELLED
 export const BRAIN_GENERIC_MESSAGE = MAIN_GENERIC
 
 const KNOWN_OUTCOMES: readonly { readonly kind: BrainErrorKind; readonly mainMessage: string }[] = [
@@ -52,6 +55,7 @@ const KNOWN_OUTCOMES: readonly { readonly kind: BrainErrorKind; readonly mainMes
   { kind: 'interrupted', mainMessage: MAIN_INTERRUPTED },
   { kind: 'in-flight', mainMessage: MAIN_IN_FLIGHT },
   { kind: 'invalid-request', mainMessage: MAIN_START_FAILED },
+  { kind: 'cancelled', mainMessage: MAIN_CANCELLED },
   { kind: 'generic', mainMessage: MAIN_GENERIC }
 ]
 

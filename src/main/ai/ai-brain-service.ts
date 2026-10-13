@@ -33,8 +33,6 @@ import {
 } from './ai-brain-errors'
 import {
   MAX_ASSISTANT_OUTPUT_TOKENS,
-  MAX_AI_CONTEXT_BYTES,
-  MAX_AI_CONTEXT_MESSAGES,
   MAX_BRAIN_FINAL_BYTES,
   MAX_BRAIN_PLAN_SUMMARY_CODEPOINTS,
   MAX_DIRECT_BRAIN_ANSWER_BYTES,
@@ -46,6 +44,7 @@ import {
   STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
   STAGE_18_FIXED_WORKER_INSTRUCTIONS
 } from './limits'
+import { loadBoundedContext } from './context-window'
 import type { AiProviderService } from './ai-provider-service'
 import { AiOperationGuard } from './ai-operation-guard'
 import { deriveStarkRunPolicy } from './stark-run-policy'
@@ -63,7 +62,7 @@ import { attachmentsNeedVision, VisionUnsupportedForModelError, workerAttachment
 import { buildChatAttachmentSection, type ChatAttachmentSection } from './ai-attachment-resolver'
 import { isHostedBuiltinModel } from '../../shared/hosted-models/stark-model-map'
 import { readRequestedModel } from './model-request'
-import { LoopLinkHeartEmptyError, eligibleLoopLinkModels, readLoopLinkChain, runLoopLinkChain } from './looplink-chain'
+import { LoopLinkHeartEmptyError, auditOfOutcome, eligibleLoopLinkModels, readLoopLinkChain, runLoopLinkChain, singleModelAuditFor, withEffort, type LoopLinkStepAuditWithEffort } from './looplink-chain'
 
 const encoder = new TextEncoder()
 
@@ -354,7 +353,7 @@ export class AiBrainService {
   }
 
   async runBrain(payload: unknown): Promise<AiRunBrainResult> {
-    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort', 'model', 'brainModels', 'heartModels'])) {
+    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort', 'model', 'brainModels', 'heartModels', 'disabledBrainModels', 'disabledHeartModels'])) {
       throw new InvalidBrainRequestError('brain request is invalid')
     }
     const record = payload as Record<string, unknown>
@@ -373,13 +372,13 @@ export class AiBrainService {
       effort = record['effort']
     }
     const requestedModel = readRequestedModel(record)
-    const brainChain = readLoopLinkChain(record, 'brainModels', 'brain')
+    const brainChain = readLoopLinkChain(record, 'brainModels', 'brain', 'disabledBrainModels')
     // Heart-empty is deferred: an empty Heart chain only fails when a
     // Heart-required (delegate) phase actually runs. An answer-only
     // plan must not fail on an empty Heart chain.
     const heartChain: readonly string[] | null = (() => {
       try {
-        return readLoopLinkChain(record, 'heartModels', 'heart')
+        return readLoopLinkChain(record, 'heartModels', 'heart', 'disabledHeartModels')
       } catch (error) {
         if (error instanceof LoopLinkHeartEmptyError) {
           return []
@@ -696,7 +695,8 @@ export class AiBrainService {
               ...(brainPolicy.providerReasoningEffort !== null ? { reasoningEffort: brainPolicy.providerReasoningEffort } : {}),
               schemaName: BRAIN_PLAN_SCHEMA_NAME,
               schema: BRAIN_PLAN_JSON_SCHEMA,
-              ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {})
+              ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {}),
+              ...this.guard.signalOptionFor(sessionId)
             })
           )
           plan = this.parseAndValidatePlan(planned.outputText)
@@ -729,7 +729,9 @@ export class AiBrainService {
           providerId: brainRouted.assignment.providerId,
           model: brainModel,
           routeKey: 'primary',
-          requestedProfile: null
+          requestedProfile: null,
+          ...singleModelAuditFor(brainModel),
+          requestedEffort: effort
         }
       )
 
@@ -810,7 +812,8 @@ export class AiBrainService {
             messages: workerMessages,
             maxOutputTokens: workerPolicy.maxOutputTokens,
             ...(workerPolicy.providerReasoningEffort !== null ? { reasoningEffort: workerPolicy.providerReasoningEffort } : {}),
-            ...(workerSection.payloads.length > 0 ? { attachments: workerSection.payloads } : {})
+            ...(workerSection.payloads.length > 0 ? { attachments: workerSection.payloads } : {}),
+            ...this.guard.signalOptionFor(sessionId)
           })
         )
         workerOutput = this.validateWorkerOutput(produced.text)
@@ -832,7 +835,9 @@ export class AiBrainService {
           providerId: workerRouted.assignment.providerId,
           model: workerResolved.model,
           routeKey: workerRoute.routeKey,
-          requestedProfile: workerProfile
+          requestedProfile: workerProfile,
+          ...singleModelAuditFor(workerResolved.model),
+          requestedEffort: effort
         }
       )
 
@@ -862,7 +867,8 @@ export class AiBrainService {
             instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
             messages: synthesisMessages,
             maxOutputTokens: brainPolicy.maxOutputTokens,
-            ...(brainPolicy.providerReasoningEffort !== null ? { reasoningEffort: brainPolicy.providerReasoningEffort } : {})
+            ...(brainPolicy.providerReasoningEffort !== null ? { reasoningEffort: brainPolicy.providerReasoningEffort } : {}),
+            ...this.guard.signalOptionFor(sessionId)
           })
         )
         finalText = this.validateFinalText(synthesized.text)
@@ -884,7 +890,9 @@ export class AiBrainService {
           providerId: brainRouted.assignment.providerId,
           model: brainModel,
           routeKey: 'primary',
-          requestedProfile: null
+          requestedProfile: null,
+          ...singleModelAuditFor(brainModel),
+          requestedEffort: effort
         }
       )
       const { messageId } = this.runs.completeRunWithAssistantMessage(
@@ -949,7 +957,7 @@ export class AiBrainService {
     }
     const loop = this.looplink?.service.getPendingBlock(workspaceId, sessionId) ?? null
     const runId = this.runs.createRun({ workspaceId, sessionId, userMessageId: latest.id, now: this.now() })
-    const isCancelled = (): boolean => this.now() > deadline
+    const isCancelled = (): boolean => this.guard.isCancelRequested(sessionId) || this.now() > deadline
     try {
       this.requireDeadline(deadline)
       const planBase =
@@ -959,6 +967,7 @@ export class AiBrainService {
       let plan: ValidatedBrainPlan
       let planProviderId: string
       let planBrainModel: string
+      let planAudit: LoopLinkStepAuditWithEffort | null = null
       if (brainChain !== null) {
         if (brainChain.length === 0) {
           throw new ProviderModelUnavailableError()
@@ -1000,7 +1009,8 @@ export class AiBrainService {
                   ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
                   schemaName: BRAIN_PLAN_SCHEMA_NAME,
                   schema: BRAIN_PLAN_JSON_SCHEMA,
-                  ...(section.payloads.length > 0 ? { attachments: section.payloads } : {})
+                  ...(section.payloads.length > 0 ? { attachments: section.payloads } : {}),
+                  ...this.guard.signalOptionFor(sessionId)
                 })
               )
               const parsed = this.parseAndValidatePlan(planned.outputText)
@@ -1014,6 +1024,7 @@ export class AiBrainService {
         plan = outcome.result.parsed
         planProviderId = outcome.assignment.providerId
         planBrainModel = outcome.result.resolvedModel
+        planAudit = withEffort(auditOfOutcome(outcome, eligiblePlan), effort)
       } else {
         const resolved = await this.providerService.resolveExplicitAssignment(brainBase.providerId, brainBase.model)
         try {
@@ -1048,7 +1059,8 @@ export class AiBrainService {
                   ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
                   schemaName: BRAIN_PLAN_SCHEMA_NAME,
                   schema: BRAIN_PLAN_JSON_SCHEMA,
-                  ...(section.payloads.length > 0 ? { attachments: section.payloads } : {})
+                  ...(section.payloads.length > 0 ? { attachments: section.payloads } : {}),
+                  ...this.guard.signalOptionFor(sessionId)
                 })
               )
               plan = this.parseAndValidatePlan(planned.outputText)
@@ -1058,11 +1070,13 @@ export class AiBrainService {
                 throw error
               }
               attempts += 1
+              this.guard.throwIfCancelled(sessionId)
               this.requireDeadline(deadline)
             }
           }
           planProviderId = brainBase.providerId
           planBrainModel = resolved.model
+          planAudit = withEffort(singleModelAuditFor(resolved.model), effort)
         } finally {
           void resolved.apiKey
         }
@@ -1082,7 +1096,8 @@ export class AiBrainService {
           providerId: planProviderId,
           model: planBrainModel,
           routeKey: 'primary',
-          requestedProfile: null
+          requestedProfile: null,
+          ...(planAudit ?? { ...singleModelAuditFor(planBrainModel), requestedEffort: effort })
         }
       )
       if (plan.action === 'answer') {
@@ -1105,6 +1120,7 @@ export class AiBrainService {
       let workerOutput: string
       let workerProviderId: string
       let workerResolvedModel: string
+      let workerAudit: LoopLinkStepAuditWithEffort | null = null
       if (heartChain !== null) {
         if (heartChain.length === 0) {
           throw new LoopLinkHeartEmptyError()
@@ -1146,7 +1162,8 @@ export class AiBrainService {
                   messages: workerMessages,
                   maxOutputTokens: policy.maxOutputTokens,
                   ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
-                  ...(section.payloads.length > 0 ? { attachments: section.payloads } : {})
+                  ...(section.payloads.length > 0 ? { attachments: section.payloads } : {}),
+                  ...this.guard.signalOptionFor(sessionId)
                 })
               )
               const output = this.validateWorkerOutput(produced.text)
@@ -1160,6 +1177,7 @@ export class AiBrainService {
         workerOutput = outcome.result.output
         workerProviderId = outcome.assignment.providerId
         workerResolvedModel = outcome.result.resolvedModel
+        workerAudit = withEffort(auditOfOutcome(outcome, eligibleWorker), effort)
       } else {
         const workerRoute = this.heart.resolveWorkerForAttachments(routing, workerProfile, chatVision.needsVision)
         const resolved = await this.providerService.resolveExplicitAssignment(
@@ -1189,12 +1207,14 @@ export class AiBrainService {
               messages: workerMessages,
               maxOutputTokens: policy.maxOutputTokens,
               ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
-              ...(section.payloads.length > 0 ? { attachments: section.payloads } : {})
+              ...(section.payloads.length > 0 ? { attachments: section.payloads } : {}),
+              ...this.guard.signalOptionFor(sessionId)
             })
           )
           workerOutput = this.validateWorkerOutput(produced.text)
           workerProviderId = workerRoute.assignment.providerId
           workerResolvedModel = resolved.model
+          workerAudit = withEffort(singleModelAuditFor(resolved.model), effort)
         } finally {
           void resolved.apiKey
         }
@@ -1214,13 +1234,15 @@ export class AiBrainService {
           providerId: workerProviderId,
           model: workerResolvedModel,
           routeKey: 'fixed',
-          requestedProfile: workerProfile
+          requestedProfile: workerProfile,
+          ...(workerAudit ?? { ...singleModelAuditFor(workerResolvedModel), requestedEffort: effort })
         }
       )
       const synthesisMessages = this.buildSynthesisMessages(context, plan.planSummary, workerInstruction, workerOutput)
       let finalText: string
       let synthProviderId: string
       let synthModel: string
+      let synthAudit: LoopLinkStepAuditWithEffort | null = null
       if (brainChain !== null) {
         const eligibleSynth = eligibleLoopLinkModels(brainChain, { needsStructured: false, needsVision: false })
         if (eligibleSynth.length === 0) {
@@ -1243,7 +1265,8 @@ export class AiBrainService {
                   instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
                   messages: synthesisMessages,
                   maxOutputTokens: policy.maxOutputTokens,
-                  ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {})
+                  ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
+                  ...this.guard.signalOptionFor(sessionId)
                 })
               )
               const final = this.validateFinalText(synthesized.text)
@@ -1257,6 +1280,7 @@ export class AiBrainService {
         finalText = outcome.result.final
         synthProviderId = outcome.assignment.providerId
         synthModel = outcome.result.resolvedModel
+        synthAudit = withEffort(auditOfOutcome(outcome, eligibleSynth), effort)
       } else {
         const resolved = await this.providerService.resolveExplicitAssignment(brainBase.providerId, brainBase.model)
         try {
@@ -1272,12 +1296,14 @@ export class AiBrainService {
               instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
               messages: synthesisMessages,
               maxOutputTokens: policy.maxOutputTokens,
-              ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {})
+              ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
+              ...this.guard.signalOptionFor(sessionId)
             })
           )
           finalText = this.validateFinalText(synthesized.text)
           synthProviderId = brainBase.providerId
           synthModel = resolved.model
+          synthAudit = withEffort(singleModelAuditFor(resolved.model), effort)
         } finally {
           void resolved.apiKey
         }
@@ -1297,7 +1323,8 @@ export class AiBrainService {
           providerId: synthProviderId,
           model: synthModel,
           routeKey: 'primary',
-          requestedProfile: null
+          requestedProfile: null,
+          ...(synthAudit ?? { ...singleModelAuditFor(synthModel), requestedEffort: effort })
         }
       )
       const { messageId } = this.runs.completeRunWithAssistantMessage(
@@ -1450,7 +1477,8 @@ export class AiBrainService {
             maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
             schemaName: BRAIN_PLAN_SCHEMA_NAME,
             schema: BRAIN_PLAN_JSON_SCHEMA,
-            ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {})
+            ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {}),
+            ...this.guard.signalOptionFor(sessionId)
           })
         )
         plan = this.parseAndValidatePlan(planned.outputText)
@@ -1472,7 +1500,8 @@ export class AiBrainService {
           providerId: recovery.brain.providerId,
           model: brainModel,
           routeKey: 'recovery',
-          requestedProfile: null
+          requestedProfile: null,
+          ...withEffort(singleModelAuditFor(brainModel), 'regular')
         }
       )
       if (plan.action === 'answer') {
@@ -1520,7 +1549,8 @@ export class AiBrainService {
             instructions: STAGE_18_FIXED_WORKER_INSTRUCTIONS,
             messages: workerMessages,
             maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
-            ...(workerSection.payloads.length > 0 ? { attachments: workerSection.payloads } : {})
+            ...(workerSection.payloads.length > 0 ? { attachments: workerSection.payloads } : {}),
+            ...this.guard.signalOptionFor(sessionId)
           })
         )
         workerOutput = this.validateWorkerOutput(produced.text)
@@ -1542,7 +1572,8 @@ export class AiBrainService {
           providerId: recovery.worker.providerId,
           model: workerResolved.model,
           routeKey: 'recovery',
-          requestedProfile: workerProfile
+          requestedProfile: workerProfile,
+          ...withEffort(singleModelAuditFor(workerResolved.model), 'regular')
         }
       )
       this.requireDeadline(deadline)
@@ -1565,7 +1596,8 @@ export class AiBrainService {
             model: synthesisResolved.model,
             instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
             messages: synthesisMessages,
-            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+            ...this.guard.signalOptionFor(sessionId)
           })
         )
         finalText = this.validateFinalText(synthesized.text)
@@ -1587,7 +1619,8 @@ export class AiBrainService {
           providerId: recovery.brain.providerId,
           model: brainModel,
           routeKey: 'recovery',
-          requestedProfile: null
+          requestedProfile: null,
+          ...withEffort(singleModelAuditFor(brainModel), 'regular')
         }
       )
       const { messageId } = this.runs.completeRunWithAssistantMessage(
@@ -1684,7 +1717,8 @@ export class AiBrainService {
             maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
             schemaName: BRAIN_PLAN_SCHEMA_NAME,
             schema: BRAIN_PLAN_JSON_SCHEMA,
-            ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {})
+            ...(planSection.payloads.length > 0 ? { attachments: planSection.payloads } : {}),
+            ...this.guard.signalOptionFor(sessionId)
           })
         )
         plan = this.parseAndValidatePlan(planned.outputText)
@@ -1706,7 +1740,8 @@ export class AiBrainService {
           providerId: recovery.brain.providerId,
           model: brainModel,
           routeKey: 'recovery',
-          requestedProfile: null
+          requestedProfile: null,
+          ...withEffort(singleModelAuditFor(brainModel), 'regular')
         }
       )
       if (plan.action === 'answer') {
@@ -1743,7 +1778,8 @@ export class AiBrainService {
             instructions: STAGE_18_FIXED_WORKER_INSTRUCTIONS,
             messages: workerMessages,
             maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
-            ...(workerSection.payloads.length > 0 ? { attachments: workerSection.payloads } : {})
+            ...(workerSection.payloads.length > 0 ? { attachments: workerSection.payloads } : {}),
+            ...this.guard.signalOptionFor(sessionId)
           })
         )
         workerOutput = this.validateWorkerOutput(produced.text)
@@ -1765,7 +1801,8 @@ export class AiBrainService {
           providerId: recovery.worker.providerId,
           model: workerResolved.model,
           routeKey: 'recovery',
-          requestedProfile: workerProfile
+          requestedProfile: workerProfile,
+          ...withEffort(singleModelAuditFor(workerResolved.model), 'regular')
         }
       )
       this.requireDeadline(deadline)
@@ -1788,7 +1825,8 @@ export class AiBrainService {
             model: synthesisResolved.model,
             instructions: STAGE_18_FIXED_BRAIN_SYNTHESIS_INSTRUCTIONS,
             messages: synthesisMessages,
-            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS
+            maxOutputTokens: MAX_ASSISTANT_OUTPUT_TOKENS,
+            ...this.guard.signalOptionFor(sessionId)
           })
         )
         finalText = this.validateFinalText(synthesized.text)
@@ -1810,7 +1848,8 @@ export class AiBrainService {
           providerId: recovery.brain.providerId,
           model: brainModel,
           routeKey: 'recovery',
-          requestedProfile: null
+          requestedProfile: null,
+          ...withEffort(singleModelAuditFor(brainModel), 'regular')
         }
       )
       return { runId, finalText, action: 'delegate', planSummary: plan.planSummary, looplinkId: loop?.looplinkId ?? null }
@@ -2000,22 +2039,11 @@ export class AiBrainService {
 
   /**
    * Newest session messages within both context budgets, returned
-   * chronologically — same budgets as the other AI paths.
+   * chronologically. Shared bounded loader (see context-window) —
+   * same budgets as the other AI paths.
    */
   loadContext(sessionId: number): { readonly role: 'user' | 'assistant'; readonly content: string }[] {
-    const probe = this.sessions.listMessagesNewestFirst(sessionId, MAX_AI_CONTEXT_MESSAGES, null)
-    const kept = [...probe.slice(0, MAX_AI_CONTEXT_MESSAGES)]
-    let total = 0
-    for (const entry of kept) {
-      total += encoder.encode(entry.content).byteLength
-    }
-    while (kept.length > 1 && total > MAX_AI_CONTEXT_BYTES) {
-      const dropped = kept.pop()
-      if (dropped !== undefined) {
-        total -= encoder.encode(dropped.content).byteLength
-      }
-    }
-    return kept.reverse().map((entry) => ({ role: entry.role, content: entry.content }))
+    return loadBoundedContext(this.sessions, sessionId)
   }
 
   private toResult(runId: number, messageId: number): AiRunBrainResult {
@@ -2093,7 +2121,12 @@ export class AiBrainService {
                 providerId: audit.providerId,
                 model: audit.model,
                 routeKey: audit.routeKey,
-                requestedProfile: audit.requestedProfile
+                requestedProfile: audit.requestedProfile,
+                attempts: audit.attempts,
+                failoverNote: audit.failoverNote,
+                attemptedModels: audit.attemptedModels,
+                requestedChain: audit.requestedChain,
+                requestedEffort: audit.requestedEffort
               }
       }
     })

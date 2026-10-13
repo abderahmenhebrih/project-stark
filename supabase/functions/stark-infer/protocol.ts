@@ -397,9 +397,19 @@ export function normalizeUpstreamResponse(body: unknown): NormalizedInferResult 
   return { text, toolCalls, usage }
 }
 
-/** Maps an upstream HTTP status to a stable desktop error code. */
+/**
+ * Maps an upstream HTTP status to a stable desktop error code.
+ * 429 is a genuine rate limit (`hosted_rate_limited`); 502/503/529
+ * signal overloaded or unavailable capacity (`hosted_capacity_limited`);
+ * everything else is an undifferentiated upstream failure. Codes
+ * only — never upstream bodies. The entrypoint uses this single
+ * mapping so the two throttling shapes stay semantically distinct.
+ */
 export function mapUpstreamStatus(status: number): InferErrorCode {
   if (status === 429) {
+    return 'hosted_rate_limited'
+  }
+  if (status === 502 || status === 503 || status === 529) {
     return 'hosted_capacity_limited'
   }
   if (status === 401 || status === 403) {

@@ -312,6 +312,18 @@ describe('looplink Work runtime (Brain + Heart)', () => {
       // No hardcoded fallback: the worker audit must be one of the
       // Heart chain ids, never an injected unrelated model.
       assert.ok([H1, H2].includes(workerStep?.modelAudit?.model as string))
+      // LoopLink execution truth persists on the step (Phase E).
+      assert.equal(workerStep?.modelAudit?.attempts, 2)
+      assert.deepEqual([...(workerStep?.modelAudit?.attemptedModels ?? [])], [H1, H2])
+      assert.deepEqual([...(workerStep?.modelAudit?.requestedChain ?? [])], [H1, H2])
+      assert.ok(
+        workerStep?.modelAudit?.failoverNote !== null &&
+          (workerStep?.modelAudit?.failoverNote as string).includes(H2),
+        'failover note must name the executor'
+      )
+      const planStep = result.run.steps.find((step) => step.kind === 'brain_plan')
+      assert.equal(planStep?.modelAudit?.attempts, 1)
+      assert.equal(planStep?.modelAudit?.failoverNote, null)
     } finally {
       h.db.close()
     }

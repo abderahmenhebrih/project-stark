@@ -24,7 +24,7 @@ import { effectiveSelectedModel } from '../settings/sections/models/model-compat
  * confirm()); confirming deletes the credential through the narrow
  * main-owned path and cleans renderer state (models, selection,
  * LoopLink openai:* entries) while STARK Free, Google auth, hosted
- * inference, and schema v19 stay untouched.
+ * inference, and schema v20 stay untouched.
  */
 
 function readSource(...parts: string[]): string {
@@ -261,11 +261,11 @@ describe('provider disconnect: LoopLink cleanup', () => {
 })
 
 describe('provider disconnect: no collateral changes', () => {
-  it('schema remains v19 with no migration', () => {
+  it('schema remains v20 with no migration', () => {
     const dir = join(process.cwd(), 'src', 'main', 'database', 'migrations')
     const files = readdirSync(dir).filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
-    assert.ok(files.includes('019-message-attachments.ts'), 'migration 019 must exist (schema v19)')
-    assert.ok(!files.some((file) => file.startsWith('020')), 'no migration 020 may appear')
+    assert.ok(files.includes('020-looplink-audit.ts'), 'migration 020 must exist (schema v20)')
+    assert.ok(!files.some((file) => file.startsWith('021')), 'no migration 020 may appear')
   })
 
   it('adds no generic credential IPC (openai-scoped deletion only)', () => {

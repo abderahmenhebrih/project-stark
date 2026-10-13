@@ -3,6 +3,7 @@ import { describe, it } from 'node:test'
 import {
   GenerationInFlightError,
   InvalidProviderRequestError,
+  ProviderGenericError,
   ProviderModelUnavailableError,
   ProviderRateLimitedError,
   ProviderTimeoutError,
@@ -14,10 +15,12 @@ import { VisionUnsupportedForModelError } from './ai-attachment-context'
 import {
   LoopLinkBrainEmptyError,
   LoopLinkHeartEmptyError,
+  auditOfOutcome,
   eligibleLoopLinkModels,
   isRetryableLoopLinkError,
   readLoopLinkChain,
-  runLoopLinkChain
+  runLoopLinkChain,
+  singleModelAuditFor
 } from './looplink-chain'
 
 const A = 'builtin:gpt-5.6-luna'
@@ -46,6 +49,54 @@ describe('looplink failure classification', () => {
       assert.equal(isRetryableLoopLinkError(fatal), false)
     }
   })
+
+  it('generic failures fail over only with transient cause evidence', () => {
+    // Bare generics (no cause, e.g. upstream shape violations) fail closed.
+    assert.equal(isRetryableLoopLinkError(new ProviderGenericError()), false)
+    // Non-transient causes fail closed: auth shapes, 4xx, unknown shapes.
+    for (const cause of [{ status: 401 }, { status: 403 }, { status: 404 }, { status: 400 }, { model: 'x' }, 'mystery']) {
+      assert.equal(isRetryableLoopLinkError(new ProviderGenericError({ cause })), false, JSON.stringify(cause))
+    }
+    // Transient evidence still fails over: 5xx, 429/408, timeout/network markers.
+    for (const cause of [
+      { status: 500 },
+      { status: 502 },
+      { status: 429 },
+      { status: 408 },
+      { code: 'ETIMEDOUT' },
+      { code: 'ENOTFOUND' },
+      new Error('request timed out'),
+      new Error('fetch failed'),
+      { name: 'APIConnectionError' }
+    ]) {
+      assert.equal(isRetryableLoopLinkError(new ProviderGenericError({ cause })), true, JSON.stringify(cause))
+    }
+  })
+
+  it('generic without transient cause never burns the chain', async () => {
+    const called: string[] = []
+    await assert.rejects(
+      runLoopLinkChain([A, B], async (modelId) => {
+        called.push(modelId)
+        throw new ProviderGenericError()
+      }),
+      (error: unknown) => error instanceof ProviderGenericError
+    )
+    assert.deepEqual(called, [A])
+  })
+
+  it('generic with a 5xx cause still fails over', async () => {
+    const called: string[] = []
+    const outcome = await runLoopLinkChain([A, B], async (modelId) => {
+      called.push(modelId)
+      if (modelId === A) {
+        throw new ProviderGenericError({ cause: { status: 503 } })
+      }
+      return 'b-ok'
+    })
+    assert.deepEqual(called, [A, B])
+    assert.equal(outcome.modelId, B)
+  })
 })
 
 describe('looplink bounded failover', () => {
@@ -59,6 +110,7 @@ describe('looplink bounded failover', () => {
     assert.equal(outcome.modelId, A)
     assert.equal(outcome.attempts, 1)
     assert.equal(outcome.failoverNote, null)
+    assert.deepEqual([...outcome.attemptedModelIds], [A])
   })
 
   it('retryable failure advances in UI order (A->B)', async () => {
@@ -72,6 +124,8 @@ describe('looplink bounded failover', () => {
     })
     assert.deepEqual(called, [A, B])
     assert.equal(outcome.modelId, B)
+    assert.equal(outcome.attempts, 2)
+    assert.deepEqual([...outcome.attemptedModelIds], [A, B])
     assert.ok(outcome.failoverNote !== null && outcome.failoverNote.includes(B))
   })
 
@@ -86,6 +140,8 @@ describe('looplink bounded failover', () => {
     })
     assert.deepEqual(called, [A, B, C])
     assert.equal(outcome.modelId, C)
+    assert.equal(outcome.attempts, 3)
+    assert.deepEqual([...outcome.attemptedModelIds], [A, B, C])
   })
 
   it('reorder changes the first model used', async () => {
@@ -173,5 +229,110 @@ describe('looplink chain IPC validation', () => {
   it('eligible filtering preserves order for phases', () => {
     const eligible = eligibleLoopLinkModels(['builtin:longcat-2.0', A], { needsStructured: true, needsVision: false })
     assert.deepEqual([...eligible], [A])
+  })
+
+  it('main authority ignores renderer disabled lists (legacy tolerance, never trusted)', () => {
+    // Genuinely executable models pass regardless of disabled-list forgery.
+    assert.deepEqual(readLoopLinkChain({ brainModels: [A, B] }, 'brainModels', 'brain'), [A, B])
+    assert.deepEqual(
+      readLoopLinkChain({ brainModels: [A, B], disabledBrainModels: [C] }, 'brainModels', 'brain', 'disabledBrainModels'),
+      [A, B]
+    )
+    // 1. omits disabled list completely → still validated by main authority.
+    assert.deepEqual(readLoopLinkChain({ brainModels: [A] }, 'brainModels', 'brain', 'disabledBrainModels'), [A])
+    // 2. sends [] → same outcome (disabled lists never decide).
+    assert.deepEqual(
+      readLoopLinkChain({ brainModels: [A], disabledBrainModels: [] }, 'brainModels', 'brain', 'disabledBrainModels'),
+      [A]
+    )
+    // 3. falsely reports an enabled model as disabled → IGNORED, chain still passes.
+    assert.deepEqual(
+      readLoopLinkChain({ brainModels: [A], disabledBrainModels: [A] }, 'brainModels', 'brain', 'disabledBrainModels'),
+      [A]
+    )
+    // 4. sends a stale roster → IGNORED, chain still passes.
+    assert.deepEqual(
+      readLoopLinkChain(
+        { brainModels: [A], disabledBrainModels: [B, C, 'builtin:unknown-x'] },
+        'brainModels',
+        'brain',
+        'disabledBrainModels'
+      ),
+      [A]
+    )
+    // Malformed disabled values are tolerated (ignored), never authoritative.
+    for (const bad of ['x', 7, [7], [''], [A, 7], new Array(1025).fill(A)]) {
+      assert.deepEqual(
+        readLoopLinkChain({ brainModels: [A], disabledBrainModels: bad }, 'brainModels', 'brain', 'disabledBrainModels'),
+        [A]
+      )
+    }
+  })
+
+  it('forged chains fail closed on main executability (not on renderer lists)', () => {
+    // 5. unknown model → rejected (never an open proxy).
+    assert.throws(
+      () => readLoopLinkChain({ brainModels: ['builtin:unknown-x'] }, 'brainModels', 'brain', 'disabledBrainModels'),
+      ProviderModelUnavailableError
+    )
+    // 6. administratively disabled known-syntax model (incompatible BYOK family) → rejected
+    // even when the renderer omits, empties, or falsifies the disabled list.
+    for (const forged of [
+      { brainModels: ['openai:whisper-1'] },
+      { brainModels: ['openai:whisper-1'], disabledBrainModels: [] },
+      { brainModels: ['openai:whisper-1'], disabledBrainModels: [A] },
+      { brainModels: [A, 'openai:text-embedding-3-small'] },
+      { brainModels: ['openai:dall-e-3'], disabledBrainModels: ['builtin:unknown-x'] }
+    ]) {
+      assert.throws(
+        () => readLoopLinkChain(forged, 'brainModels', 'brain', 'disabledBrainModels'),
+        ProviderModelUnavailableError,
+        JSON.stringify(forged)
+      )
+    }
+    // 7. valid enabled models pass (the only passing class).
+    assert.deepEqual(readLoopLinkChain({ brainModels: [A] }, 'brainModels', 'brain', 'disabledBrainModels'), [A])
+    assert.deepEqual(
+      readLoopLinkChain({ brainModels: [A, 'openai:gpt-4o'] }, 'brainModels', 'brain', 'disabledBrainModels'),
+      [A, 'openai:gpt-4o']
+    )
+  })
+
+  it('chain eligibility does not depend on renderer-provided disabled arrays (architecture)', () => {
+    const chain = { brainModels: [A, B] }
+    const variants: readonly Record<string, unknown>[] = [
+      chain,
+      { ...chain, disabledBrainModels: [] },
+      { ...chain, disabledBrainModels: [C] },
+      { ...chain, disabledBrainModels: [A] },
+      { ...chain, disabledBrainModels: 'garbage' },
+      { ...chain, disabledBrainModels: new Array(1025).fill(A) }
+    ]
+    for (const variant of variants) {
+      assert.deepEqual(readLoopLinkChain(variant, 'brainModels', 'brain', 'disabledBrainModels'), [A, B])
+    }
+    // Disabled-class entries fail identically across all disabled-list forgeries.
+    const badVariants: readonly Record<string, unknown>[] = [
+      { brainModels: ['openai:whisper-1'] },
+      { brainModels: ['openai:whisper-1'], disabledBrainModels: [] },
+      { brainModels: ['openai:whisper-1'], disabledBrainModels: [A, B, C] }
+    ]
+    for (const variant of badVariants) {
+      assert.throws(
+        () => readLoopLinkChain(variant, 'brainModels', 'brain', 'disabledBrainModels'),
+        ProviderModelUnavailableError
+      )
+    }
+  })
+
+  it('audit helpers preserve attempt truth without secrets', () => {
+    const audit = auditOfOutcome({ attempts: 2, failoverNote: 'Switched to b.', attemptedModelIds: [A, B] }, [A, B, C])
+    assert.equal(audit.attempts, 2)
+    assert.equal(audit.failoverNote, 'Switched to b.')
+    assert.deepEqual([...audit.attemptedModels], [A, B])
+    assert.deepEqual([...audit.requestedChain], [A, B, C])
+    assert.ok(!JSON.stringify(audit).includes('sk-'), 'audit must never carry credentials')
+    const direct = singleModelAuditFor(A)
+    assert.deepEqual({ ...direct }, { attempts: 1, failoverNote: null, attemptedModels: [A], requestedChain: [A] })
   })
 })

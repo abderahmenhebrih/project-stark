@@ -173,6 +173,37 @@ describe('default model selection', () => {
   it('replaces a disappeared selection deterministically', () => {
     assert.equal(chooseDefaultModel('openai', ['gpt-4o', 'o3-mini'], 'gpt-4-retired'), 'gpt-4o')
   })
+
+  it('prefers the current flagship family for new-generation accounts', () => {
+    assert.ok(MODEL_PREFERENCE_ORDER.includes('gpt-5'))
+    assert.ok(MODEL_PREFERENCE_ORDER.includes('gpt-5-mini'))
+    // Only new-generation models: flagship wins.
+    assert.equal(chooseDefaultModel('openai', ['gpt-5', 'gpt-5-mini'], null), 'gpt-5')
+    assert.equal(chooseDefaultModel('openai', ['gpt-5-mini'], null), 'gpt-5-mini')
+    // Mixed old/new: flagship family beats the older default.
+    assert.equal(chooseDefaultModel('openai', ['gpt-4o', 'gpt-5'], null), 'gpt-5')
+    assert.equal(chooseDefaultModel('openai', ['gpt-4o', 'gpt-5-mini'], null), 'gpt-5-mini')
+    // Family variants rank with their entry without churn.
+    assert.equal(chooseDefaultModel('openai', ['gpt-5-2026-01-01', 'gpt-4o'], null), 'gpt-5-2026-01-01')
+    // Exact flagship beats its own mini when both are present.
+    assert.equal(chooseDefaultModel('openai', ['gpt-5-mini', 'gpt-5'], null), 'gpt-5')
+    // Stale selection on a new account falls forward, not to legacy.
+    assert.equal(chooseDefaultModel('openai', ['gpt-5', 'gpt-4o'], 'gpt-4-retired'), 'gpt-5')
+  })
+
+  it('keeps family matching from swallowing sibling flagships', () => {
+    // gpt-4 must not claim gpt-4o / gpt-4.1 through bare-letter continuation.
+    assert.equal(chooseDefaultModel('openai', ['gpt-4o', 'gpt-4'], null), 'gpt-4o')
+    assert.equal(chooseDefaultModel('openai', ['gpt-4.1', 'gpt-4'], null), 'gpt-4.1')
+    // Exact base beats its mini variant when both are discovered.
+    assert.equal(chooseDefaultModel('openai', ['gpt-4o-mini', 'gpt-4o'], null), 'gpt-4o')
+  })
+
+  it('falls back deterministically when no preferred family exists', () => {
+    // Unknown-but-compatible ids keep discovery (sorted) order.
+    assert.equal(chooseDefaultModel('openai', ['future-chat-a', 'future-chat-b'], null), 'future-chat-a')
+    assert.equal(chooseDefaultModel('openai', ['future-chat-b', 'future-chat-a'], null), 'future-chat-b')
+  })
 })
 
 describe('discovery failure, retry, and restart', () => {
@@ -287,10 +318,10 @@ describe('discovery security', () => {
     }
   })
 
-  it('schema remains v19 with no migration', () => {
+  it('schema remains v20 with no migration', () => {
     const dir = join(process.cwd(), 'src', 'main', 'database', 'migrations')
     const files = readdirSync(dir).filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
-    assert.ok(files.includes('019-message-attachments.ts'), 'migration 019 must exist (schema v19)')
-    assert.ok(!files.some((file) => file.startsWith('020')), 'no migration 020 may appear')
+    assert.ok(files.includes('020-looplink-audit.ts'), 'migration 020 must exist (schema v20)')
+    assert.ok(!files.some((file) => file.startsWith('021')), 'no migration 020 may appear')
   })
 })

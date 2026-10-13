@@ -1,4 +1,4 @@
-import type { AiChangeSetProposalResult, AiFileChangeProposalResult, AiGenerateRequest, AiGenerateResult, AiProposeChangeSetRequest, AiProposeFileChangeRequest, AiRunBrainRequest, AiRunBrainResult, AskRecoveryResult, WorkRecoveryResult } from '../../../shared/ai/types'
+import type { AiCancelOperationRequest, AiCancelOperationResult, AiChangeSetProposalResult, AiFileChangeProposalResult, AiGenerateRequest, AiGenerateResult, AiProposeChangeSetRequest, AiProposeFileChangeRequest, AiRunBrainRequest, AiRunBrainResult, AskRecoveryResult, WorkRecoveryResult } from '../../../shared/ai/types'
 import type {
   AiProviderState,
   ProviderConnectionResult,
@@ -167,4 +167,22 @@ export function runBrainWorkRaw(request: AiRunBrainRequest): Promise<WorkRecover
     return Promise.reject(new Error('We couldn’t complete this work run.'))
   }
   return api(request) as Promise<WorkRecoveryResult>
+}
+
+/**
+ * Requests cancellation of the session's ACTIVE AI operation.
+ * Resolves true when an operation was active (cancel recorded),
+ * false when idle or when the bridge is unavailable (nothing to
+ * cancel — never an error). Main owns cancellation authority; the
+ * renderer only requests. Session-scoped, never global.
+ */
+export function cancelAiOperation(request: AiCancelOperationRequest): Promise<boolean> {
+  const api = getStarkApi()?.ai.cancelOperation
+  if (api === undefined) {
+    return Promise.resolve(false)
+  }
+  return (api(request) as Promise<AiCancelOperationResult>).then(
+    (result) => result.cancelled === true,
+    () => false
+  )
 }

@@ -111,6 +111,15 @@ export interface SessionUsageSummary {
   /** Latest provider-reported input-token count, or null when unreported. */
   readonly latestInputTokens: number | null
   readonly telemetryComplete: boolean
+  /**
+   * Newest successfully executed provider/model for the session in
+   * the window (the actual executor, not the requested selector).
+   * Null when nothing succeeded — never inferred, never estimated.
+   * Failover detail (attempts, chain) lives on orchestration run
+   * steps; this is the last-writer executor only.
+   */
+  readonly lastExecutorProviderId: string | null
+  readonly lastExecutorModel: string | null
 }
 
 /** Session-scoped usage request: session id only. */

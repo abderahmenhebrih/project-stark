@@ -73,7 +73,9 @@ describe('per-session usage', () => {
         outputTokens: 0,
         totalTokens: 0,
         latestInputTokens: null,
-        telemetryComplete: true
+        telemetryComplete: true,
+        lastExecutorProviderId: null,
+        lastExecutorModel: null
       })
       const reserved = repo.reserveEvent({
         providerId: 'openai', model: 'm', operation: 'ask', role: 'ask',
@@ -88,6 +90,38 @@ describe('per-session usage', () => {
       assert.equal(partial.telemetryComplete, false)
       assert.throws(() => service.getSessionSummary(0))
       assert.throws(() => service.getSessionSummary('1'))
+    } finally {
+      db.close()
+    }
+  })
+
+  it('reports the actual executor distinct from earlier attempts', () => {
+    const { db, repo } = openRepo()
+    try {
+      seedScope(db)
+      const service = new AiUsageService(repo, new ProviderRegistry(), { now: () => 2000 })
+      // First attempt fails (failover source), second succeeds (executor).
+      const failed = repo.reserveEvent({
+        providerId: 'stark', model: 'builtin:gpt-5.6-luna', operation: 'ask', role: 'ask',
+        workspaceId: 1, sessionId: 1, runId: 1, now: 1000
+      })
+      repo.finalizeFailure(failed.id, { failureCategory: 'provider-timeout', latencyMs: 5, now: 1005 })
+      assert.deepEqual(repo.latestSessionExecutor(1, 0), null, 'failures are not executors')
+      const won = repo.reserveEvent({
+        providerId: 'stark', model: 'builtin:deepseek-v4.1-flash', operation: 'ask', role: 'ask',
+        workspaceId: 1, sessionId: 1, runId: 1, now: 1010
+      })
+      repo.finalizeSuccess(won.id, { inputTokens: 10, outputTokens: 5, totalTokens: 15, latencyMs: 5, now: 1015 })
+      assert.deepEqual(repo.latestSessionExecutor(1, 0), {
+        providerId: 'stark',
+        model: 'builtin:deepseek-v4.1-flash'
+      })
+      const summary = service.getSessionSummary(1)
+      assert.equal(summary.lastExecutorProviderId, 'stark')
+      assert.equal(summary.lastExecutorModel, 'builtin:deepseek-v4.1-flash')
+      // Other sessions and empty sessions stay isolated/unknown.
+      assert.deepEqual(repo.latestSessionExecutor(2, 0), null)
+      assert.equal(service.getSessionSummary(2).lastExecutorModel, null)
     } finally {
       db.close()
     }

@@ -7,6 +7,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { runMigrations, migrations } from '../database/migrations/index'
 import type { CredentialProtector } from '../ai/credential-protector'
 import type { CloudAccountStatus } from '../../shared/cloud-account/types'
+import { CloudAuthExchangeFailedError } from './cloud-account-errors'
 import { STARK_AUTH_REDIRECT_URI } from './cloud-account-limits'
 import { CloudAccountRepository } from './cloud-account-repository'
 import { SessionProtector } from './cloud-auth-session-store'
@@ -247,5 +248,74 @@ describe('PKCE callback handling', () => {
     } finally {
       db.close()
     }
+  })
+})
+
+describe('provider attribution without silent defaults', () => {
+  function adapterWithUser(user: unknown): SupabaseAuthAdapter {
+    const fake = {
+      auth: {
+        exchangeCodeForSession: async (): Promise<unknown> => ({
+          data: {
+            session: { access_token: 'ACCESS', refresh_token: 'REFRESH', expires_at: null, user: { id: 'user-123' } },
+            user
+          },
+          error: null
+        }),
+        setSession: async (): Promise<unknown> => ({
+          data: {
+            session: { access_token: 'ACCESS', refresh_token: 'REFRESH', expires_at: null, user: { id: 'user-123' } },
+            user
+          },
+          error: null
+        }),
+        signOut: async (): Promise<unknown> => ({ error: null })
+      },
+      from: () => ({ upsert: async (): Promise<unknown> => ({ error: null }) })
+    }
+    return new SupabaseAuthAdapter(VALID_CONFIG, () => fake as unknown as SupabaseClient)
+  }
+
+  const envelope = { accessToken: 'ACCESS', refreshToken: 'REFRESH', expiresAt: null, userId: 'user-123' }
+
+  it('explicit attempt context decides github without metadata', async () => {
+    const adapter = adapterWithUser({ id: 'user-123' })
+    const result = await adapter.exchangeCode('code-1', 'github')
+    assert.equal(result.identity.provider, 'github')
+  })
+
+  it('explicit attempt context decides google without metadata', async () => {
+    const adapter = adapterWithUser({ id: 'user-123' })
+    const result = await adapter.exchangeCode('code-1', 'google')
+    assert.equal(result.identity.provider, 'google')
+  })
+
+  it('server app_metadata decides when no explicit context exists', async () => {
+    const adapter = adapterWithUser({ id: 'user-123', app_metadata: { provider: 'github' } })
+    const result = await adapter.exchangeCode('code-1')
+    assert.equal(result.identity.provider, 'github')
+  })
+
+  it('fails closed with neither context nor server metadata (never a silent default)', async () => {
+    const adapter = adapterWithUser({ id: 'user-123' })
+    await assert.rejects(adapter.exchangeCode('code-1'), CloudAuthExchangeFailedError)
+  })
+
+  it('rejects tampered server metadata providers', async () => {
+    const adapter = adapterWithUser({ id: 'user-123', app_metadata: { provider: 'evil' } })
+    await assert.rejects(adapter.exchangeCode('code-1'), CloudAuthExchangeFailedError)
+    const displayNameSpoof = adapterWithUser({ id: 'user-123', app_metadata: { provider: 'google', full_name: 'x' } })
+    const result = await displayNameSpoof.exchangeCode('code-1', 'github')
+    assert.equal(result.identity.provider, 'github', 'explicit context beats metadata')
+  })
+
+  it('restoreSession resolves provider the same way or returns null', async () => {
+    const explicit = adapterWithUser({ id: 'user-123' })
+    const byContext = await explicit.restoreSession(envelope, 'github')
+    assert.equal(byContext?.identity.provider, 'github')
+    const byMetadata = await adapterWithUser({ id: 'user-123', app_metadata: { provider: 'github' } }).restoreSession(envelope)
+    assert.equal(byMetadata?.identity.provider, 'github')
+    const unresolvable = await adapterWithUser({ id: 'user-123' }).restoreSession(envelope)
+    assert.equal(unresolvable, null)
   })
 })

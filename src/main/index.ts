@@ -728,6 +728,7 @@ void app.whenReady().then(() => {  // Release smoke mode (test packaging only): 
     sessionContextService: services.sessionContextService,
     aiProviderService: services.aiProviderService,
     aiCompletionService: services.aiCompletionService,
+    aiOperationGuard: services.aiOperationGuard,
     aiCodeProposalService: services.aiCodeProposalService,
     aiMultiFileProposalService: services.aiMultiFileProposalService,
     changeSetService: services.changeSetService,

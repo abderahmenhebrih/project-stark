@@ -214,10 +214,21 @@ describe('upstream normalization', () => {
   })
 
   it('maps upstream statuses without leaking bodies', () => {
-    assert.equal(mapUpstreamStatus(429), 'hosted_capacity_limited')
-    for (const status of [400, 401, 403, 404, 500, 502]) {
+    assert.equal(mapUpstreamStatus(429), 'hosted_rate_limited')
+    for (const status of [502, 503, 529]) {
+      assert.equal(mapUpstreamStatus(status), 'hosted_capacity_limited')
+    }
+    for (const status of [400, 401, 403, 404, 500]) {
       assert.equal(mapUpstreamStatus(status), 'hosted_service_unavailable')
     }
+  })
+
+  it('routes non-ok upstream responses through the single status mapping', () => {
+    const file = join(process.cwd(), 'supabase', 'functions', 'stark-infer', 'index.ts')
+    assert.ok(existsSync(file), 'edge entrypoint must exist')
+    const source = readFileSync(file, 'utf8')
+    assert.ok(source.includes('mapUpstreamStatus(upstream.status)'), 'entrypoint must use the single mapping')
+    assert.ok(!source.includes("errorResponse(429, 'hosted_capacity_limited')"), 'ad-hoc 429 mapping must be gone')
   })
 })
 

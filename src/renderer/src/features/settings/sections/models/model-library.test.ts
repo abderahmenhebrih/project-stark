@@ -6,6 +6,8 @@ import {
   canEnterChain,
   canUseModel,
   deriveModelLibrary,
+  disabledRosterIds,
+  displayLabelForStableId,
   findLibraryModel,
   isPlanEntitled,
   stableModelId
@@ -128,5 +130,24 @@ describe('model library identity', () => {
       const serialized = JSON.stringify(entry)
       assert.ok(!serialized.includes('sk-'), 'catalog entry must not carry key material')
     }
+  })
+
+  it('labels executed stable ids honestly for the Usage executor row', () => {
+    assert.equal(displayLabelForStableId('builtin:deepseek-v4.1-flash'), 'DeepSeek V4.1 Flash')
+    assert.equal(displayLabelForStableId('builtin:gpt-5.6-luna'), 'GPT 5.6 Luna')
+    assert.equal(displayLabelForStableId('builtin:nemotron-3.5-lightning'), 'Nemotron 3.5 Lightning')
+    // BYOK display names are always the raw provider id — never fabricated.
+    assert.equal(displayLabelForStableId('openai:gpt-4o'), 'gpt-4o')
+    assert.equal(displayLabelForStableId('openai:gpt-5-mini'), 'gpt-5-mini')
+    // Unknown ids render raw so drift is visible, never invented.
+    assert.equal(displayLabelForStableId('builtin:unknown-model'), 'builtin:unknown-model')
+    assert.equal(displayLabelForStableId('mystery'), 'mystery')
+  })
+
+  it('derives the disabled roster as order-preserving roster minus chain', () => {
+    assert.deepEqual(disabledRosterIds(['a', 'b', 'c'], ['a', 'c']), ['b'])
+    assert.deepEqual(disabledRosterIds(['a', 'b'], ['a', 'b']), [])
+    assert.deepEqual(disabledRosterIds(['a', 'b'], []), ['a', 'b'])
+    assert.deepEqual(disabledRosterIds([], ['a']), [])
   })
 })

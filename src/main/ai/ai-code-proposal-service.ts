@@ -30,15 +30,15 @@ import {
   ProposalNothingToProposeError,
   ProposalStaleBeforeProviderError,
   ProposalStaleDuringProviderError,
-  ProposalTooLargeError
+  ProposalTooLargeError,
+  toPublicProposalError
 } from './ai-proposal-errors'
 import {
-  MAX_AI_CONTEXT_BYTES,
-  MAX_AI_CONTEXT_MESSAGES,
   MAX_AI_PROPOSED_FILE_BYTES,
   MAX_AI_PROPOSAL_SUMMARY_CODEPOINTS,
   STAGE_16_FIXED_PROPOSAL_INSTRUCTIONS
 } from './limits'
+import { loadBoundedContext } from './context-window'
 import type { AiProviderService } from './ai-provider-service'
 import { AiOperationGuard } from './ai-operation-guard'
 import { deriveStarkRunPolicy } from './stark-run-policy'
@@ -49,7 +49,8 @@ import type { AiUsageDeps } from '../usage/ai-usage-tracker'
 import { formatProviderContext } from '../session-context/session-context-service'
 import { isHostedBuiltinModel } from '../../shared/hosted-models/stark-model-map'
 import { readRequestedModel } from './model-request'
-import { eligibleLoopLinkModels, readLoopLinkChain, runLoopLinkChain } from './looplink-chain'
+import { auditOfOutcome, eligibleLoopLinkModels, readLoopLinkChain, runLoopLinkChain, singleModelAuditFor, withEffort, type LoopLinkStepAuditWithEffort } from './looplink-chain'
+import type { OrchestrationRepository } from '../database/repositories/orchestration-repository'
 
 const encoder = new TextEncoder()
 
@@ -120,6 +121,14 @@ export interface AiCodeProposalServiceOptions {
    * untracked behavior.
    */
   readonly usage?: AiUsageDeps
+  /**
+   * LoopLink execution audit (optional). When present, every proposal
+   * creates one orchestration run with a single `proposal` step
+   * carrying the winning model plus attempts/failover metadata —
+   * the same audit shape as Work steps. Absent means legacy
+   * behavior without run records.
+   */
+  readonly runs?: OrchestrationRepository
 }
 
 /**
@@ -137,6 +146,7 @@ export class AiCodeProposalService {
   private readonly guard: AiOperationGuard
   private readonly pendingApprovals: { hasPending(sessionId: number): boolean } | undefined
   private readonly usage: AiUsageDeps | undefined
+  private readonly runs: OrchestrationRepository | undefined
 
   constructor(
     private readonly workspaces: WorkspaceRepository,
@@ -152,6 +162,7 @@ export class AiCodeProposalService {
     this.guard = options?.operationGuard ?? new AiOperationGuard()
     this.pendingApprovals = options?.pendingApprovals
     this.usage = options?.usage
+    this.runs = options?.runs
   }
 
   /**
@@ -175,7 +186,7 @@ export class AiCodeProposalService {
   }
 
   async proposeFileChange(payload: unknown): Promise<AiFileChangeProposalResult> {
-    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort', 'model', 'brainModels'])) {
+    if (!hasStrictShape(payload, ['workspaceId', 'sessionId', 'effort', 'model', 'brainModels', 'disabledBrainModels'])) {
       throw new InvalidProposalRequestError('proposal request is invalid')
     }
     const record = payload as Record<string, unknown>
@@ -191,7 +202,7 @@ export class AiCodeProposalService {
       effort = record['effort']
     }
     const requestedModel = readRequestedModel(record)
-    const brainChain = readLoopLinkChain(record, 'brainModels', 'brain')
+    const brainChain = readLoopLinkChain(record, 'brainModels', 'brain', 'disabledBrainModels')
     if (this.workspaces.findById(workspaceId) === undefined) {
       throw new SessionWorkspaceUnavailableError()
     }
@@ -209,14 +220,77 @@ export class AiCodeProposalService {
       throw new GenerationInFlightError()
     }
     this.guard.acquire(sessionId)
+    // Proposal run audit (when wired): one run per proposal attempt
+    // so the winning model plus attempts/failover persist like Work
+    // steps. The trailing message may not exist yet — no run then.
+    let proposalRunId: number | null = null
     try {
-      return await this.proposeInner(workspaceId, sessionId, effort, requestedModel, brainChain)
+      const trailingForRun = this.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
+      if (trailingForRun !== undefined && trailingForRun.role === 'user') {
+        proposalRunId = this.runs?.createRun({ workspaceId, sessionId, userMessageId: trailingForRun.id, now: this.now() }) ?? null
+      }
+      return await this.proposeInner(workspaceId, sessionId, effort, requestedModel, brainChain, proposalRunId)
+    } catch (error) {
+      this.failProposalRun(proposalRunId, error)
+      throw error
     } finally {
       this.guard.release(sessionId)
     }
   }
 
-  private async proposeInner(workspaceId: number, sessionId: number, effort: StarkEffort = 'regular', requestedModel: string | null = null, brainChain: readonly string[] | null = null): Promise<AiFileChangeProposalResult> {
+  /**
+   * Persists one completed proposal as a `proposal` run step linked
+   * to its run. Audit-write failures propagate (like Work) so a
+   * silent unaudited proposal is impossible when wired. Returns the
+   * public result unchanged. No-op without a run id.
+   */
+  private completeProposalRun(
+    runId: number | null,
+    transaction: ChangeTransaction,
+    summary: string,
+    winner: { readonly providerId: string; readonly model: string },
+    audit: LoopLinkStepAuditWithEffort
+  ): { transaction: ChangeTransaction; summary: string } {
+    if (runId === null || this.runs === undefined) {
+      return { transaction, summary }
+    }
+    this.runs.appendStepWithModel(
+      { runId, ordinal: 0, kind: 'proposal', status: 'completed', instruction: null, output: summary, now: this.now() },
+      { role: 'brain', providerId: winner.providerId, model: winner.model, routeKey: 'proposal', requestedProfile: null, ...audit }
+    )
+    this.runs.updateRunState({
+      id: runId,
+      status: 'completed',
+      action: null,
+      planSummary: summary,
+      finalMessageId: null,
+      errorCategory: null,
+      now: this.now()
+    })
+    return { transaction, summary }
+  }
+
+  /**
+   * Best-effort proposal failure audit: failed `proposal` step plus
+   * the safe error category. Never throws — the original error wins.
+   */
+  private failProposalRun(runId: number | null, error: unknown): void {
+    if (runId === null || this.runs === undefined) {
+      return
+    }
+    try {
+      this.runs.appendStep({ runId, ordinal: 0, kind: 'proposal', status: 'failed', instruction: null, output: null, now: this.now() })
+    } catch {
+      // Original error below is what matters.
+    }
+    try {
+      this.runs.failRun(runId, toPublicProposalError('propose', error).message, this.now())
+    } catch {
+      // Original error below is what matters.
+    }
+  }
+
+  private async proposeInner(workspaceId: number, sessionId: number, effort: StarkEffort = 'regular', requestedModel: string | null = null, brainChain: readonly string[] | null = null, proposalRunId: number | null = null): Promise<AiFileChangeProposalResult> {
     const latest = this.sessions.listMessagesNewestFirst(sessionId, 1, null)[0]
     if (latest === undefined || latest.role !== 'user') {
       throw new ProposalNothingToProposeError()
@@ -286,14 +360,16 @@ export class AiCodeProposalService {
               maxOutputTokens: policy.maxOutputTokens,
               ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
               schemaName: PROPOSAL_SCHEMA_NAME,
-              schema: PROPOSAL_JSON_SCHEMA
+              schema: PROPOSAL_JSON_SCHEMA,
+              ...this.guard.signalOptionFor(sessionId)
             })
           )
-          return this.parseAndValidateOutput(result.outputText)
+          const parsed = this.parseAndValidateOutput(result.outputText)
+          return { ...parsed, resolvedModel: resolved.model }
         } finally {
           void resolved.apiKey
         }
-      })
+      }, { isCancelled: () => this.guard.isCancelRequested(sessionId) })
       const { summary, proposedContent } = outcome.result
       if (proposedContent === currentContent) {
         throw new ProposalNoChangesError()
@@ -319,7 +395,13 @@ export class AiCodeProposalService {
         throw new InvalidProposalOutputError()
       }
       void this.now
-      return { transaction, summary }
+      return this.completeProposalRun(
+        proposalRunId,
+        transaction,
+        summary,
+        { providerId: outcome.assignment.providerId, model: outcome.result.resolvedModel },
+        withEffort(auditOfOutcome(outcome, eligible), effort)
+      )
     }
 
     const requestedBuiltin = requestedModel !== null && requestedModel.startsWith('builtin:') ? requestedModel : null
@@ -390,7 +472,8 @@ export class AiCodeProposalService {
           maxOutputTokens: policy.maxOutputTokens,
           ...(policy.providerReasoningEffort !== null ? { reasoningEffort: policy.providerReasoningEffort } : {}),
           schemaName: PROPOSAL_SCHEMA_NAME,
-          schema: PROPOSAL_JSON_SCHEMA
+          schema: PROPOSAL_JSON_SCHEMA,
+          ...this.guard.signalOptionFor(sessionId)
         })
       )
       outputText = result.outputText
@@ -426,7 +509,13 @@ export class AiCodeProposalService {
       throw new InvalidProposalOutputError()
     }
     void this.now
-    return { transaction, summary }
+    return this.completeProposalRun(
+      proposalRunId,
+      transaction,
+      summary,
+      { providerId: adapter.id, model },
+      withEffort(singleModelAuditFor(model), effort)
+    )
   }
 
   private parseAndValidateOutput(outputText: unknown): { summary: string; proposedContent: string } {
@@ -470,24 +559,11 @@ export class AiCodeProposalService {
 
   /**
    * Newest session messages within both context budgets, returned
-   * chronologically. Mirrors the completion service: at most
-   * MAX_AI_CONTEXT_MESSAGES newest rows, oldest dropped while over
-   * budget, always retaining the trailing user message.
+   * chronologically. Shared bounded loader (see context-window) —
+   * identical budgets and oldest-first semantics to every AI path.
    */
   loadContext(sessionId: number): { readonly role: 'user' | 'assistant'; readonly content: string }[] {
-    const probe = this.sessions.listMessagesNewestFirst(sessionId, MAX_AI_CONTEXT_MESSAGES, null)
-    const kept = [...probe.slice(0, MAX_AI_CONTEXT_MESSAGES)]
-    let total = 0
-    for (const entry of kept) {
-      total += encoder.encode(entry.content).byteLength
-    }
-    while (kept.length > 1 && total > MAX_AI_CONTEXT_BYTES) {
-      const dropped = kept.pop()
-      if (dropped !== undefined) {
-        total -= encoder.encode(dropped.content).byteLength
-      }
-    }
-    return kept.reverse().map((entry) => ({ role: entry.role, content: entry.content }))
+    return loadBoundedContext(this.sessions, sessionId)
   }
 }
 
